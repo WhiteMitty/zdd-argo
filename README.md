@@ -12,8 +12,6 @@
 
 > **重要：运行安装命令只会进入语言选择和管理菜单，不会自动安装核心、创建隧道或生成订阅。**
 
-顶部的 **简体中文 / English** 控件都指向本 README 内部，不会打开另一个 Markdown 文件。
-
 ## 主要功能
 
 - 启动时选择：
@@ -388,8 +386,6 @@ A bilingual interactive script for deploying and managing **Cloudflare Quick Tun
 `zdd-argo` uses script-managed copies of `sing-box` and `cloudflared`, keeps the temporary Argo tunnel running in a dedicated `tmux` session, and generates a VMess share link. Once started, the tunnel continues running after SSH is disconnected.
 
 > **Important: running the installation command only opens language selection and the management menu. It does not automatically install the cores, create a tunnel, or generate a subscription.**
-
-The **简体中文 / English** controls at the top link to sections inside this README and do not open another Markdown file.
 
 ## Features
 
