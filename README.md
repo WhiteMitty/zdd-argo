@@ -47,22 +47,6 @@
 
 ## 仓库文件结构
 
-README 顶部的语言按钮使用仓库内的 SVG 文件，因此上传到 GitHub 时请保留以下结构：
-
-```text
-zdd-argo/
-├── README.md
-├── LICENSE
-├── zdd-argo.sh
-└── assets/
-    ├── lang-zh-active.svg
-    ├── lang-zh-inactive.svg
-    ├── lang-en-active.svg
-    └── lang-en-inactive.svg
-```
-
-`README.md` 与 `assets` 目录必须位于同一级。`zdd-argo.sh.sha256` 和审查用的 diff 文件不是仓库运行所必需的，可以仅在 GitHub Release 中提供。
-
 ## 安装
 
 ### curl
@@ -415,24 +399,6 @@ A bilingual interactive script for deploying and managing **Cloudflare Quick Tun
 - Root privileges
 - `amd64` or `arm64`
 - Network access to GitHub and Cloudflare
-
-## Repository layout
-
-The language controls at the top of the README use SVG files stored in the repository. Keep this layout when uploading to GitHub:
-
-```text
-zdd-argo/
-├── README.md
-├── LICENSE
-├── zdd-argo.sh
-└── assets/
-    ├── lang-zh-active.svg
-    ├── lang-zh-inactive.svg
-    ├── lang-en-active.svg
-    └── lang-en-inactive.svg
-```
-
-`README.md` and the `assets` directory must be at the same level. The `zdd-argo.sh.sha256` and review diff files are not required for repository operation and may be provided only with a GitHub Release.
 
 ## Installation
 
