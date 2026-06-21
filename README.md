@@ -10,6 +10,8 @@
 
 `zdd-argo` 使用脚本专用的 `sing-box` 和 `cloudflared`，通过独立 `tmux` 会话维持临时 Argo 隧道，并生成 VMess 分享链接。关闭 SSH 后，已经启动的临时隧道仍会继续运行。
 
+> **重要：运行安装命令只会进入语言选择和管理菜单，不会自动安装核心、创建隧道或生成订阅。**
+
 顶部的 **简体中文 / English** 控件都指向本 README 内部，不会打开另一个 Markdown 文件。
 
 ## 主要功能
@@ -45,6 +47,24 @@
 - CPU 架构：`amd64` 或 `arm64`
 - 能访问 GitHub 和 Cloudflare
 
+## 仓库文件结构
+
+README 顶部的语言按钮使用仓库内的 SVG 文件，因此上传到 GitHub 时请保留以下结构：
+
+```text
+zdd-argo/
+├── README.md
+├── LICENSE
+├── zdd-argo.sh
+└── assets/
+    ├── lang-zh-active.svg
+    ├── lang-zh-inactive.svg
+    ├── lang-en-active.svg
+    └── lang-en-inactive.svg
+```
+
+`README.md` 与 `assets` 目录必须位于同一级。`zdd-argo.sh.sha256` 和审查用的 diff 文件不是仓库运行所必需的，可以仅在 GitHub Release 中提供。
+
 ## 安装
 
 ### curl
@@ -69,16 +89,25 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 sudo bash zdd-argo.sh
 ```
 
-每次在交互式终端运行时，脚本都会先显示语言选择。在选择语言之前，不会执行 root 检查、依赖安装、快捷命令写入、设置写入或 Argo 部署。
+每次在交互式终端运行时，脚本都会**先询问使用中文还是 English，然后进入管理菜单**。
 
-首次运行会：
+在用户选择菜单功能之前，脚本不会：
+
+- 安装 `sing-box` 或 `cloudflared`；
+- 询问或写入优选域名 / IP；
+- 启动 sing-box 服务；
+- 创建临时 Argo；
+- 自动生成订阅。
+
+首次运行的顺序是：
 
 1. 选择界面语言；
-2. 检查 root 权限、系统和依赖；
-3. 将脚本副本安装到 `/usr/local/lib/zdd-argo/zdd-argo.sh`；
-4. 安装 `zdd` 管理启动器；
-5. 询问优选域名或优选 IP；
-6. 进入管理菜单。
+2. 检查 root 权限和系统类型；
+3. 安装或修复 `zdd argo` 管理启动器；
+4. 直接进入管理菜单；
+5. 用户选择需要依赖的菜单项后，才安装所需依赖并执行相应操作；查看状态与卸载不会为了执行操作额外安装软件。
+
+选择菜单 `1` 时，若尚未设置优选地址，脚本才会提示默认使用 `saas.sin.fan`，并允许输入自己的域名、IPv4 或 IPv6。
 
 以后使用：
 
@@ -358,6 +387,8 @@ A bilingual interactive script for deploying and managing **Cloudflare Quick Tun
 
 `zdd-argo` uses script-managed copies of `sing-box` and `cloudflared`, keeps the temporary Argo tunnel running in a dedicated `tmux` session, and generates a VMess share link. Once started, the tunnel continues running after SSH is disconnected.
 
+> **Important: running the installation command only opens language selection and the management menu. It does not automatically install the cores, create a tunnel, or generate a subscription.**
+
 The **简体中文 / English** controls at the top link to sections inside this README and do not open another Markdown file.
 
 ## Features
@@ -389,6 +420,24 @@ The **简体中文 / English** controls at the top link to sections inside this 
 - `amd64` or `arm64`
 - Network access to GitHub and Cloudflare
 
+## Repository layout
+
+The language controls at the top of the README use SVG files stored in the repository. Keep this layout when uploading to GitHub:
+
+```text
+zdd-argo/
+├── README.md
+├── LICENSE
+├── zdd-argo.sh
+└── assets/
+    ├── lang-zh-active.svg
+    ├── lang-zh-inactive.svg
+    ├── lang-en-active.svg
+    └── lang-en-inactive.svg
+```
+
+`README.md` and the `assets` directory must be at the same level. The `zdd-argo.sh.sha256` and review diff files are not required for repository operation and may be provided only with a GitHub Release.
+
 ## Installation
 
 ### curl
@@ -413,16 +462,25 @@ For a non-root user, change the last command to:
 sudo bash zdd-argo.sh
 ```
 
-On every interactive run, language selection is shown first. Before a language is selected, the script does not perform root checks, dependency installation, launcher writes, settings writes, or Argo deployment.
+On every interactive run, the script **first asks for Chinese or English and then opens the management menu**.
 
-On first run, the script:
+Before the user selects a menu action, the script does not:
 
-1. asks for the interface language;
-2. checks root privileges, the system, and dependencies;
-3. installs its managed copy at `/usr/local/lib/zdd-argo/zdd-argo.sh`;
-4. installs the `zdd` launcher;
-5. asks for a preferred domain or IP;
-6. opens the management menu.
+- install `sing-box` or `cloudflared`;
+- ask for or write a preferred domain / IP;
+- start the sing-box service;
+- create a temporary Argo tunnel;
+- generate a subscription automatically.
+
+The first-run sequence is:
+
+1. select the interface language;
+2. check root privileges and the operating system;
+3. install or repair the `zdd argo` management launcher;
+4. open the management menu immediately;
+5. install required dependencies only after an action that needs them is selected; viewing status and uninstalling do not install extra software.
+
+When menu item `1` is selected, the script asks for a preferred endpoint only if none has been configured. It displays `saas.sin.fan` as the default and also accepts a custom domain, IPv4 address, or IPv6 address.
 
 After installation, run:
 
