@@ -1,6 +1,10 @@
 <p align="right">
-  <a href="#zh-cn"><kbd><strong>简体中文</strong></kbd></a>
-  <a href="#english"><kbd>English</kbd></a>
+  <a href="#zh-cn">
+    <img src="https://img.shields.io/badge/简体中文-0969DA?style=for-the-badge" alt="简体中文">
+  </a>
+  <a href="#english">
+    <img src="https://img.shields.io/badge/English-6E7781?style=for-the-badge" alt="English">
+  </a>
 </p>
 
 <a id="zh-cn"></a>
