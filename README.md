@@ -1,11 +1,4 @@
-<p align="right">
-  <a href="#zh-cn">
-    <img src="./assets/lang-zh-active.svg" alt="简体中文（当前）" height="36">
-  </a>
-  <a href="#english">
-    <img src="./assets/lang-en-inactive.svg" alt="Switch to English" height="36">
-  </a>
-</p>
+<p align="right"><a href="#zh-cn"><img src="./assets/lang-zh-active.svg" alt="简体中文（当前）" height="36"></a>&nbsp;&nbsp;<a href="#english"><img src="./assets/lang-en-inactive.svg" alt="Switch to English" height="36"></a></p>
 
 <a id="zh-cn"></a>
 
@@ -355,14 +348,7 @@ Quick Tunnel 的域名是临时的。停止、重建或 VPS 重启后，请重�
 
 <a id="english"></a>
 
-<p align="right">
-  <a href="#zh-cn">
-    <img src="./assets/lang-zh-inactive.svg" alt="切换到简体中文" height="36">
-  </a>
-  <a href="#english">
-    <img src="./assets/lang-en-active.svg" alt="English (current)" height="36">
-  </a>
-</p>
+<p align="right"><a href="#zh-cn"><img src="./assets/lang-zh-inactive.svg" alt="切换到简体中文" height="36"></a>&nbsp;&nbsp;<a href="#english"><img src="./assets/lang-en-active.svg" alt="English (current)" height="36"></a></p>
 
 # zdd-argo
 
