@@ -72,10 +72,12 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 sudo bash zdd-argo.sh
 ```
 
+每次在交互式终端运行时，脚本都会先显示语言选择。在选择语言之前，不会执行 root 检查、依赖安装、快捷命令写入、设置写入或 Argo 部署。
+
 首次运行会：
 
 1. 选择界面语言；
-2. 检查系统和依赖；
+2. 检查 root 权限、系统和依赖；
 3. 将脚本副本安装到 `/usr/local/lib/zdd-argo/zdd-argo.sh`；
 4. 安装 `zdd` 管理启动器；
 5. 询问优选域名或优选 IP；
@@ -94,26 +96,6 @@ sudo zdd argo
 ```
 
 下载目录里的 `zdd-argo.sh` 可以保留、移动或删除，不影响已安装的管理命令。
-
-## 固定版本与 SHA-256 校验
-
-创建 Git 标签 `v0.1.0` 后，可以使用固定版本安装，避免 `main` 分支后续变化：
-
-```bash
-curl -fsSL -O https://raw.githubusercontent.com/WhiteMitty/zdd-argo/v0.1.0/zdd-argo.sh \
-  && curl -fsSL -O https://raw.githubusercontent.com/WhiteMitty/zdd-argo/v0.1.0/zdd-argo.sh.sha256 \
-  && sha256sum -c zdd-argo.sh.sha256 \
-  && chmod +x zdd-argo.sh \
-  && bash zdd-argo.sh
-```
-
-只有出现：
-
-```text
-zdd-argo.sh: OK
-```
-
-后才继续运行。发布新版本时，应同步更新 Git 标签和 `zdd-argo.sh.sha256`。
 
 ## 同页语言切换
 
@@ -317,6 +299,12 @@ zdd argo
 - VPS 重启或 cloudflared 退出后，需要重新生成；
 - Quick Tunnel 适合测试和临时使用，不应视为带 SLA 的生产隧道。
 
+## 从本地稳定版升级
+
+本地稳定版曾在 `/usr/local/sbin/zdd` 写入不带新版标记的启动器。当前版本会先核对旧启动器是否同时包含 `zdd argo`、`exec /usr/bin/env bash` 和 `zdd-argo.sh` 特征；确认属于本项目后，才会安全替换为新版启动器。
+
+因此，旧版启动器不会仅因缺少 `# zdd-argo launcher` 标记而被误判为外部程序。真正无关的同名 `zdd` 仍会被拒绝覆盖。
+
 ## `zdd argo` 无法找到
 
 只更新 GitHub 仓库不会自动更新已部署的 VPS。请在 VPS 上重新运行安装命令，然后执行：
@@ -429,10 +417,12 @@ For a non-root user, change the last command to:
 sudo bash zdd-argo.sh
 ```
 
+On every interactive run, language selection is shown first. Before a language is selected, the script does not perform root checks, dependency installation, launcher writes, settings writes, or Argo deployment.
+
 On first run, the script:
 
 1. asks for the interface language;
-2. checks the system and dependencies;
+2. checks root privileges, the system, and dependencies;
 3. installs its managed copy at `/usr/local/lib/zdd-argo/zdd-argo.sh`;
 4. installs the `zdd` launcher;
 5. asks for a preferred domain or IP;
@@ -451,26 +441,6 @@ sudo zdd argo
 ```
 
 The downloaded `zdd-argo.sh` can be retained, moved, or removed without breaking the installed command.
-
-## Pinned release and SHA-256 verification
-
-After creating the `v0.1.0` Git tag, a pinned installation avoids later changes to the `main` branch:
-
-```bash
-curl -fsSL -O https://raw.githubusercontent.com/WhiteMitty/zdd-argo/v0.1.0/zdd-argo.sh \
-  && curl -fsSL -O https://raw.githubusercontent.com/WhiteMitty/zdd-argo/v0.1.0/zdd-argo.sh.sha256 \
-  && sha256sum -c zdd-argo.sh.sha256 \
-  && chmod +x zdd-argo.sh \
-  && bash zdd-argo.sh
-```
-
-Continue only after this appears:
-
-```text
-zdd-argo.sh: OK
-```
-
-For each new release, update both the Git tag and `zdd-argo.sh.sha256`.
 
 ## Same-page language controls
 
@@ -661,6 +631,12 @@ Remember:
 - stopping or rebuilding invalidates the old hostname and share link;
 - after a VPS reboot or cloudflared exit, generate a new tunnel;
 - Quick Tunnel is intended for testing and temporary use, not as a production service with an SLA.
+
+## Upgrading from the local stable edition
+
+The local stable edition could write an unmarked launcher to `/usr/local/sbin/zdd`. This release verifies that a legacy launcher contains the expected `zdd argo`, `exec /usr/bin/env bash`, and `zdd-argo.sh` signatures before safely replacing it with the marked launcher.
+
+A genuine legacy launcher is therefore not mistaken for an unrelated command merely because it lacks the newer `# zdd-argo launcher` marker. Truly unrelated `zdd` commands are still never overwritten.
 
 ## `zdd argo` is not found
 
