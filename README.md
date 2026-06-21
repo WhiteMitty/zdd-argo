@@ -12,6 +12,8 @@
 
 > **重要：运行安装命令只会进入语言选择和管理菜单，不会自动安装核心、创建隧道或生成订阅。**
 
+顶部的 **简体中文 / English** 控件都指向本 README 内部，不会打开另一个 Markdown 文件。
+
 ## 主要功能
 
 - 启动时选择：
@@ -46,6 +48,22 @@
 - 能访问 GitHub 和 Cloudflare
 
 ## 仓库文件结构
+
+README 顶部的语言按钮使用仓库内的 SVG 文件，因此上传到 GitHub 时请保留以下结构：
+
+```text
+zdd-argo/
+├── README.md
+├── LICENSE
+├── zdd-argo.sh
+└── assets/
+    ├── lang-zh-active.svg
+    ├── lang-zh-inactive.svg
+    ├── lang-en-active.svg
+    └── lang-en-inactive.svg
+```
+
+`README.md` 与 `assets` 目录必须位于同一级。`zdd-argo.sh.sha256` 和审查用的 diff 文件不是仓库运行所必需的，可以仅在 GitHub Release 中提供。
 
 ## 安装
 
@@ -371,6 +389,8 @@ A bilingual interactive script for deploying and managing **Cloudflare Quick Tun
 
 > **Important: running the installation command only opens language selection and the management menu. It does not automatically install the cores, create a tunnel, or generate a subscription.**
 
+The **简体中文 / English** controls at the top link to sections inside this README and do not open another Markdown file.
+
 ## Features
 
 - Select `1) 中文` or `2) English` at startup
@@ -399,6 +419,24 @@ A bilingual interactive script for deploying and managing **Cloudflare Quick Tun
 - Root privileges
 - `amd64` or `arm64`
 - Network access to GitHub and Cloudflare
+
+## Repository layout
+
+The language controls at the top of the README use SVG files stored in the repository. Keep this layout when uploading to GitHub:
+
+```text
+zdd-argo/
+├── README.md
+├── LICENSE
+├── zdd-argo.sh
+└── assets/
+    ├── lang-zh-active.svg
+    ├── lang-zh-inactive.svg
+    ├── lang-en-active.svg
+    └── lang-en-inactive.svg
+```
+
+`README.md` and the `assets` directory must be at the same level. The `zdd-argo.sh.sha256` and review diff files are not required for repository operation and may be provided only with a GitHub Release.
 
 ## Installation
 
