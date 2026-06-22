@@ -66,19 +66,19 @@ zargo
 
 选择普通卸载或完整卸载后，输入 `yes` 确认；普通卸载保留脚本专用的 `sing-box` 和 `cloudflared`；完整卸载会同时删除它们。
 
-完整卸载仅删除本脚本安装在 /usr/local/lib/zdd-argo/ 中的 sing-box、cloudflared，以及 zdd-argo 自己创建的服务和配置；不会删除或停止由 apt、其他脚本或手动安装的同名程序与服务。 
+完整卸载仅删除本脚本安装在 /usr/local/lib/zdd-argo/ 中的 sing-box、cloudflared，以及 zdd-argo 自己创建的服务和配置；不会删除或停止由 apt、其他脚本或手动安装的同名程序与服务，也就是说可能出现诸如两个 sing-box 共存但互不干扰的情况。
 
 #### 说明
 
-- 停止或重建隧道后，旧分享链接会失效
+- 停止或重建隧道后，旧分享链接会失效。
 
-- 优选域名默认使用 saas.sin.fan，可根据情况调整
+- 优选域名默认使用 saas.sin.fan，可根据情况调整。
 
-- Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名
+- Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名。
 
-- ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手
+- ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手。
 
-- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 佬）
+- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 佬）。
 
 <br>
 
