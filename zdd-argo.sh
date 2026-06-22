@@ -2364,7 +2364,7 @@ show_subscription() {
     printf '%s%s%s\n' \
       "$C_YELLOW" \
       "$(T \
-        "导入客户端（Xray）后，请检查 EchConfigList 是否为：" \
+        "导入 Xray 客户端后，请检查 EchConfigList 是否为：" \
         "After importing, verify that EchConfigList is:")" \
       "$C_RESET"
 
