@@ -3108,13 +3108,9 @@ main() {
       "After installation, this project provides only one management command: zargo")"
   fi
 
-  if [[ "$SCRIPT_PATH" == "$MANAGED_SCRIPT_PATH" ]]; then
-    choose_language
-    bootstrap
-    interactive_menu
-  else
-    automatic_install
-  fi
+  choose_language
+  bootstrap
+  interactive_menu
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
