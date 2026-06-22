@@ -4,11 +4,11 @@
 
 #### 概览
 
-在 Debian / Ubuntu VPS 上生成 cloudflare 临时 argo 隧道用于代理
+在 Debian / Ubuntu VPS 上生成临时 argo 隧道用于代理
 
-- 后端：`sing-box` + `cloudflared`
-- 临时隧道由 `tmux` 保持，断开 SSH 后仍可继续运行
 - 支持中文和英文
+- 后端：`sing-box` + `cloudflared`
+- 临时隧道由 `tmux` 保持，断开 SSH 之后仍可继续运行
 
 #### 要求
 
@@ -69,17 +69,15 @@ zargo
 
 #### 说明
 
-- 停止或重建隧道后，旧分享链接会失效。
+- 停止或重建隧道后，旧分享链接会失效
 
-- 优选域名默认使用 saas.sin.fan，可根据情况调整。
+- 优选域名默认使用 saas.sin.fan，可根据情况调整
 
-- Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名。
+- Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名
 
-- ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手。
+- ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手
 
-- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，填 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog （抄袭自 Joey 大佬）。
-  
-  <br>
+- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 佬）
 
 <img src="Ech.jpg" title="" alt="Ech" width="676">
 
