@@ -2362,6 +2362,7 @@ show_subscription() {
       "The script writes both the ech and echConfigList JSON fields.")"
 
     printf '%s\n%s\n' \
+      "$C_YELLOW" \
       "$(T \
         "导入客户端后，请检查 EchConfigList 是否为：" \
         "After importing, verify that EchConfigList is:")" \
