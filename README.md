@@ -68,6 +68,8 @@ zargo
 
 普通卸载保留脚本专用的 `sing-box` 和 `cloudflared`；完整卸载会同时删除它们。
 
+完整卸载仅删除本脚本安装在 /usr/local/lib/zdd-argo/ 中的 sing-box、cloudflared，以及 zdd-argo 自己创建的服务和配置；不会删除或停止由 apt、其他脚本或手动安装的同名程序与服务。 
+
 #### 说明
 
 - 停止或重建隧道后，旧分享链接会失效
