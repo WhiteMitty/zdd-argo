@@ -1,45 +1,49 @@
 # zdd-argo
 
-在 Debian / Ubuntu VPS 上管理 **Cloudflare Quick Tunnel + VMess/WS**。
+### v 0.1.0 2026-06-22
 
-- 管理命令：`zargo`
+#### 概览
+
+在 Debian / Ubuntu VPS 上生成 cloudflare 临时 argo 隧道用于代理
+
 - 后端：`sing-box` + `cloudflared`
 - 临时隧道由 `tmux` 保持，断开 SSH 后仍可继续运行
-- 支持中文和 English
+- 支持中文和英文
 
-## 系统要求
+#### 要求
 
 - Debian / Ubuntu
 - root 权限
 - systemd
 - amd64 / arm64
+- 已安装 curl 或 wget
 
-## 安装
+#### 安装
 
 ```bash
 curl -fsSL -o zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/zdd-argo.sh \
-  && chmod +x zdd-argo.sh \
   && bash zdd-argo.sh
 ```
 
-也可以使用：
+也可用：
 
 ```bash
 wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/zdd-argo.sh \
-  && chmod +x zdd-argo.sh \
   && bash zdd-argo.sh
 ```
 
-安装后使用唤醒菜单：
+首次运行会自动使用 `saas.sin.fan` 完成安装、创建临时 Argo，
+
+并在最后输出订阅链接，中途无需输入。后续可通过命令唤醒菜单：
 
 ```bash
 zargo
 ```
 
-## 管理菜单
+#### 菜单
 
 ```text
-1. 生成 / 管理临时 Argo
+1. 生成 / 重建临时 Argo
 2. 查看当前订阅
 3. 更新 sing-box 和 cloudflared
 4. 查看运行状态与最近日志
@@ -51,7 +55,7 @@ zargo
 
 选择更新后，会直接依次更新 `sing-box` 和 `cloudflared`，没有二级菜单。
 
-## 卸载
+#### 卸载
 
 运行：
 
@@ -63,15 +67,23 @@ zargo
 
 普通卸载保留脚本专用的 `sing-box` 和 `cloudflared`；完整卸载会同时删除它们。
 
-## 说明
+#### 说明
+
+- 停止或重建隧道后，旧分享链接会失效。
+
+- 优选域名默认使用 saas.sin.fan，可根据情况调整。
 
 - Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名。
-- 停止或重建隧道后，旧分享链接会失效。
-- 本项目不会覆盖 apt 或其他项目维护的 `sing-box` / `cloudflared`。
-- Alpn 默认 http/1.1 是为了更好配合 WS 传输。
-- <span style="color:red; font-weight:bold">Ech须手动添加，以 v2rayN 为例，找到 EchConfigList 字段填写                                             cloudflare-ech.com+https://dns.jhb.ovh/joeyblog  即实现 Ech （取自 Joey 佬）。</span>
 
-![Ech](Ech.jpg)
+- ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手。
+
+- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，填 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog （抄袭自 Joey 大佬）。
+  
+  <br>
+
+<img src="Ech.jpg" title="" alt="Ech" width="676">
+
+<br>
 
 ## License
 
