@@ -79,7 +79,9 @@ zargo
 
 - 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 佬）
 
-<img src="Ech.jpg" title="" alt="Ech" width="676">
+<br>
+
+<img src="Ech.jpg" title="" alt="Ech" width="900">
 
 <br>
 
