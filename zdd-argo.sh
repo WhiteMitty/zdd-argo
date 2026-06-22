@@ -2361,12 +2361,17 @@ show_subscription() {
       "脚本已同时尝试写入 JSON 字段 ech 与 echConfigList。" \
       "The script writes both the ech and echConfigList JSON fields.")"
 
-    printf '%s\n%s\n' \
+    printf '%s%s%s\n' \
       "$C_YELLOW" \
       "$(T \
         "导入客户端后，请检查 EchConfigList 是否为：" \
         "After importing, verify that EchConfigList is:")" \
-      "$ECH_CONFIG"
+      "$C_RESET"
+
+    printf '%s%s%s\n' \
+      "$C_YELLOW" \
+      "$ECH_CONFIG" \
+      "$C_RESET"
 
     printf '%s\n' "$(T \
       "若客户端忽略旧式 VMess JSON 的扩展字段，请手动粘贴这一行。" \
