@@ -44,7 +44,7 @@ zargo
 
 <br>
 
-### 订阅
+### 示例
 
 <img src="Gen.jpg" title="" alt="Gen" width="900">
 
