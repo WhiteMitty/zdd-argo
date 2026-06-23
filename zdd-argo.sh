@@ -57,7 +57,7 @@ SINGBOX_BIN=""
 CLOUDFLARED_BIN=""
 MENU_MODE=0
 LOCK_HELD=0
-LOCK_OWNER_PID="" 
+LOCK_OWNER_PID=""
 LOCK_OWNER_START=""
 
 if [[ -t 1 ]]; then
@@ -133,7 +133,9 @@ choose_language() {
   printf '%s\n' '────────────────────────────────────────'
 
   while true; do
-    if ! read_interactive choice '请选择 / Select [1-2]: ' ''; then
+    if ! read_interactive choice \
+        '请选择 / Select [1-2]: ' \
+        '1'; then
       LANGUAGE="en"
       return 0
     fi
@@ -148,7 +150,8 @@ choose_language() {
         break
         ;;
       *)
-        printf '%s\n' '请输入 1 或 2 / Please enter 1 or 2.'
+        printf '%s\n' \
+          '请输入 1 或 2 / Please enter 1 or 2.'
         ;;
     esac
   done
@@ -158,22 +161,35 @@ choose_language() {
 
 info() {
   printf '%s[%s]%s %s\n' \
-    "$C_CYAN" "$(T "信息" "INFO")" "$C_RESET" "$*"
+    "$C_CYAN" \
+    "$(T "信息" "INFO")" \
+    "$C_RESET" \
+    "$*"
 }
 
 ok() {
   printf '%s[%s]%s %s\n' \
-    "$C_GREEN" "$(T "完成" "OK")" "$C_RESET" "$*"
+    "$C_GREEN" \
+    "$(T "完成" "OK")" \
+    "$C_RESET" \
+    "$*"
 }
 
 warn() {
   printf '%s[%s] %s%s\n' \
-    "$C_YELLOW" "$(T "注意" "NOTICE")" "$*" "$C_RESET"
+    "$C_YELLOW" \
+    "$(T "注意" "NOTICE")" \
+    "$*" \
+    "$C_RESET"
 }
 
 error() {
   printf '%s[%s]%s %s\n' \
-    "$C_RED" "$(T "错误" "ERROR")" "$C_RESET" "$*" >&2
+    "$C_RED" \
+    "$(T "错误" "ERROR")" \
+    "$C_RESET" \
+    "$*" \
+    >&2
 }
 
 die() {
@@ -204,12 +220,15 @@ wait_for_zero() {
       return 0
     fi
 
-    warn "$(T "请输入 0。" "Please enter 0.")"
+    warn "$(T \
+      "请输入 0。" \
+      "Please enter 0.")"
   done
 }
 
 pause_screen() {
   printf '\n'
+
   wait_for_zero "$(T \
     "输入 0 返回菜单：" \
     "Enter 0 to return to the menu: ")"
@@ -231,8 +250,14 @@ resolve_script_path() {
 
   dir="$(dirname -- "$candidate")"
   base="$(basename -- "$candidate")"
-  dir="$(cd -- "$dir" 2>/dev/null && pwd -P || printf '%s' "$dir")"
 
+  dir="$(
+    cd -- "$dir" 2>/dev/null \
+      && pwd -P \
+      || printf '%s' "$dir"
+  )"
+
+  # 只规范化目录，不解析最终文件的符号链接。
   SCRIPT_PATH="${dir}/${base}"
 }
 
@@ -255,10 +280,12 @@ check_os() {
   case "${ID:-}" in
     debian|ubuntu)
       ;;
+
     *)
       case " ${ID_LIKE:-} " in
         *" debian "*)
           ;;
+
         *)
           die "$(T \
             "当前系统为 ${PRETTY_NAME:-未知}，本脚本仅支持 Debian / Ubuntu。" \
@@ -279,14 +306,33 @@ install_dependencies() {
       "This system is not managed by systemd, so the background service cannot be created.")"
 
   command -v systemctl >/dev/null 2>&1 \
-    || die "$(T "未找到 systemctl。" "systemctl was not found.")"
+    || die "$(T \
+      "未找到 systemctl。" \
+      "systemctl was not found.")"
 
   command -v journalctl >/dev/null 2>&1 \
-    || die "$(T "未找到 journalctl。" "journalctl was not found.")"
+    || die "$(T \
+      "未找到 journalctl。" \
+      "journalctl was not found.")"
 
   for cmd in \
-    curl jq openssl tmux ss base64 flock awk sed grep \
-    tar sha256sum find install mktemp readlink stat
+    curl \
+    jq \
+    openssl \
+    tmux \
+    ss \
+    base64 \
+    flock \
+    awk \
+    sed \
+    grep \
+    tar \
+    sha256sum \
+    find \
+    install \
+    mktemp \
+    readlink \
+    stat
   do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing=1
@@ -334,7 +380,9 @@ process_start_time() {
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   [[ -r "/proc/${pid}/stat" ]] || return 1
 
-  awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null
+  awk '{print $22}' \
+    "/proc/${pid}/stat" \
+    2>/dev/null
 }
 
 process_is_zdd_argo() {
@@ -352,7 +400,8 @@ process_is_zdd_argo() {
   )"
 
   [[ "$cmdline" == *"$MANAGED_SCRIPT_PATH"* ]] \
-    || [[ -n "$SCRIPT_PATH" && "$cmdline" == *"$SCRIPT_PATH"* ]] \
+    || [[ -n "$SCRIPT_PATH" \
+      && "$cmdline" == *"$SCRIPT_PATH"* ]] \
     || [[ "$cmdline" == *"zdd-argo.sh"* ]]
 }
 
@@ -374,6 +423,7 @@ read_lock_owner() {
 
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   [[ "$start" =~ ^[0-9]+$ ]] || return 1
+
   [[ "$operation" =~ ^[A-Za-z0-9_.:-]+$ ]] \
     || operation="unknown"
 
@@ -390,7 +440,8 @@ clear_own_lock_owner() {
   local start=""
   local operation=""
 
-  [[ -n "$LOCK_OWNER_PID" && -n "$LOCK_OWNER_START" ]] \
+  [[ -n "$LOCK_OWNER_PID" \
+    && -n "$LOCK_OWNER_START" ]] \
     || return 0
 
   if IFS=' ' read -r \
@@ -505,12 +556,12 @@ signal_process_tree() {
 
   while IFS=' ' read -r \
       pid \
-      recorded_start; do
-
+      recorded_start
+  do
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
 
     [[ "$pid" != "$BASHPID" \
-        && "$pid" != "$$" ]] \
+      && "$pid" != "$$" ]] \
       || continue
 
     actual_start="$(
@@ -610,20 +661,28 @@ find_lock_holder_pid() {
   [[ -e "$LOCK_FILE" ]] || return 1
   [[ -r /proc/locks ]] || return 1
 
+  # %Hd / %Ld 读取普通文件所属文件系统的主、次设备号，
+  # 输出为十进制；/proc/locks 中对应设备号使用十六进制。
   lock_major="$(
-    stat -Lc '%t' "$LOCK_FILE" 2>/dev/null
+    stat -Lc '%Hd' \
+      "$LOCK_FILE" \
+      2>/dev/null
   )" || return 1
 
   lock_minor="$(
-    stat -Lc '%T' "$LOCK_FILE" 2>/dev/null
+    stat -Lc '%Ld' \
+      "$LOCK_FILE" \
+      2>/dev/null
   )" || return 1
 
   lock_inode="$(
-    stat -Lc '%i' "$LOCK_FILE" 2>/dev/null
+    stat -Lc '%i' \
+      "$LOCK_FILE" \
+      2>/dev/null
   )" || return 1
 
-  [[ "$lock_major" =~ ^[0-9A-Fa-f]+$ ]] || return 1
-  [[ "$lock_minor" =~ ^[0-9A-Fa-f]+$ ]] || return 1
+  [[ "$lock_major" =~ ^[0-9]+$ ]] || return 1
+  [[ "$lock_minor" =~ ^[0-9]+$ ]] || return 1
   [[ "$lock_inode" =~ ^[0-9]+$ ]] || return 1
 
   while IFS=' ' read -r \
@@ -634,8 +693,8 @@ find_lock_holder_pid() {
       pid \
       device_inode \
       range_start \
-      range_end; do
-
+      range_end
+  do
     [[ "$lock_type" == "FLOCK" ]] || continue
     [[ "$mode" == "WRITE" ]] || continue
     [[ "$pid" =~ ^[0-9]+$ ]] || continue
@@ -648,8 +707,8 @@ find_lock_holder_pid() {
       continue
     fi
 
-    if ((16#$proc_major == 16#$lock_major)) \
-        && ((16#$proc_minor == 16#$lock_minor)) \
+    if ((16#$proc_major == 10#$lock_major)) \
+        && ((16#$proc_minor == 10#$lock_minor)) \
         && [[ "$proc_inode" == "$lock_inode" ]]; then
 
       printf '%s\n' "$pid"
@@ -701,7 +760,8 @@ emergency_force_take_over_lock() {
   fi
 
   holder_start="$(
-    process_start_time "$holder_pid" 2>/dev/null \
+    process_start_time "$holder_pid" \
+      2>/dev/null \
       || true
   )"
 
@@ -929,17 +989,32 @@ path_is_zdd_launcher() {
   local path="$1"
 
   [[ -f "$path" ]] \
-    && grep -Fq '# zdd-argo launcher' "$path" 2>/dev/null \
-    && grep -Fq "$MANAGED_SCRIPT_PATH" "$path" 2>/dev/null
+    && grep -Fq \
+      '# zdd-argo launcher' \
+      "$path" \
+      2>/dev/null \
+    && grep -Fq \
+      "$MANAGED_SCRIPT_PATH" \
+      "$path" \
+      2>/dev/null
 }
 
 path_is_legacy_zdd_launcher() {
   local path="$1"
 
   [[ -f "$path" ]] \
-    && grep -Fq 'zdd argo' "$path" 2>/dev/null \
-    && grep -Fq 'exec /usr/bin/env bash' "$path" 2>/dev/null \
-    && grep -Fq 'zdd-argo.sh' "$path" 2>/dev/null
+    && grep -Fq \
+      'zdd argo' \
+      "$path" \
+      2>/dev/null \
+    && grep -Fq \
+      'exec /usr/bin/env bash' \
+      "$path" \
+      2>/dev/null \
+    && grep -Fq \
+      'zdd-argo.sh' \
+      "$path" \
+      2>/dev/null
 }
 
 path_is_replaceable_zdd_launcher() {
@@ -957,12 +1032,14 @@ resolved_zdd_is_ours() {
 }
 
 install_shortcut() {
-  [[ -n "$SCRIPT_PATH" && -f "$SCRIPT_PATH" ]] \
+  [[ -n "$SCRIPT_PATH" \
+    && -f "$SCRIPT_PATH" ]] \
     || die "$(T \
       "无法识别当前脚本文件，不能安装快捷命令。" \
       "Unable to identify the current script file; the launcher cannot be installed.")"
 
-  grep -q '^# zdd-argo' "$SCRIPT_PATH" \
+  grep -q '^# zdd-argo' \
+    "$SCRIPT_PATH" \
     || die "$(T \
       "当前文件未通过 zdd-argo 脚本标识校验。" \
       "The current file failed the zdd-argo script identity check.")"
@@ -974,12 +1051,12 @@ install_shortcut() {
 
   local existing_zargo=""
   local path=""
-  local managed_tmp=""
-  local tmp=""
-  local launcher_new=""
-  local resolved_zargo=""
 
-  existing_zargo="$(type -P zargo 2>/dev/null || true)"
+  existing_zargo="$(
+    type -P zargo \
+      2>/dev/null \
+      || true
+  )"
 
   if [[ -n "$existing_zargo" ]] \
       && ! path_is_replaceable_zdd_launcher "$existing_zargo"; then
@@ -995,9 +1072,14 @@ install_shortcut() {
   do
     [[ -e "$path" || -L "$path" ]] || continue
 
-    if [[ "$path" == "$SHORTCUT_COMPAT_PATH" || "$path" == "$SHORTCUT_FALLBACK_PATH" ]] \
-        && [[ -L "$path" ]] \
-        && [[ "$(readlink "$path" 2>/dev/null || true)" == "$SHORTCUT_PATH" ]]; then
+    if [[ \
+      ( "$path" == "$SHORTCUT_COMPAT_PATH" \
+        || "$path" == "$SHORTCUT_FALLBACK_PATH" ) \
+      && -L "$path" \
+    ]] && [[ \
+      "$(readlink "$path" 2>/dev/null || true)" \
+        == "$SHORTCUT_PATH" \
+    ]]; then
       continue
     fi
 
@@ -1008,7 +1090,11 @@ install_shortcut() {
   done
 
   if [[ -e "$MANAGED_SCRIPT_PATH" ]] \
-      && ! grep -q '^# zdd-argo' "$MANAGED_SCRIPT_PATH" 2>/dev/null; then
+      && ! grep -q \
+        '^# zdd-argo' \
+        "$MANAGED_SCRIPT_PATH" \
+        2>/dev/null; then
+
     die "$(T \
       "目标路径已存在非 zdd-argo 文件：${MANAGED_SCRIPT_PATH}" \
       "A non-zdd-argo file already exists at: ${MANAGED_SCRIPT_PATH}")"
@@ -1018,12 +1104,24 @@ install_shortcut() {
   chmod 0755 "$BIN_DIR"
 
   if [[ "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]]; then
+    local managed_tmp=""
+
     managed_tmp="${MANAGED_SCRIPT_PATH}.new.$$"
-    install -m 0755 "$SCRIPT_PATH" "$managed_tmp"
-    mv -f "$managed_tmp" "$MANAGED_SCRIPT_PATH"
+
+    install -m 0755 \
+      "$SCRIPT_PATH" \
+      "$managed_tmp"
+
+    mv -f \
+      "$managed_tmp" \
+      "$MANAGED_SCRIPT_PATH"
   else
     chmod 0755 "$MANAGED_SCRIPT_PATH"
   fi
+
+  local tmp=""
+  local launcher_new=""
+  local resolved_zargo=""
 
   tmp="$(mktemp)"
 
@@ -1041,43 +1139,81 @@ exec /usr/bin/env bash ${MANAGED_SCRIPT_PATH@Q}
 EOF
 
   launcher_new="${SHORTCUT_PATH}.new.$$"
-  install -m 0755 "$tmp" "$launcher_new"
+
+  install -m 0755 \
+    "$tmp" \
+    "$launcher_new"
+
   rm -f "$tmp"
-  mv -f "$launcher_new" "$SHORTCUT_PATH"
+
+  mv -f \
+    "$launcher_new" \
+    "$SHORTCUT_PATH"
 
   rm -f "$SHORTCUT_COMPAT_PATH"
-  ln -s "$SHORTCUT_PATH" "$SHORTCUT_COMPAT_PATH"
+
+  ln -s \
+    "$SHORTCUT_PATH" \
+    "$SHORTCUT_COMPAT_PATH"
 
   hash -r
-  resolved_zargo="$(type -P zargo 2>/dev/null || true)"
 
-  if [[ -n "$resolved_zargo" ]] \
-      && [[ -e "$SHORTCUT_FALLBACK_PATH" || -L "$SHORTCUT_FALLBACK_PATH" ]]; then
-    if path_is_replaceable_zdd_launcher "$SHORTCUT_FALLBACK_PATH"; then
+  resolved_zargo="$(
+    type -P zargo \
+      2>/dev/null \
+      || true
+  )"
+
+  if [[ -n "$resolved_zargo" \
+      && ( -e "$SHORTCUT_FALLBACK_PATH" \
+        || -L "$SHORTCUT_FALLBACK_PATH" ) ]]; then
+
+    if path_is_replaceable_zdd_launcher \
+        "$SHORTCUT_FALLBACK_PATH"; then
       rm -f "$SHORTCUT_FALLBACK_PATH"
-      ln -s "$SHORTCUT_PATH" "$SHORTCUT_FALLBACK_PATH"
+
+      ln -s \
+        "$SHORTCUT_PATH" \
+        "$SHORTCUT_FALLBACK_PATH"
     fi
   fi
 
   if [[ -z "$resolved_zargo" ]]; then
-    if [[ -e "$SHORTCUT_FALLBACK_PATH" || -L "$SHORTCUT_FALLBACK_PATH" ]]; then
+    if [[ -e "$SHORTCUT_FALLBACK_PATH" \
+        || -L "$SHORTCUT_FALLBACK_PATH" ]]; then
+
       if [[ -L "$SHORTCUT_FALLBACK_PATH" ]] \
-          && [[ "$(readlink "$SHORTCUT_FALLBACK_PATH" 2>/dev/null || true)" == "$SHORTCUT_PATH" ]]; then
+          && [[ \
+            "$(readlink "$SHORTCUT_FALLBACK_PATH" 2>/dev/null || true)" \
+              == "$SHORTCUT_PATH" \
+          ]]; then
         :
-      elif path_is_replaceable_zdd_launcher "$SHORTCUT_FALLBACK_PATH"; then
+      elif path_is_replaceable_zdd_launcher \
+          "$SHORTCUT_FALLBACK_PATH"; then
+
         rm -f "$SHORTCUT_FALLBACK_PATH"
-        ln -s "$SHORTCUT_PATH" "$SHORTCUT_FALLBACK_PATH"
+
+        ln -s \
+          "$SHORTCUT_PATH" \
+          "$SHORTCUT_FALLBACK_PATH"
       else
         die "$(T \
           "当前 PATH 无法找到 /usr/local/bin/zargo，且备用路径已被其他程序占用：${SHORTCUT_FALLBACK_PATH}" \
           "The current PATH cannot resolve /usr/local/bin/zargo, and the fallback path is already used by another program: ${SHORTCUT_FALLBACK_PATH}")"
       fi
     else
-      ln -s "$SHORTCUT_PATH" "$SHORTCUT_FALLBACK_PATH"
+      ln -s \
+        "$SHORTCUT_PATH" \
+        "$SHORTCUT_FALLBACK_PATH"
     fi
 
     hash -r
-    resolved_zargo="$(type -P zargo 2>/dev/null || true)"
+
+    resolved_zargo="$(
+      type -P zargo \
+        2>/dev/null \
+        || true
+    )"
   fi
 
   [[ -x "$MANAGED_SCRIPT_PATH" ]] \
@@ -1100,6 +1236,7 @@ EOF
       "快捷命令已写入磁盘，但当前 shell 未解析到本项目的 zargo；请检查 PATH。" \
       "The launcher was written to disk, but the current shell does not resolve zargo to this project. Check PATH.")"
 
+  # 仅删除旧版 zdd-argo 创建的 zdd 启动器。
   for path in "${LEGACY_ZDD_PATHS[@]}"; do
     [[ -e "$path" || -L "$path" ]] || continue
 
@@ -1108,11 +1245,17 @@ EOF
     fi
   done
 
-  for path in "$LEGACY_SHORTCUT_PATH" "$LEGACY_SHORTCUT_BIN"; do
+  for path in \
+    "$LEGACY_SHORTCUT_PATH" \
+    "$LEGACY_SHORTCUT_BIN"
+  do
     [[ -e "$path" || -L "$path" ]] || continue
 
     if path_is_replaceable_zdd_launcher "$path" \
-        || grep -Fq 'zdd-argo' "$path" 2>/dev/null; then
+        || grep -Fq \
+          'zdd-argo' \
+          "$path" \
+          2>/dev/null; then
       rm -f "$path"
     else
       warn "$(T \
@@ -1204,7 +1347,10 @@ github_latest_asset_info() {
       type == "object"
       and (.tag_name | type == "string")
       and (.assets | type == "array")
-    ' "$api_file" >/dev/null 2>&1; then
+    ' \
+    "$api_file" \
+    >/dev/null 2>&1; then
+
     rm -f "$api_file"
 
     die "$(T \
@@ -1212,20 +1358,26 @@ github_latest_asset_info() {
       "The GitHub Release response format for ${repo} is invalid.")"
   fi
 
-  if ! result="$(jq -er --arg re "$asset_regex" '
-      [.assets[] | select(.name | test($re))] as $matches
-      | if ($matches | length) == 1 then
-          [
-            $matches[0].name,
-            $matches[0].browser_download_url,
-            ($matches[0].digest // ""),
-            .tag_name
-          ]
-          | @tsv
-        else
-          error("matching asset count: \($matches | length)")
-        end
-    ' "$api_file" 2>/dev/null)"; then
+  if ! result="$(
+    jq -er \
+      --arg re "$asset_regex" \
+      '
+        [.assets[] | select(.name | test($re))] as $matches
+        | if ($matches | length) == 1 then
+            [
+              $matches[0].name,
+              $matches[0].browser_download_url,
+              ($matches[0].digest // ""),
+              .tag_name
+            ]
+            | @tsv
+          else
+            error("matching asset count: \($matches | length)")
+          end
+      ' \
+      "$api_file" \
+      2>/dev/null
+  )"; then
     rm -f "$api_file"
 
     die "$(T \
@@ -1263,7 +1415,11 @@ verify_github_asset() {
 
   expected="${digest#sha256:}"
   expected="${expected,,}"
-  actual="$(sha256sum "$file" | awk '{print tolower($1)}')"
+
+  actual="$(
+    sha256sum "$file" \
+      | awk '{print tolower($1)}'
+  )"
 
   [[ "$actual" == "$expected" ]] \
     || die "$(T \
@@ -1280,27 +1436,34 @@ write_release_metadata() {
   local tmp=""
 
   mkdir -p "$BIN_DIR" || return 1
-  tmp="$(mktemp "${BIN_DIR}/.release.XXXXXX")" || return 1
+
+  tmp="$(
+    mktemp "${BIN_DIR}/.release.XXXXXX"
+  )" || return 1
 
   if ! jq -n \
       --arg repo "$repo" \
       --arg tag "$tag" \
       --arg asset "$asset" \
       --arg digest "$digest" \
-      --arg installed_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+      --arg installed_at \
+        "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
       '{
         repository: $repo,
         tag: $tag,
         asset: $asset,
         digest: $digest,
         installed_at: $installed_at
-      }' > "$tmp"; then
+      }' \
+      > "$tmp"; then
+
     rm -f "$tmp"
     return 1
   fi
 
   if ! chmod 0644 "$tmp" \
       || ! mv -f "$tmp" "$output"; then
+
     rm -f "$tmp"
     return 1
   fi
@@ -1335,9 +1498,11 @@ install_or_update_singbox() {
     x86_64|amd64)
       asset_regex='^sing-box-.*-linux-amd64\.tar\.gz$'
       ;;
+
     aarch64|arm64)
       asset_regex='^sing-box-.*-linux-arm64\.tar\.gz$'
       ;;
+
     *)
       die "$(T \
         "暂不支持 CPU 架构：${arch}；当前脚本支持 amd64 与 arm64。" \
@@ -1347,19 +1512,28 @@ install_or_update_singbox() {
 
   resolve_singbox_bin
 
-  before="$(T "未安装" "not installed")"
+  before="$(T \
+    "未安装" \
+    "not installed")"
 
   if [[ -n "$SINGBOX_BIN" ]]; then
-    before="$("$SINGBOX_BIN" version 2>/dev/null | head -n 1 || true)"
+    before="$(
+      "$SINGBOX_BIN" version \
+        2>/dev/null \
+        | head -n 1 \
+        || true
+    )"
   fi
 
   info "$(T \
     "查询 sing-box 官方 GitHub 最新稳定版……" \
     "Checking the latest stable sing-box release on official GitHub...")"
 
-  info_line="$(github_latest_asset_info \
-    "SagerNet/sing-box" \
-    "$asset_regex")"
+  info_line="$(
+    github_latest_asset_info \
+      "SagerNet/sing-box" \
+      "$asset_regex"
+  )"
 
   IFS=$'\t' read -r \
     asset_name \
@@ -1368,7 +1542,9 @@ install_or_update_singbox() {
     release_tag \
     <<< "$info_line"
 
-  [[ -n "$asset_name" && -n "$asset_url" && -n "$release_tag" ]] \
+  [[ -n "$asset_name" \
+    && -n "$asset_url" \
+    && -n "$release_tag" ]] \
     || die "$(T \
       "sing-box Release 信息不完整。" \
       "Incomplete sing-box release information.")"
@@ -1379,7 +1555,9 @@ install_or_update_singbox() {
 
   mkdir -p "$extract_dir"
 
-  if ! safe_download "$asset_url" "$archive"; then
+  if ! safe_download \
+      "$asset_url" \
+      "$archive"; then
     rm -rf "$work"
 
     die "$(T \
@@ -1396,7 +1574,9 @@ install_or_update_singbox() {
 
   list_file="${work}/archive.list"
 
-  if ! tar -tzf "$archive" > "$list_file"; then
+  if ! tar -tzf \
+      "$archive" \
+      > "$list_file"; then
     rm -rf "$work"
 
     die "$(T \
@@ -1404,7 +1584,9 @@ install_or_update_singbox() {
       "Unable to read the sing-box archive listing.")"
   fi
 
-  if grep -Eq '(^/|(^|/)\.\.(/|$))' "$list_file"; then
+  if grep -Eq \
+      '(^/|(^|/)\.\.(/|$))' \
+      "$list_file"; then
     rm -rf "$work"
 
     die "$(T \
@@ -1412,7 +1594,9 @@ install_or_update_singbox() {
       "The sing-box archive contains unsafe paths and will not be extracted.")"
   fi
 
-  if ! tar -xzf "$archive" -C "$extract_dir"; then
+  if ! tar -xzf \
+      "$archive" \
+      -C "$extract_dir"; then
     rm -rf "$work"
 
     die "$(T \
@@ -1421,7 +1605,11 @@ install_or_update_singbox() {
   fi
 
   mapfile -t sb_candidates < <(
-    find "$extract_dir" -type f -name sing-box -print
+    find \
+      "$extract_dir" \
+      -type f \
+      -name sing-box \
+      -print
   )
 
   if [[ ${#sb_candidates[@]} -ne 1 ]]; then
@@ -1435,7 +1623,8 @@ install_or_update_singbox() {
   candidate="${sb_candidates[0]}"
   chmod 0755 "$candidate"
 
-  if ! "$candidate" version 2>/dev/null \
+  if ! "$candidate" version \
+      2>/dev/null \
       | head -n 1 \
       | grep -q '^sing-box version '; then
     rm -rf "$work"
@@ -1446,7 +1635,8 @@ install_or_update_singbox() {
   fi
 
   if [[ -f "$SINGBOX_CONFIG" ]] \
-      && ! "$candidate" check -c "$SINGBOX_CONFIG"; then
+      && ! "$candidate" check \
+        -c "$SINGBOX_CONFIG"; then
     rm -rf "$work"
 
     die "$(T \
@@ -1461,25 +1651,39 @@ install_or_update_singbox() {
   backup="${MANAGED_SINGBOX_BIN}.backup.$$"
 
   if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
-    cp -a "$MANAGED_SINGBOX_BIN" "$backup"
+    cp -a \
+      "$MANAGED_SINGBOX_BIN" \
+      "$backup"
+
     had_managed=1
   fi
 
   if [[ -f "$SINGBOX_RELEASE_META" ]]; then
     meta_backup="${SINGBOX_RELEASE_META}.backup.$$"
-    cp -a "$SINGBOX_RELEASE_META" "$meta_backup"
+
+    cp -a \
+      "$SINGBOX_RELEASE_META" \
+      "$meta_backup"
   fi
 
   if [[ -f "$SINGBOX_UNIT" ]]; then
     had_unit=1
   fi
 
-  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+  if systemctl is-active \
+      --quiet \
+      "$SERVICE_NAME" \
+      2>/dev/null; then
     was_active=1
   fi
 
-  install -m 0755 "$candidate" "$new_binary"
-  mv -f "$new_binary" "$MANAGED_SINGBOX_BIN"
+  install -m 0755 \
+    "$candidate" \
+    "$new_binary"
+
+  mv -f \
+    "$new_binary" \
+    "$MANAGED_SINGBOX_BIN"
 
   if ! write_release_metadata \
       "$SINGBOX_RELEASE_META" \
@@ -1487,18 +1691,25 @@ install_or_update_singbox() {
       "$release_tag" \
       "$asset_name" \
       "$digest"; then
+
     warn "$(T \
       "sing-box 元数据写入失败，正在回滚……" \
       "Failed to write sing-box metadata; rolling back...")"
 
-    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-      mv -f "$backup" "$MANAGED_SINGBOX_BIN"
+    if [[ $had_managed -eq 1 \
+        && -f "$backup" ]]; then
+      mv -f \
+        "$backup" \
+        "$MANAGED_SINGBOX_BIN"
     else
       rm -f "$MANAGED_SINGBOX_BIN"
     fi
 
-    if [[ -n "$meta_backup" && -f "$meta_backup" ]]; then
-      mv -f "$meta_backup" "$SINGBOX_RELEASE_META"
+    if [[ -n "$meta_backup" \
+        && -f "$meta_backup" ]]; then
+      mv -f \
+        "$meta_backup" \
+        "$SINGBOX_RELEASE_META"
     else
       rm -f "$SINGBOX_RELEASE_META"
     fi
@@ -1522,68 +1733,97 @@ install_or_update_singbox() {
       "sing-box 安装完成后未能切换到脚本专用二进制。" \
       "The installation did not switch to the script-managed sing-box binary.")"
 
-  if [[ $had_unit -eq 1 && -f "$SINGBOX_CONFIG" ]]; then
+  if [[ $had_unit -eq 1 \
+      && -f "$SINGBOX_CONFIG" ]]; then
     write_singbox_service
 
     if [[ $was_active -eq 1 ]]; then
-      systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+      systemctl restart \
+        "$SERVICE_NAME" \
+        >/dev/null 2>&1 \
+        || true
+    fi
 
-      if ! wait_for_singbox_ready; then
-        warn "$(T \
-          "新版 sing-box 启动失败，正在回滚……" \
-          "The new sing-box failed to start; rolling back...")"
+    if [[ $was_active -eq 1 ]] \
+        && ! wait_for_singbox_ready; then
 
-        if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-          mv -f "$backup" "$MANAGED_SINGBOX_BIN"
-        else
-          rm -f "$MANAGED_SINGBOX_BIN"
-        fi
+      warn "$(T \
+        "新版 sing-box 启动失败，正在回滚……" \
+        "The new sing-box failed to start; rolling back...")"
 
-        if [[ -n "$meta_backup" && -f "$meta_backup" ]]; then
-          mv -f "$meta_backup" "$SINGBOX_RELEASE_META"
-        else
-          rm -f "$SINGBOX_RELEASE_META"
-        fi
+      if [[ $had_managed -eq 1 \
+          && -f "$backup" ]]; then
+        mv -f \
+          "$backup" \
+          "$MANAGED_SINGBOX_BIN"
+      else
+        rm -f "$MANAGED_SINGBOX_BIN"
+      fi
 
-        hash -r
-        resolve_singbox_bin
+      if [[ -n "$meta_backup" \
+          && -f "$meta_backup" ]]; then
+        mv -f \
+          "$meta_backup" \
+          "$SINGBOX_RELEASE_META"
+      else
+        rm -f "$SINGBOX_RELEASE_META"
+      fi
 
-        if [[ -n "$SINGBOX_BIN" ]]; then
-          write_singbox_service
-          systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
-        fi
+      hash -r
+      resolve_singbox_bin
 
-        if ! wait_for_singbox_ready; then
-          journalctl \
-            -u "$SERVICE_NAME" \
-            -n 80 \
-            --no-pager >&2 \
+      if [[ -n "$SINGBOX_BIN" ]]; then
+        write_singbox_service
+
+        if [[ $was_active -eq 1 ]]; then
+          systemctl restart \
+            "$SERVICE_NAME" \
+            >/dev/null 2>&1 \
             || true
-
-          die "$(T \
-            "新版启动失败，且旧版回滚后也未恢复，请检查日志。" \
-            "The new version failed, and the rolled-back version also failed to recover. Check the logs.")"
         fi
+      fi
 
+      if [[ $was_active -eq 1 ]] \
+          && ! wait_for_singbox_ready; then
         journalctl \
           -u "$SERVICE_NAME" \
-          -n 40 \
-          --no-pager >&2 \
+          -n 80 \
+          --no-pager \
+          >&2 \
           || true
 
         die "$(T \
-          "sing-box 更新后启动失败，已成功恢复旧版本。" \
-          "The sing-box update failed to start; the previous version was restored successfully.")"
+          "新版启动失败，且旧版回滚后也未恢复，请检查日志。" \
+          "The new version failed, and the rolled-back version also failed to recover. Check the logs.")"
       fi
+
+      journalctl \
+        -u "$SERVICE_NAME" \
+        -n 40 \
+        --no-pager \
+        >&2 \
+        || true
+
+      die "$(T \
+        "sing-box 更新后启动失败，已成功恢复旧版本。" \
+        "The sing-box update failed to start; the previous version was restored successfully.")"
     fi
   fi
 
-  rm -f "$backup" "$meta_backup"
+  rm -f \
+    "$backup" \
+    "$meta_backup"
 
-  after="$("$SINGBOX_BIN" version 2>/dev/null | head -n 1 || true)"
+  after="$(
+    "$SINGBOX_BIN" version \
+      2>/dev/null \
+      | head -n 1 \
+      || true
+  )"
 
   printf '%s %s\n%s %s\n' \
-    "$(T "更新前：" "Before:")" "$before" \
+    "$(T "更新前：" "Before:")" \
+    "$before" \
     "$(T "更新后：" "After:")" \
     "${after:-$(T "未知" "unknown")}"
 
@@ -1627,9 +1867,11 @@ install_or_update_cloudflared() {
     x86_64|amd64)
       asset_regex='^cloudflared-linux-amd64$'
       ;;
+
     aarch64|arm64)
       asset_regex='^cloudflared-linux-arm64$'
       ;;
+
     *)
       die "$(T \
         "暂不支持 CPU 架构：${arch}；当前脚本支持 amd64 与 arm64。" \
@@ -1639,19 +1881,28 @@ install_or_update_cloudflared() {
 
   resolve_cloudflared_bin
 
-  before="$(T "未安装" "not installed")"
+  before="$(T \
+    "未安装" \
+    "not installed")"
 
   if [[ -n "$CLOUDFLARED_BIN" ]]; then
-    before="$("$CLOUDFLARED_BIN" --version 2>/dev/null | head -n 1 || true)"
+    before="$(
+      "$CLOUDFLARED_BIN" --version \
+        2>/dev/null \
+        | head -n 1 \
+        || true
+    )"
   fi
 
   info "$(T \
     "查询 cloudflared 官方 GitHub 最新稳定版……" \
     "Checking the latest stable cloudflared release on official GitHub...")"
 
-  info_line="$(github_latest_asset_info \
-    "cloudflare/cloudflared" \
-    "$asset_regex")"
+  info_line="$(
+    github_latest_asset_info \
+      "cloudflare/cloudflared" \
+      "$asset_regex"
+  )"
 
   IFS=$'\t' read -r \
     asset_name \
@@ -1660,14 +1911,18 @@ install_or_update_cloudflared() {
     release_tag \
     <<< "$info_line"
 
-  [[ -n "$asset_name" && -n "$asset_url" && -n "$release_tag" ]] \
+  [[ -n "$asset_name" \
+    && -n "$asset_url" \
+    && -n "$release_tag" ]] \
     || die "$(T \
       "cloudflared Release 信息不完整。" \
       "Incomplete cloudflared release information.")"
 
   tmp_file="$(mktemp)"
 
-  if ! safe_download "$asset_url" "$tmp_file"; then
+  if ! safe_download \
+      "$asset_url" \
+      "$tmp_file"; then
     rm -f "$tmp_file"
 
     die "$(T \
@@ -1684,7 +1939,8 @@ install_or_update_cloudflared() {
 
   chmod 0755 "$tmp_file"
 
-  if ! "$tmp_file" --version 2>/dev/null \
+  if ! "$tmp_file" --version \
+      2>/dev/null \
       | grep -qi '^cloudflared version '; then
     rm -f "$tmp_file"
 
@@ -1701,17 +1957,28 @@ install_or_update_cloudflared() {
   meta_backup="${CLOUDFLARED_RELEASE_META}.backup.$$"
 
   if [[ -x "$MANAGED_CLOUDFLARED_BIN" ]]; then
-    cp -a "$MANAGED_CLOUDFLARED_BIN" "$backup"
+    cp -a \
+      "$MANAGED_CLOUDFLARED_BIN" \
+      "$backup"
+
     had_managed=1
   fi
 
   if [[ -f "$CLOUDFLARED_RELEASE_META" ]]; then
-    cp -a "$CLOUDFLARED_RELEASE_META" "$meta_backup"
+    cp -a \
+      "$CLOUDFLARED_RELEASE_META" \
+      "$meta_backup"
   fi
 
-  install -m 0755 "$tmp_file" "$new_binary"
+  install -m 0755 \
+    "$tmp_file" \
+    "$new_binary"
+
   rm -f "$tmp_file"
-  mv -f "$new_binary" "$MANAGED_CLOUDFLARED_BIN"
+
+  mv -f \
+    "$new_binary" \
+    "$MANAGED_CLOUDFLARED_BIN"
 
   if ! write_release_metadata \
       "$CLOUDFLARED_RELEASE_META" \
@@ -1719,18 +1986,24 @@ install_or_update_cloudflared() {
       "$release_tag" \
       "$asset_name" \
       "$digest"; then
+
     warn "$(T \
       "cloudflared 元数据写入失败，正在回滚……" \
       "Failed to write cloudflared metadata; rolling back...")"
 
-    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-      mv -f "$backup" "$MANAGED_CLOUDFLARED_BIN"
+    if [[ $had_managed -eq 1 \
+        && -f "$backup" ]]; then
+      mv -f \
+        "$backup" \
+        "$MANAGED_CLOUDFLARED_BIN"
     else
       rm -f "$MANAGED_CLOUDFLARED_BIN"
     fi
 
     if [[ -f "$meta_backup" ]]; then
-      mv -f "$meta_backup" "$CLOUDFLARED_RELEASE_META"
+      mv -f \
+        "$meta_backup" \
+        "$CLOUDFLARED_RELEASE_META"
     else
       rm -f "$CLOUDFLARED_RELEASE_META"
     fi
@@ -1744,19 +2017,26 @@ install_or_update_cloudflared() {
   resolve_cloudflared_bin
 
   if [[ "$CLOUDFLARED_BIN" != "$MANAGED_CLOUDFLARED_BIN" ]] \
-      || ! "$CLOUDFLARED_BIN" --version >/dev/null 2>&1; then
+      || ! "$CLOUDFLARED_BIN" --version \
+        >/dev/null 2>&1; then
+
     warn "$(T \
       "新版 cloudflared 安装后校验失败，正在回滚……" \
       "The installed cloudflared failed verification; rolling back...")"
 
-    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-      mv -f "$backup" "$MANAGED_CLOUDFLARED_BIN"
+    if [[ $had_managed -eq 1 \
+        && -f "$backup" ]]; then
+      mv -f \
+        "$backup" \
+        "$MANAGED_CLOUDFLARED_BIN"
     else
       rm -f "$MANAGED_CLOUDFLARED_BIN"
     fi
 
     if [[ -f "$meta_backup" ]]; then
-      mv -f "$meta_backup" "$CLOUDFLARED_RELEASE_META"
+      mv -f \
+        "$meta_backup" \
+        "$CLOUDFLARED_RELEASE_META"
     else
       rm -f "$CLOUDFLARED_RELEASE_META"
     fi
@@ -1769,12 +2049,20 @@ install_or_update_cloudflared() {
       "cloudflared update failed; the previous version was restored.")"
   fi
 
-  rm -f "$backup" "$meta_backup"
+  rm -f \
+    "$backup" \
+    "$meta_backup"
 
-  after="$("$CLOUDFLARED_BIN" --version 2>/dev/null | head -n 1 || true)"
+  after="$(
+    "$CLOUDFLARED_BIN" --version \
+      2>/dev/null \
+      | head -n 1 \
+      || true
+  )"
 
   printf '%s %s\n%s %s\n' \
-    "$(T "更新前：" "Before:")" "$before" \
+    "$(T "更新前：" "Before:")" \
+    "$before" \
     "$(T "更新后：" "After:")" \
     "${after:-$(T "未知" "unknown")}"
 
@@ -1805,7 +2093,8 @@ valid_ws_path() {
 }
 
 valid_argo_host() {
-  [[ -z "$1" || "$1" =~ ^[a-z0-9-]+\.trycloudflare\.com$ ]]
+  [[ -z "$1" \
+    || "$1" =~ ^[a-z0-9-]+\.trycloudflare\.com$ ]]
 }
 
 valid_ipv4() {
@@ -1817,13 +2106,20 @@ valid_ipv4() {
   local extra=""
   local part=""
 
-  IFS='.' read -r a b c d extra <<< "$value"
+  IFS='.' read -r \
+    a \
+    b \
+    c \
+    d \
+    extra \
+    <<< "$value"
 
-  [[ -z "${extra:-}" ]] || return 1
-  [[ -n "${a:-}" ]] || return 1
-  [[ -n "${b:-}" ]] || return 1
-  [[ -n "${c:-}" ]] || return 1
-  [[ -n "${d:-}" ]] || return 1
+  [[ -z "${extra:-}" \
+    && -n "${a:-}" \
+    && -n "${b:-}" \
+    && -n "${c:-}" \
+    && -n "${d:-}" ]] \
+    || return 1
 
   for part in "$a" "$b" "$c" "$d"; do
     [[ "$part" =~ ^[0-9]{1,3}$ ]] || return 1
@@ -1848,7 +2144,10 @@ valid_ipv6() {
 
   if [[ "$work" == *.* ]]; then
     ipv4_tail="${work##*:}"
-    valid_ipv4 "$ipv4_tail" || return 1
+
+    valid_ipv4 "$ipv4_tail" \
+      || return 1
+
     work="${work%:*}:0:0"
   fi
 
@@ -1857,19 +2156,24 @@ valid_ipv6() {
   if [[ "$work" == *::* ]]; then
     has_double=1
     remainder="${work#*::}"
+
     [[ "$remainder" != *::* ]] || return 1
+
     work="${work/::/:Z:}"
   fi
 
-  IFS=':' read -r -a parts <<< "$work"
+  IFS=':' read -r \
+    -a parts \
+    <<< "$work"
 
   for part in "${parts[@]}"; do
-    if [[ -z "$part" || "$part" == "Z" ]]; then
-      continue
-    fi
+    [[ -z "$part" || "$part" == "Z" ]] \
+      && continue
 
-    [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
-    ((count += 1))
+    [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] \
+      || return 1
+
+    ((count+=1))
   done
 
   if [[ $has_double -eq 1 ]]; then
@@ -1884,17 +2188,25 @@ valid_domain_name() {
   local label=""
   local -a labels=()
 
-  [[ -n "$value" ]] || return 1
-  [[ ${#value} -le 253 ]] || return 1
-  [[ "$value" == *.* ]] || return 1
-  [[ "$value" =~ ^[A-Za-z0-9.-]+$ ]] || return 1
+  [[ -n "$value" \
+    && ${#value} -le 253 \
+    && "$value" == *.* ]] \
+    || return 1
 
-  IFS='.' read -r -a labels <<< "$value"
+  [[ "$value" =~ ^[A-Za-z0-9.-]+$ ]] \
+    || return 1
+
+  IFS='.' read -r \
+    -a labels \
+    <<< "$value"
 
   for label in "${labels[@]}"; do
-    [[ -n "$label" ]] || return 1
-    [[ ${#label} -le 63 ]] || return 1
-    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] || return 1
+    [[ -n "$label" \
+      && ${#label} -le 63 ]] \
+      || return 1
+
+    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] \
+      || return 1
   done
 }
 
@@ -1913,7 +2225,13 @@ normalize_preferred_endpoint() {
   fi
 
   if valid_ipv4 "$value"; then
-    IFS='.' read -r a b c d <<< "$value"
+    IFS='.' read -r \
+      a \
+      b \
+      c \
+      d \
+      <<< "$value"
+
     value="$((10#$a)).$((10#$b)).$((10#$c)).$((10#$d))"
   elif valid_domain_name "$value"; then
     value="${value%.}"
@@ -1926,9 +2244,10 @@ normalize_preferred_endpoint() {
 valid_preferred_endpoint() {
   local value="$1"
 
-  [[ -n "$value" ]] || return 1
-  [[ "$value" != *[[:space:]]* ]] || return 1
-  [[ ${#value} -le 253 ]] || return 1
+  [[ -n "$value" \
+    && "$value" != *[[:space:]]* \
+    && ${#value} -le 253 ]] \
+    || return 1
 
   if [[ "$value" =~ ^[0-9.]+$ ]]; then
     valid_ipv4 "$value"
@@ -1944,10 +2263,13 @@ load_settings() {
   ENDPOINT_CONFIGURED=0
 
   [[ -f "$SETTINGS_JSON" ]] || return 0
-
   command -v jq >/dev/null 2>&1 || return 0
 
-  if ! jq -e 'type == "object"' "$SETTINGS_JSON" >/dev/null 2>&1; then
+  if ! jq -e \
+      'type == "object"' \
+      "$SETTINGS_JSON" \
+      >/dev/null 2>&1; then
+
     warn "$(T \
       "设置文件损坏，已移走；当前使用默认优选域名 ${DEFAULT_PREFERRED_ENDPOINT}。" \
       "The settings file is invalid and was moved aside; using the default preferred domain ${DEFAULT_PREFERRED_ENDPOINT}.")"
@@ -1961,7 +2283,12 @@ load_settings() {
 
   local value=""
 
-  value="$(jq -r '.preferred_endpoint // ""' "$SETTINGS_JSON")"
+  value="$(
+    jq -r \
+      '.preferred_endpoint // ""' \
+      "$SETTINGS_JSON"
+  )"
+
   value="$(normalize_preferred_endpoint "$value")"
 
   if valid_preferred_endpoint "$value"; then
@@ -1985,48 +2312,115 @@ save_settings() {
 
   local tmp=""
 
-  tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
+  tmp="$(
+    mktemp "${DATA_DIR}/.settings.json.XXXXXX"
+  )"
 
   umask 077
 
   jq -n \
     --argjson schema 1 \
     --arg preferred_endpoint "$PREFERRED_ENDPOINT" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --arg updated_at \
+      "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     '{
       schema: $schema,
       preferred_endpoint: $preferred_endpoint,
       updated_at: $updated_at
-    }' > "$tmp"
+    }' \
+    > "$tmp"
 
   chmod 600 "$tmp"
-  mv -f "$tmp" "$SETTINGS_JSON"
+
+  mv -f \
+    "$tmp" \
+    "$SETTINGS_JSON"
 
   ENDPOINT_CONFIGURED=1
 }
 
+configure_preferred_endpoint() {
+  local input=""
+  local normalized=""
+  local current="$PREFERRED_ENDPOINT"
+
+  printf '\n%s\n' "$(T \
+    "填写优选域名或优选 IP" \
+    "Enter preferred domain or preferred IP")"
+
+  printf '%s\n' "$(T \
+    "支持域名、IPv4 或 IPv6；首次配置必须手动填写，不提供自动默认值。" \
+    "Domains, IPv4, and IPv6 are supported. The first configuration must be entered manually; no automatic default is used.")"
+
+  while true; do
+    if valid_preferred_endpoint "$current"; then
+      read_interactive \
+        input \
+        "$(T \
+          "当前值 [${current}]，直接回车保留：" \
+          "Current value [${current}]; press Enter to keep it: ")" \
+        "" \
+        || input=""
+
+      [[ -n "$input" ]] \
+        || input="$current"
+    else
+      read_interactive \
+        input \
+        "$(T \
+          "请输入优选域名/IP（必填）：" \
+          "Enter preferred domain/IP (required): ")" \
+        "" \
+        || input=""
+    fi
+
+    normalized="$(
+      normalize_preferred_endpoint "$input"
+    )"
+
+    if valid_preferred_endpoint "$normalized"; then
+      PREFERRED_ENDPOINT="$normalized"
+      save_settings
+
+      ok "$(T \
+        "优选地址已保存：${PREFERRED_ENDPOINT}" \
+        "Preferred endpoint saved: ${PREFERRED_ENDPOINT}")"
+
+      return 0
+    fi
+
+    warn "$(T \
+      "输入无效，且不能留空。请输入合法域名、IPv4 或 IPv6 地址。" \
+      "Invalid or empty input. Enter a valid domain, IPv4, or IPv6 address.")"
+  done
+}
+
 migrate_legacy_state() {
-  [[ -f "$LEGACY_STATE_FILE" ]] || return 0
-  [[ ! -f "$STATE_JSON" ]] || return 0
+  [[ -f "$LEGACY_STATE_FILE" \
+    && ! -f "$STATE_JSON" ]] \
+    || return 0
 
   local old_uuid=""
   local old_path=""
   local old_host=""
 
   old_uuid="$(
-    sed -n "s/^UUID='\([^']*\)'$/\1/p" \
+    sed -n \
+      "s/^UUID='\([^']*\)'$/\1/p" \
       "$LEGACY_STATE_FILE" \
       | head -n 1
   )"
 
   old_path="$(
-    sed -n "s/^WSPATH='\([^']*\)'$/\1/p" \
+    sed -n \
+      "s/^WSPATH='\([^']*\)'$/\1/p" \
       "$LEGACY_STATE_FILE" \
       | head -n 1
   )"
 
   old_host="$(
-    sed -n "s/^ARGO_HOST='\([^']*\)'$/\1/p" \
+    sed -n \
+      "s/^ARGO_HOST='\([^']*\)'$/\1/p" \
       "$LEGACY_STATE_FILE" \
       | head -n 1
   )"
@@ -2034,10 +2428,13 @@ migrate_legacy_state() {
   if valid_uuid "$old_uuid" \
       && valid_ws_path "$old_path" \
       && valid_argo_host "$old_host"; then
+
     UUID="$old_uuid"
     WSPATH="$old_path"
     ARGO_HOST="$old_host"
-    CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    CREATED_AT="$(
+      date -u +'%Y-%m-%dT%H:%M:%SZ'
+    )"
 
     save_state
 
@@ -2069,15 +2466,37 @@ load_state() {
 
   [[ -f "$STATE_JSON" ]] || return 0
 
-  jq -e 'type == "object"' "$STATE_JSON" >/dev/null 2>&1 \
+  jq -e \
+    'type == "object"' \
+    "$STATE_JSON" \
+    >/dev/null 2>&1 \
     || die "$(T \
       "状态文件损坏：${STATE_JSON}" \
       "State file is invalid: ${STATE_JSON}")"
 
-  UUID="$(jq -r '.uuid // ""' "$STATE_JSON")"
-  WSPATH="$(jq -r '.ws_path // ""' "$STATE_JSON")"
-  ARGO_HOST="$(jq -r '.argo_host // ""' "$STATE_JSON")"
-  CREATED_AT="$(jq -r '.created_at // ""' "$STATE_JSON")"
+  UUID="$(
+    jq -r \
+      '.uuid // ""' \
+      "$STATE_JSON"
+  )"
+
+  WSPATH="$(
+    jq -r \
+      '.ws_path // ""' \
+      "$STATE_JSON"
+  )"
+
+  ARGO_HOST="$(
+    jq -r \
+      '.argo_host // ""' \
+      "$STATE_JSON"
+  )"
+
+  CREATED_AT="$(
+    jq -r \
+      '.created_at // ""' \
+      "$STATE_JSON"
+  )"
 
   valid_uuid "$UUID" \
     || die "$(T \
@@ -2100,12 +2519,16 @@ save_state() {
   chmod 700 "$DATA_DIR"
 
   if [[ -z "$CREATED_AT" ]]; then
-    CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+    CREATED_AT="$(
+      date -u +'%Y-%m-%dT%H:%M:%SZ'
+    )"
   fi
 
   local tmp=""
 
-  tmp="$(mktemp "${DATA_DIR}/.state.json.XXXXXX")"
+  tmp="$(
+    mktemp "${DATA_DIR}/.state.json.XXXXXX"
+  )"
 
   umask 077
 
@@ -2115,7 +2538,8 @@ save_state() {
     --arg ws_path "$WSPATH" \
     --arg argo_host "$ARGO_HOST" \
     --arg created_at "$CREATED_AT" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    --arg updated_at \
+      "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     '{
       schema: $schema,
       uuid: $uuid,
@@ -2123,10 +2547,14 @@ save_state() {
       argo_host: $argo_host,
       created_at: $created_at,
       updated_at: $updated_at
-    }' > "$tmp"
+    }' \
+    > "$tmp"
 
   chmod 600 "$tmp"
-  mv -f "$tmp" "$STATE_JSON"
+
+  mv -f \
+    "$tmp" \
+    "$STATE_JSON"
 }
 
 generate_uuid_v4() {
@@ -2167,7 +2595,9 @@ generate_identity() {
 
   WSPATH="/$(openssl rand -hex 16)-vmws"
   ARGO_HOST=""
-  CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+  CREATED_AT="$(
+    date -u +'%Y-%m-%dT%H:%M:%SZ'
+  )"
 
   rm -f \
     "$VMESS_JSON_FILE" \
@@ -2178,9 +2608,8 @@ generate_identity() {
 }
 
 write_singbox_config() {
-  if [[ -z "$SINGBOX_BIN" ]]; then
-    resolve_singbox_bin
-  fi
+  [[ -n "$SINGBOX_BIN" ]] \
+    || resolve_singbox_bin
 
   [[ -n "$SINGBOX_BIN" ]] \
     || die "$(T \
@@ -2199,7 +2628,9 @@ write_singbox_config() {
 
   local tmp=""
 
-  tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
+  tmp="$(
+    mktemp "${DATA_DIR}/.sing-box.json.XXXXXX"
+  )"
 
   umask 077
 
@@ -2245,11 +2676,13 @@ write_singbox_config() {
       route: {
         final: "direct"
       }
-    }' > "$tmp"
+    }' \
+    > "$tmp"
 
   chmod 600 "$tmp"
 
-  if ! "$SINGBOX_BIN" check -c "$tmp"; then
+  if ! "$SINGBOX_BIN" check \
+      -c "$tmp"; then
     rm -f "$tmp"
 
     die "$(T \
@@ -2257,7 +2690,9 @@ write_singbox_config() {
       "The new sing-box configuration failed validation; the existing configuration was not replaced.")"
   fi
 
-  mv -f "$tmp" "$SINGBOX_CONFIG"
+  mv -f \
+    "$tmp" \
+    "$SINGBOX_CONFIG"
 }
 
 write_singbox_service() {
@@ -2301,20 +2736,25 @@ RestrictSUIDSGID=true
 WantedBy=multi-user.target
 EOF
 
-  install -m 0644 "$tmp" "$SINGBOX_UNIT"
+  install -m 0644 \
+    "$tmp" \
+    "$SINGBOX_UNIT"
+
   rm -f "$tmp"
 
   systemctl daemon-reload
 }
 
 listener_on_local_port() {
-  ss -H -ltn 2>/dev/null \
+  ss -H -ltn \
+    2>/dev/null \
     | awk '{print $4}' \
     | grep -Eq "(^|:)${LOCAL_PORT}$"
 }
 
 listener_exact_loopback() {
-  ss -H -ltn 2>/dev/null \
+  ss -H -ltn \
+    2>/dev/null \
     | awk '{print $4}' \
     | grep -qx "127.0.0.1:${LOCAL_PORT}"
 }
@@ -2323,7 +2763,9 @@ wait_for_singbox_ready() {
   local i=0
 
   for ((i = 1; i <= 15; i++)); do
-    if systemctl is-active --quiet "$SERVICE_NAME" \
+    if systemctl is-active \
+        --quiet \
+        "$SERVICE_NAME" \
         && listener_exact_loopback; then
       return 0
     fi
@@ -2336,13 +2778,18 @@ wait_for_singbox_ready() {
 
 ensure_singbox_running() {
   if listener_on_local_port \
-      && ! systemctl is-active --quiet "$SERVICE_NAME"; then
+      && ! systemctl is-active \
+        --quiet \
+        "$SERVICE_NAME"; then
+
     warn "$(T \
       "端口 ${LOCAL_PORT} 已被其他进程占用：" \
       "Port ${LOCAL_PORT} is already used by another process:")"
 
-    ss -ltnp 2>/dev/null \
-      | grep -E "(^|:)${LOCAL_PORT}[[:space:]]" \
+    ss -ltnp \
+      2>/dev/null \
+      | grep -E \
+        "(^|:)${LOCAL_PORT}[[:space:]]" \
       || true
 
     die "$(T \
@@ -2350,18 +2797,24 @@ ensure_singbox_running() {
       "Deployment stopped to avoid interfering with another service.")"
   fi
 
-  systemctl enable "$SERVICE_NAME" >/dev/null 2>&1 \
+  systemctl enable \
+    "$SERVICE_NAME" \
+    >/dev/null 2>&1 \
     || die "$(T \
       "无法启用 ${SERVICE_NAME}。" \
       "Unable to enable ${SERVICE_NAME}.")"
 
-  systemctl restart "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl restart \
+    "$SERVICE_NAME" \
+    >/dev/null 2>&1 \
+    || true
 
   if ! wait_for_singbox_ready; then
     journalctl \
       -u "$SERVICE_NAME" \
       -n 80 \
-      --no-pager >&2 \
+      --no-pager \
+      >&2 \
       || true
 
     die "$(T \
@@ -2404,7 +2857,6 @@ cleanup() {
   fi
 
   rm -f "${CLOUDFLARED_PID_FILE}"
-
   exit "\$rc"
 }
 
@@ -2440,16 +2892,22 @@ chmod 600 "${CLOUDFLARED_PID_FILE}"
 wait "\${CF_PID}"
 EOF
 
-  install -m 0700 "$tmp" "$CLOUDFLARED_RUNNER"
+  install -m 0700 \
+    "$tmp" \
+    "$CLOUDFLARED_RUNNER"
+
   rm -f "$tmp"
 }
 
 tmux_session_exists() {
-  tmux has-session -t "$TMUX_SESSION" 2>/dev/null
+  tmux has-session \
+    -t "$TMUX_SESSION" \
+    2>/dev/null
 }
 
 tunnel_is_running() {
-  tmux_session_exists || return 1
+  tmux_session_exists \
+    || return 1
 
   tmux list-panes \
     -t "$TMUX_SESSION" \
@@ -2459,21 +2917,31 @@ tunnel_is_running() {
 }
 
 cloudflared_pid_is_ours() {
-  [[ -r "$CLOUDFLARED_PID_FILE" ]] || return 1
+  [[ -r "$CLOUDFLARED_PID_FILE" ]] \
+    || return 1
 
   local pid=""
   local recorded_start=""
+  local extra=""
   local actual_start=""
   local cmdline=""
 
-  read -r pid recorded_start < "$CLOUDFLARED_PID_FILE" \
+  IFS=' ' read -r \
+    pid \
+    recorded_start \
+    extra \
+    < "$CLOUDFLARED_PID_FILE" \
     || return 1
 
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  kill -0 "$pid" 2>/dev/null || return 1
+  [[ -z "$extra" ]] || return 1
+
+  kill -0 "$pid" 2>/dev/null \
+    || return 1
 
   if [[ -n "$recorded_start" ]]; then
-    [[ "$recorded_start" =~ ^[0-9]+$ ]] || return 1
+    [[ "$recorded_start" =~ ^[0-9]+$ ]] \
+      || return 1
 
     actual_start="$(
       awk '{print $22}' \
@@ -2482,7 +2950,8 @@ cloudflared_pid_is_ours() {
         || true
     )"
 
-    [[ "$actual_start" == "$recorded_start" ]] || return 1
+    [[ "$actual_start" == "$recorded_start" ]] \
+      || return 1
   fi
 
   cmdline="$(
@@ -2512,10 +2981,13 @@ wait_for_argo_host() {
   local host=""
 
   for ((i = 1; i <= 90; i++)); do
-    host="$(extract_argo_host || true)"
+    host="$(
+      extract_argo_host \
+        || true
+    )"
 
-    if [[ -n "$host" ]] \
-        && valid_argo_host "$host"; then
+    if valid_argo_host "$host" \
+        && [[ -n "$host" ]]; then
       ARGO_HOST="$host"
       save_state
       return 0
@@ -2567,13 +3039,18 @@ generate_vmess_link() {
   local tmp_link=""
   local encoded=""
 
-  tmp_json="$(mktemp "${DATA_DIR}/.vmess.json.XXXXXX")"
-  tmp_link="$(mktemp "${DATA_DIR}/.vmess.txt.XXXXXX")"
+  tmp_json="$(
+    mktemp "${DATA_DIR}/.vmess.json.XXXXXX"
+  )"
+
+  tmp_link="$(
+    mktemp "${DATA_DIR}/.vmess.txt.XXXXXX"
+  )"
 
   umask 077
 
   jq -c -n \
-    --arg ps "$NODE_NAME" \
+    --arg ps "zdd-argo" \
     --arg add "$PREFERRED_ENDPOINT" \
     --arg id "$UUID" \
     --arg host "$ARGO_HOST" \
@@ -2600,17 +3077,24 @@ generate_vmess_link() {
       pcs: "",
       ech: $ech,
       echConfigList: $ech
-    }' > "$tmp_json"
+    }' \
+    > "$tmp_json"
 
   encoded="$(
-    base64 < "$tmp_json" \
+    base64 \
+      < "$tmp_json" \
       | tr -d '\r\n'
   )"
 
-  printf 'vmess://%s\n' "$encoded" > "$tmp_link"
+  printf 'vmess://%s\n' \
+    "$encoded" \
+    > "$tmp_link"
 
   if ! base64 -d \
-      < <(sed 's#^vmess://##' "$tmp_link") \
+      < <(
+        sed 's#^vmess://##' \
+          "$tmp_link"
+      ) \
       2>/dev/null \
       | jq -e \
         --arg add "$PREFERRED_ENDPOINT" \
@@ -2625,20 +3109,34 @@ generate_vmess_link() {
           and .pcs == ""
           and .ech == $ech
           and .echConfigList == $ech
-        ' >/dev/null; then
-    rm -f "$tmp_json" "$tmp_link"
+        ' \
+        >/dev/null; then
+
+    rm -f \
+      "$tmp_json" \
+      "$tmp_link"
 
     die "$(T \
       "生成的 VMess 链接自检失败，未写入磁盘。" \
       "The generated VMess link failed self-validation and was not saved.")"
   fi
 
-  chmod 600 "$tmp_json" "$tmp_link"
+  chmod 600 \
+    "$tmp_json" \
+    "$tmp_link"
 
-  mv -f "$tmp_json" "$VMESS_JSON_FILE"
-  mv -f "$tmp_link" "$VMESS_LINK_FILE"
+  mv -f \
+    "$tmp_json" \
+    "$VMESS_JSON_FILE"
 
-  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
+  mv -f \
+    "$tmp_link" \
+    "$VMESS_LINK_FILE"
+
+  printf '%s\n' \
+    "$ECH_CONFIG" \
+    > "$ECH_NOTE_FILE"
+
   chmod 600 "$ECH_NOTE_FILE"
 }
 
@@ -2647,7 +3145,11 @@ stop_tunnel() {
   local pid=""
 
   if tunnel_is_running; then
-    tmux kill-session -t "$TMUX_SESSION" 2>/dev/null || true
+    tmux kill-session \
+      -t "$TMUX_SESSION" \
+      2>/dev/null \
+      || true
+
     stopped=1
   elif tmux_session_exists; then
     warn "$(T \
@@ -2658,16 +3160,28 @@ stop_tunnel() {
   sleep 1
 
   if cloudflared_pid_is_ours; then
-    read -r pid _ < "$CLOUDFLARED_PID_FILE" || pid=""
+    read -r \
+      pid \
+      _ \
+      < "$CLOUDFLARED_PID_FILE" \
+      || pid=""
 
-    kill "$pid" 2>/dev/null || true
+    kill "$pid" \
+      2>/dev/null \
+      || true
 
     for _ in 1 2 3 4 5; do
-      kill -0 "$pid" 2>/dev/null || break
+      kill -0 "$pid" \
+        2>/dev/null \
+        || break
+
       sleep 1
     done
 
-    kill -9 "$pid" 2>/dev/null || true
+    kill -9 "$pid" \
+      2>/dev/null \
+      || true
+
     stopped=1
   fi
 
@@ -2696,7 +3210,11 @@ command_stop_clear_cache() {
   if ! confirm_yes "$(T \
       "确认断开并清理请输入 yes：" \
       "Type yes to disconnect and clear temporary data: ")"; then
-    info "$(T "已取消。" "Cancelled.")"
+
+    info "$(T \
+      "已取消。" \
+      "Cancelled.")"
+
     return 0
   fi
 
@@ -2729,6 +3247,7 @@ command_stop_clear_cache() {
 start_tunnel() {
   if tmux_session_exists \
       && ! tunnel_is_running; then
+
     die "$(T \
       "已存在同名 tmux 会话 ${TMUX_SESSION}，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。" \
       "A tmux session named ${TMUX_SESSION} already exists but was not created by this script. Rename or remove it first to avoid affecting unrelated work.")"
@@ -2737,7 +3256,10 @@ start_tunnel() {
   if tunnel_is_running; then
     local parsed_host=""
 
-    parsed_host="$(extract_argo_host || true)"
+    parsed_host="$(
+      extract_argo_host \
+        || true
+    )"
 
     if [[ -n "$parsed_host" ]] \
         && valid_argo_host "$parsed_host"; then
@@ -2796,7 +3318,10 @@ start_tunnel() {
       "90 秒内未取得 trycloudflare.com 域名，最近日志如下：" \
       "No trycloudflare.com hostname was obtained within 90 seconds. Recent logs:")"
 
-    tail -n 60 "$LOG_FILE" >&2 || true
+    tail -n 60 \
+      "$LOG_FILE" \
+      >&2 \
+      || true
 
     stop_tunnel || true
 
@@ -2820,15 +3345,12 @@ prepare_deployment() {
   if [[ $ENDPOINT_CONFIGURED -ne 1 ]]; then
     PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
     save_settings
-
-    info "$(T \
-      "使用默认优选域名：${PREFERRED_ENDPOINT}" \
-      "Using default preferred domain: ${PREFERRED_ENDPOINT}")"
   fi
 
   load_state
 
-  if [[ -z "$UUID" || -z "$WSPATH" ]]; then
+  if [[ -z "$UUID" \
+      || -z "$WSPATH" ]]; then
     generate_identity
   fi
 
@@ -2847,8 +3369,13 @@ show_subscription() {
 
   if tunnel_is_running; then
     running="$(T "是" "Yes")"
+  fi
 
-    parsed_host="$(extract_argo_host || true)"
+  if tunnel_is_running; then
+    parsed_host="$(
+      extract_argo_host \
+        || true
+    )"
 
     if [[ -n "$parsed_host" ]] \
         && valid_argo_host "$parsed_host"; then
@@ -2866,7 +3393,9 @@ show_subscription() {
 
   printf '\n%s========== %s ==========%s\n' \
     "$C_GREEN" \
-    "$(T "zdd-argo 当前节点" "Current zdd-argo node")" \
+    "$(T \
+      "zdd-argo 当前节点" \
+      "Current zdd-argo node")" \
     "$C_RESET"
 
   printf '%-22s %s\n' \
@@ -2975,7 +3504,9 @@ show_status() {
 
   printf '\n%s========== %s ==========%s\n' \
     "$C_CYAN" \
-    "$(T "zdd-argo 运行状态" "zdd-argo status")" \
+    "$(T \
+      "zdd-argo 运行状态" \
+      "zdd-argo status")" \
     "$C_RESET"
 
   printf '%-24s v %s\n' \
@@ -2989,7 +3520,8 @@ show_status() {
   printf '%-24s ' "sing-box:"
 
   if [[ -n "$SINGBOX_BIN" ]]; then
-    "$SINGBOX_BIN" version 2>/dev/null \
+    "$SINGBOX_BIN" version \
+      2>/dev/null \
       | head -n 1 \
       || printf '%s\n' "$(T "已安装" "installed")"
 
@@ -3016,7 +3548,8 @@ show_status() {
   printf '%-24s ' "cloudflared:"
 
   if [[ -n "$CLOUDFLARED_BIN" ]]; then
-    "$CLOUDFLARED_BIN" --version 2>/dev/null \
+    "$CLOUDFLARED_BIN" --version \
+      2>/dev/null \
       || printf '%s\n' "$(T "已安装" "installed")"
 
     printf '%-24s %s' \
@@ -3043,7 +3576,9 @@ show_status() {
     "sing-box 服务：" \
     "sing-box service:")"
 
-  if systemctl is-active --quiet "$SERVICE_NAME"; then
+  if systemctl is-active \
+      --quiet \
+      "$SERVICE_NAME"; then
     printf '%s%s%s\n' \
       "$C_GREEN" \
       "$(T "运行中" "running")" \
@@ -3096,7 +3631,11 @@ show_status() {
 
   local resolved_zargo=""
 
-  resolved_zargo="$(type -P zargo 2>/dev/null || true)"
+  resolved_zargo="$(
+    type -P zargo \
+      2>/dev/null \
+      || true
+  )"
 
   printf '%-24s ' "$(T \
     "管理命令：" \
@@ -3132,7 +3671,9 @@ show_status() {
       "最近 20 行 cloudflared 日志：" \
       "Last 20 lines of cloudflared logs:")"
 
-    tail -n 20 "$LOG_FILE" || true
+    tail -n 20 \
+      "$LOG_FILE" \
+      || true
   fi
 }
 
@@ -3148,57 +3689,60 @@ command_generate() {
 
     if [[ "$LANGUAGE" == "zh" ]]; then
       cat <<'EOF'
-1. 保持当前域名，只校验并显示订阅
-2. 重建临时域名（保留 UUID 与 WS 路径）
-3. 全部重建（同时更换 UUID、WS 路径与临时域名）
-0. 返回
+  1. 保持当前域名，只校验并显示订阅
+  2. 重建临时域名（保留 UUID 与 WS 路径）
+  3. 全部重建（同时更换 UUID、WS 路径与临时域名）
+  0. 返回
 EOF
     else
       cat <<'EOF'
-1. Keep the current hostname; validate and display the subscription
-2. Rebuild the temporary hostname (keep UUID and WebSocket path)
-3. Rebuild everything (replace UUID, WebSocket path, and temporary hostname)
-0. Back
+  1. Keep the current hostname; validate and display the subscription
+  2. Rebuild the temporary hostname (keep UUID and WebSocket path)
+  3. Rebuild everything (replace UUID, WebSocket path, and temporary hostname)
+  0. Back
 EOF
     fi
 
-    while true; do
-      read_interactive choice \
-        "$(T "请选择 [0-3]：" "Select [0-3]: ")" \
-        "" \
-        || choice=""
+    read_interactive \
+      choice \
+      "$(T \
+        "请选择 [0-3]：" \
+        "Select [0-3]: ")" \
+      "1" \
+      || choice=1
 
-      case "$choice" in
-        1)
-          start_tunnel
-          break
-          ;;
-        2)
-          stop_tunnel
-          start_tunnel
-          break
-          ;;
-        3)
-          stop_tunnel
-          generate_identity
-          write_singbox_config
-          ensure_singbox_running
-          start_tunnel
-          break
-          ;;
-        0)
-          info "$(T \
-            "已返回，不做修改。" \
-            "Returned without changes.")"
-          return 0
-          ;;
-        *)
-          warn "$(T \
-            "请输入 0、1、2 或 3。" \
-            "Please enter 0, 1, 2, or 3.")"
-          ;;
-      esac
-    done
+    case "$choice" in
+      1)
+        start_tunnel
+        ;;
+
+      2)
+        stop_tunnel
+        start_tunnel
+        ;;
+
+      3)
+        stop_tunnel
+        generate_identity
+        write_singbox_config
+        ensure_singbox_running
+        start_tunnel
+        ;;
+
+      0)
+        info "$(T \
+          "已返回，不做修改。" \
+          "Returned without changes.")"
+
+        return 0
+        ;;
+
+      *)
+        die "$(T \
+          "无效选择。" \
+          "Invalid selection.")"
+        ;;
+    esac
   else
     start_tunnel
   fi
@@ -3211,13 +3755,47 @@ EOF
 }
 
 command_update_singbox() {
+  local had_deployment=0
+
+  if [[ -f "$SINGBOX_CONFIG" \
+      || -f "$SINGBOX_UNIT" ]]; then
+    had_deployment=1
+  fi
+
   install_or_update_singbox
+  resolve_singbox_bin
+
+  if [[ $had_deployment -eq 1 \
+      && -f "$SINGBOX_CONFIG" ]]; then
+    load_state
+
+    "$SINGBOX_BIN" check \
+      -c "$SINGBOX_CONFIG" \
+      || die "$(T \
+        "更新后的 sing-box 无法通过现有 zdd-argo 配置校验。" \
+        "The updated sing-box cannot validate the existing zdd-argo configuration.")"
+
+    write_singbox_service
+
+    if ! wait_for_singbox_ready; then
+      ensure_singbox_running
+    fi
+
+    ok "$(T \
+      "脚本专用 sing-box 已更新，zdd-argo 服务运行正常。" \
+      "The script-managed sing-box was updated and the zdd-argo service is running normally.")"
+  else
+    ok "$(T \
+      "脚本专用 sing-box 已安装或更新；当前未发现 zdd-argo 部署。" \
+      "The script-managed sing-box was installed or updated; no existing zdd-argo deployment was found.")"
+  fi
 }
 
 command_update_cloudflared() {
   local had_deployment=0
 
-  if [[ -f "$CLOUDFLARED_RUNNER" || -f "$STATE_JSON" ]]; then
+  if [[ -f "$CLOUDFLARED_RUNNER" \
+      || -f "$STATE_JSON" ]]; then
     had_deployment=1
   fi
 
@@ -3253,12 +3831,21 @@ command_update_components() {
 remove_zdd_components() {
   stop_tunnel || true
 
-  systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl disable \
+    --now \
+    "$SERVICE_NAME" \
+    >/dev/null 2>&1 \
+    || true
 
   rm -f "$SINGBOX_UNIT"
 
-  systemctl daemon-reload || true
-  systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl daemon-reload \
+    || true
+
+  systemctl reset-failed \
+    "$SERVICE_NAME" \
+    >/dev/null 2>&1 \
+    || true
 
   rm -rf "$DATA_DIR"
   rm -f "$LOG_FILE"
@@ -3292,14 +3879,23 @@ remove_shortcuts() {
   do
     [[ -e "$path" || -L "$path" ]] || continue
 
-    if [[ "$path" == "$SHORTCUT_COMPAT_PATH" || "$path" == "$SHORTCUT_FALLBACK_PATH" ]] \
-        && [[ -L "$path" ]] \
-        && [[ "$(readlink "$path" 2>/dev/null || true)" == "$SHORTCUT_PATH" ]]; then
+    if [[ \
+      ( "$path" == "$SHORTCUT_COMPAT_PATH" \
+        || "$path" == "$SHORTCUT_FALLBACK_PATH" ) \
+      && -L "$path" \
+    ]] && [[ \
+      "$(readlink "$path" 2>/dev/null || true)" \
+        == "$SHORTCUT_PATH" \
+    ]]; then
       rm -f "$path"
     elif path_is_replaceable_zdd_launcher "$path"; then
       rm -f "$path"
-    elif [[ "$path" == "$LEGACY_SHORTCUT_PATH" || "$path" == "$LEGACY_SHORTCUT_BIN" ]]; then
-      if grep -Fq 'zdd-argo' "$path" 2>/dev/null; then
+    elif [[ "$path" == "$LEGACY_SHORTCUT_PATH" \
+        || "$path" == "$LEGACY_SHORTCUT_BIN" ]]; then
+      if grep -Fq \
+          'zdd-argo' \
+          "$path" \
+          2>/dev/null; then
         rm -f "$path"
       fi
     else
@@ -3312,7 +3908,11 @@ remove_shortcuts() {
 
 remove_managed_script() {
   if [[ -e "$MANAGED_SCRIPT_PATH" ]]; then
-    if grep -q '^# zdd-argo' "$MANAGED_SCRIPT_PATH" 2>/dev/null; then
+    if grep -q \
+        '^# zdd-argo' \
+        "$MANAGED_SCRIPT_PATH" \
+        2>/dev/null; then
+
       rm -f \
         "$MANAGED_SCRIPT_PATH" \
         "${MANAGED_SCRIPT_PATH}.new."*
@@ -3336,7 +3936,11 @@ command_uninstall_zdd() {
   if ! confirm_yes "$(T \
       "确认卸载请输入 yes：" \
       "Type yes to confirm: ")"; then
-    info "$(T "已取消。" "Cancelled.")"
+
+    info "$(T \
+      "已取消。" \
+      "Cancelled.")"
+
     return 0
   fi
 
@@ -3379,13 +3983,17 @@ remove_cloudflared_program() {
 }
 
 cleanup_bin_dir() {
-  rmdir "$BIN_DIR" 2>/dev/null || true
+  rmdir "$BIN_DIR" \
+    2>/dev/null \
+    || true
 }
 
 show_full_uninstall_risks() {
   printf '\n%s%s%s\n' \
     "$C_RED" \
-    "$(T "完整卸载影响：" "Full uninstall impact:")" \
+    "$(T \
+      "完整卸载影响：" \
+      "Full uninstall impact:")" \
     "$C_RESET"
 
   printf '%s\n' "$(T \
@@ -3411,7 +4019,11 @@ command_purge_all() {
   if ! confirm_yes "$(T \
       "确认完整卸载请输入 yes：" \
       "Type yes to confirm full uninstall: ")"; then
-    info "$(T "已取消。" "Cancelled.")"
+
+    info "$(T \
+      "已取消。" \
+      "Cancelled.")"
+
     return 0
   fi
 
@@ -3422,7 +4034,8 @@ command_purge_all() {
   remove_managed_script
   cleanup_bin_dir
 
-  systemctl daemon-reload || true
+  systemctl daemon-reload \
+    || true
 
   ok "$(T \
     "zdd-argo 及脚本专用 sing-box、cloudflared 已卸载；源文件和系统中其他安装不受影响。" \
@@ -3445,15 +4058,15 @@ menu_header_status() {
 
   if [[ -n "$SINGBOX_BIN" ]]; then
     sb="$(
-      "$SINGBOX_BIN" version 2>/dev/null \
+      "$SINGBOX_BIN" version \
+        2>/dev/null \
         | head -n 1 \
         | sed 's/^sing-box version /v/' \
         || true
     )"
 
-    if [[ -z "$sb" ]]; then
-      sb="$(T "已安装" "installed")"
-    fi
+    [[ -n "$sb" ]] \
+      || sb="$(T "已安装" "installed")"
   fi
 
   if tunnel_is_running; then
@@ -3462,16 +4075,16 @@ menu_header_status() {
 
   if [[ -f "$STATE_JSON" ]] \
       && command -v jq >/dev/null 2>&1; then
+
     host="$(
-      jq -r '.argo_host // "—"' \
+      jq -r \
+        '.argo_host // "—"' \
         "$STATE_JSON" \
         2>/dev/null \
         || printf '%s' "$(T "状态异常" "invalid state")"
     )"
 
-    if [[ -z "$host" ]]; then
-      host="—"
-    fi
+    [[ -n "$host" ]] || host="—"
   fi
 
   printf '%s%s zdd-argo %s v %s%s\n' \
@@ -3523,17 +4136,21 @@ run_menu_action() {
   set -e
 
   if [[ $rc -eq 10 ]]; then
-    printf '\n'
+    printf '\n%s' "$(T \
+      "卸载流程已经完成。按 Enter 后退出并清空屏幕……" \
+      "Uninstall completed. Press Enter to exit and clear the screen...")"
 
-    wait_for_zero "$(T \
-      "卸载完成，输入 0 退出并清空屏幕：" \
-      "Uninstall completed. Enter 0 to exit and clear the screen: ")"
+    local ignored=""
+
+    read_interactive \
+      ignored \
+      "" \
+      "" \
+      || true
 
     clear_screen
     exit 0
-  fi
-
-  if [[ $rc -ne 0 ]]; then
+  elif [[ $rc -ne 0 ]]; then
     error "$(T \
       "操作失败，退出码：${rc}" \
       "Operation failed with exit code: ${rc}")"
@@ -3545,7 +4162,9 @@ run_menu_action() {
 interactive_menu() {
   MENU_MODE=1
 
-  trap 'clear_screen; exit 130' INT TERM
+  trap \
+    'clear_screen; exit 130' \
+    INT TERM
 
   while true; do
     clear_screen
@@ -3575,14 +4194,18 @@ EOF
 EOF
     fi
 
-    printf '%s\n' '────────────────────────────────────────'
+    printf '%s\n' \
+      '────────────────────────────────────────'
 
     local choice=""
 
-    read_interactive choice \
-      "$(T "请选择 [0-7]：" "Select [0-7]: ")" \
-      "" \
-      || choice=""
+    read_interactive \
+      choice \
+      "$(T \
+        "请选择 [0-7]：" \
+        "Select [0-7]: ")" \
+      "0" \
+      || choice="0"
 
     clear_screen
 
@@ -3593,49 +4216,59 @@ EOF
           run_with_lock \
           command_generate
         ;;
+
       2)
         run_menu_action \
           with-dependencies \
           run_with_lock \
           show_subscription
         ;;
+
       3)
         run_menu_action \
           with-dependencies \
           run_with_lock \
           command_update_components
         ;;
+
       4)
         run_menu_action \
           without-dependencies \
           show_status
         ;;
+
       5)
         run_menu_action \
           with-dependencies \
           run_with_lock \
           command_stop_clear_cache
         ;;
+
       6)
         run_menu_action \
           without-dependencies \
           run_with_lock \
           command_uninstall_zdd
         ;;
+
       7)
         run_menu_action \
           without-dependencies \
           run_with_lock \
           command_purge_all
         ;;
+
       0)
         clear_screen
         exit 0
         ;;
+
       *)
         warn "$(T \
-          "请输入 0 到 7。" \
-          "Please enter a number from 0 to 7.")"
+          "无效选择：${choice}" \
+          "Invalid selection: ${choice}")"
+
+        pause_screen
         ;;
     esac
   done
@@ -3644,6 +4277,8 @@ EOF
 bootstrap() {
   require_root
   check_os
+
+  # 启动阶段只安装 zargo 管理入口，不自动安装依赖、核心或创建 Argo。
   install_shortcut
 }
 
@@ -3667,15 +4302,12 @@ automatic_install() {
     "$C_YELLOW" \
     "$(T \
       "[提示] 可在客户端自行更换优选域名/IP；如 EchConfigList 为空，请手动填写：${ECH_CONFIG}" \
-      "[NOTICE] You may replace the preferred domain/IP in the client. If EchConfigList is empty, enter: ${ECH_CONFIG}")" \
+      "[NOTICE] You may replace the preferred domain/IP in the client. If EchConfigList is empty, fill it manually with: ${ECH_CONFIG}")" \
     "$C_RESET"
 
-  printf '%s%s%s\n' \
-    "$C_YELLOW" \
-    "$(T \
-      "[提示] 后续使用 zargo 打开管理菜单。" \
-      "[NOTICE] Run zargo later to open the management menu.")" \
-    "$C_RESET"
+  printf '%s\n' "$(T \
+    "以后输入 zargo 可打开管理菜单。" \
+    "Run zargo later to open the management menu.")"
 }
 
 main() {
