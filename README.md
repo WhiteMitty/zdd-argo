@@ -76,7 +76,7 @@ zargo
   
 - 客户端订阅导入后，字段为空则手动填写，v2rayN 为例，找到 EchConfigList 字段，
 
-- 完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 大佬）
+- 完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog （抄袭自 Joey 大佬）
 
 <br>
 
