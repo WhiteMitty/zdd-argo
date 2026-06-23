@@ -75,11 +75,12 @@ zargo
 - ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手
 
 - #### 一些优选域名
-- cdns.doon.eu.org
 <br> 
-- cloudflare-ip.mofashi.ltd
+cdns.doon.eu.org
 <br> 
-- freeyx.cloudflare88.eu.org
+cloudflare-ip.mofashi.ltd
+<br> 
+freeyx.cloudflare88.eu.org
 <br>
 <br> 
 - 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入
