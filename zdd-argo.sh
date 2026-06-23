@@ -102,7 +102,7 @@ read_interactive() {
   if [[ -t 0 ]]; then
     input_fd=0
   elif [[ -r /dev/tty ]]; then
-    exec {input_fd} 2>/dev/null </dev/tty || {
+    exec {input_fd}</dev/tty 2>/dev/null || {
       printf -v "$variable_name" '%s' "$default_value"
       return 1
     }
