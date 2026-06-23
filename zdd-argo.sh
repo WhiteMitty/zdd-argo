@@ -30,6 +30,7 @@ VMESS_LINK_FILE="${DATA_DIR}/vmess.txt"
 ECH_NOTE_FILE="${DATA_DIR}/ech.txt"
 SETTINGS_JSON="${DATA_DIR}/settings.json"
 LOCK_FILE="/run/lock/zdd-argo-write.lock"
+LOCK_OWNER_FILE="${LOCK_FILE}.owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
 SHORTCUT_COMPAT_PATH="/usr/local/sbin/zargo"
 SHORTCUT_FALLBACK_PATH="/usr/bin/zargo"
@@ -56,6 +57,8 @@ SINGBOX_BIN=""
 CLOUDFLARED_BIN=""
 MENU_MODE=0
 LOCK_HELD=0
+LOCK_OWNER_PID="" 
+LOCK_OWNER_START=""
 
 if [[ -t 1 ]]; then
   C_GREEN=$'\033[32m'
@@ -325,28 +328,381 @@ install_dependencies() {
   fi
 }
 
+process_start_time() {
+  local pid="$1"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ -r "/proc/${pid}/stat" ]] || return 1
+
+  awk '{print $22}' "/proc/${pid}/stat" 2>/dev/null
+}
+
+process_is_zdd_argo() {
+  local pid="$1"
+  local cmdline=""
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ -r "/proc/${pid}/cmdline" ]] || return 1
+
+  cmdline="$(
+    tr '\0' ' ' \
+      < "/proc/${pid}/cmdline" \
+      2>/dev/null \
+      || true
+  )"
+
+  [[ "$cmdline" == *"$MANAGED_SCRIPT_PATH"* ]] \
+    || [[ -n "$SCRIPT_PATH" && "$cmdline" == *"$SCRIPT_PATH"* ]] \
+    || [[ "$cmdline" == *"zdd-argo.sh"* ]]
+}
+
+read_lock_owner() {
+  local pid=""
+  local start=""
+  local operation=""
+  local extra=""
+
+  [[ -r "$LOCK_OWNER_FILE" ]] || return 1
+
+  IFS=' ' read -r \
+    pid \
+    start \
+    operation \
+    extra \
+    < "$LOCK_OWNER_FILE" \
+    || return 1
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  [[ "$start" =~ ^[0-9]+$ ]] || return 1
+  [[ "$operation" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+    || operation="unknown"
+
+  [[ -z "$extra" ]] || return 1
+
+  printf '%s %s %s\n' \
+    "$pid" \
+    "$start" \
+    "$operation"
+}
+
+clear_own_lock_owner() {
+  local pid=""
+  local start=""
+  local operation=""
+
+  [[ -n "$LOCK_OWNER_PID" && -n "$LOCK_OWNER_START" ]] \
+    || return 0
+
+  if IFS=' ' read -r \
+      pid \
+      start \
+      operation \
+      < <(read_lock_owner 2>/dev/null); then
+
+    if [[ "$pid" == "$LOCK_OWNER_PID" \
+        && "$start" == "$LOCK_OWNER_START" ]]; then
+      rm -f "$LOCK_OWNER_FILE"
+    fi
+  fi
+}
+
+write_lock_owner() {
+  local operation="${1:-unknown}"
+  local owner_pid="$BASHPID"
+  local start=""
+  local tmp=""
+
+  [[ "$operation" =~ ^[A-Za-z0-9_.:-]+$ ]] \
+    || operation="unknown"
+
+  start="$(process_start_time "$owner_pid")" \
+    || die "$(T \
+      "无法记录当前 zdd-argo 操作。" \
+      "Unable to record the current zdd-argo operation.")"
+
+  tmp="${LOCK_OWNER_FILE}.tmp.${owner_pid}"
+
+  umask 077
+
+  printf '%s %s %s\n' \
+    "$owner_pid" \
+    "$start" \
+    "$operation" \
+    > "$tmp"
+
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$LOCK_OWNER_FILE"
+
+  LOCK_OWNER_PID="$owner_pid"
+  LOCK_OWNER_START="$start"
+
+  trap 'clear_own_lock_owner' EXIT
+}
+
+collect_descendants() {
+  local parent="$1"
+  local children=""
+  local child=""
+
+  [[ -r "/proc/${parent}/task/${parent}/children" ]] \
+    || return 0
+
+  children="$(
+    < "/proc/${parent}/task/${parent}/children"
+  )"
+
+  while IFS= read -r child; do
+    [[ "$child" =~ ^[0-9]+$ ]] || continue
+
+    collect_descendants "$child"
+    printf '%s\n' "$child"
+  done < <(
+    printf '%s\n' "$children" \
+      | tr ' ' '\n'
+  )
+}
+
+snapshot_process_tree() {
+  local owner_pid="$1"
+  local pid=""
+  local start=""
+
+  while IFS= read -r pid; do
+    start="$(
+      process_start_time "$pid" \
+        2>/dev/null \
+        || true
+    )"
+
+    if [[ "$start" =~ ^[0-9]+$ ]]; then
+      printf '%s %s\n' \
+        "$pid" \
+        "$start"
+    fi
+  done < <(
+    collect_descendants "$owner_pid"
+  )
+
+  start="$(
+    process_start_time "$owner_pid" \
+      2>/dev/null \
+      || true
+  )"
+
+  if [[ "$start" =~ ^[0-9]+$ ]]; then
+    printf '%s %s\n' \
+      "$owner_pid" \
+      "$start"
+  fi
+}
+
+signal_process_tree() {
+  local signal_name="$1"
+  local snapshot_file="$2"
+  local pid=""
+  local recorded_start=""
+  local actual_start=""
+
+  while IFS=' ' read -r \
+      pid \
+      recorded_start; do
+
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+
+    [[ "$pid" != "$BASHPID" \
+        && "$pid" != "$$" ]] \
+      || continue
+
+    actual_start="$(
+      process_start_time "$pid" \
+        2>/dev/null \
+        || true
+    )"
+
+    [[ "$actual_start" == "$recorded_start" ]] \
+      || continue
+
+    kill "-${signal_name}" "$pid" \
+      2>/dev/null \
+      || true
+  done < "$snapshot_file"
+}
+
+wait_for_lock() {
+  local seconds="$1"
+  local i=0
+
+  for ((i = 0; i < seconds; i++)); do
+    if flock -n 9; then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  return 1
+}
+
+lock_operation_label() {
+  case "${1:-unknown}" in
+    command_generate)
+      T \
+        "生成 / 重建临时 Argo" \
+        "Generate / Rebuild temporary Argo"
+      ;;
+
+    show_subscription)
+      T \
+        "查看当前订阅" \
+        "View current subscription"
+      ;;
+
+    command_update_components)
+      T \
+        "更新 sing-box 和 cloudflared" \
+        "Update sing-box and cloudflared"
+      ;;
+
+    command_stop_clear_cache)
+      T \
+        "断开当前 Argo 并清理临时缓存" \
+        "Disconnect current Argo and clear temporary cache"
+      ;;
+
+    command_uninstall_zdd)
+      T \
+        "卸载 zdd-argo" \
+        "Uninstall zdd-argo"
+      ;;
+
+    command_purge_all)
+      T \
+        "完整卸载" \
+        "Full uninstall"
+      ;;
+
+    *)
+      T \
+        "未知操作" \
+        "Unknown operation"
+      ;;
+  esac
+}
+
+force_take_over_lock() {
+  local owner_pid=""
+  local owner_start=""
+  local owner_operation=""
+  local actual_start=""
+  local snapshot_file=""
+
+  if ! IFS=' ' read -r \
+      owner_pid \
+      owner_start \
+      owner_operation \
+      < <(read_lock_owner 2>/dev/null); then
+
+    die "$(T \
+      "另一个 zdd-argo 操作正在运行，但无法安全确认其进程身份；为避免误杀，未强制停止。" \
+      "Another zdd-argo operation is running, but its process identity could not be verified safely. It was not forcibly stopped to avoid terminating an unrelated process.")"
+  fi
+
+  actual_start="$(
+    process_start_time "$owner_pid" \
+      2>/dev/null \
+      || true
+  )"
+
+  if [[ "$actual_start" != "$owner_start" ]] \
+      || ! process_is_zdd_argo "$owner_pid"; then
+
+    die "$(T \
+      "另一个 zdd-argo 操作正在运行，但无法安全确认其进程身份；为避免误杀，未强制停止。" \
+      "Another zdd-argo operation is running, but its process identity could not be verified safely. It was not forcibly stopped to avoid terminating an unrelated process.")"
+  fi
+
+  warn "$(T \
+    "另一个 zdd-argo 操作正在运行。" \
+    "Another zdd-argo operation is running.")"
+
+  printf '%s %s\n' \
+    "$(T \
+      "占用进程：" \
+      "Process:")" \
+    "$owner_pid"
+
+  printf '%s %s\n' \
+    "$(T \
+      "当前操作：" \
+      "Current operation:")" \
+    "$(lock_operation_label "$owner_operation")"
+
+  warn "$(T \
+    "强制接管会终止该 zdd-argo 操作及其子进程；如果它正在安装或更新程序，该次操作会被中断。" \
+    "Force takeover will terminate that zdd-argo operation and its child processes. If it is installing or updating software, that operation will be interrupted.")"
+
+  if ! confirm_yes "$(T \
+      "确认强制停止并接管请输入 yes：" \
+      "Type yes to forcibly stop it and take over: ")"; then
+
+    die "$(T \
+      "已取消强制接管。" \
+      "Force takeover was cancelled.")"
+  fi
+
+  snapshot_file="$(mktemp)"
+
+  snapshot_process_tree "$owner_pid" \
+    > "$snapshot_file"
+
+  signal_process_tree \
+    TERM \
+    "$snapshot_file"
+
+  if ! wait_for_lock 8; then
+    signal_process_tree \
+      KILL \
+      "$snapshot_file"
+
+    if ! wait_for_lock 5; then
+      rm -f "$snapshot_file"
+
+      die "$(T \
+        "无法停止原 zdd-argo 操作，锁仍被占用。" \
+        "Unable to stop the previous zdd-argo operation; the lock is still held.")"
+    fi
+  fi
+
+  rm -f "$snapshot_file"
+
+  ok "$(T \
+    "原 zdd-argo 操作已停止，当前操作已接管。" \
+    "The previous zdd-argo operation was stopped, and the current operation has taken over.")"
+}
+
 acquire_lock() {
+  local operation="${1:-unknown}"
+
   if [[ $LOCK_HELD -eq 1 ]]; then
     return 0
   fi
 
   mkdir -p "$(dirname "$LOCK_FILE")"
-
   exec 9>"$LOCK_FILE"
 
-  flock -n 9 \
-    || die "$(T \
-      "另一个 zdd-argo 写操作正在运行，请稍后再试。" \
-      "Another zdd-argo write operation is running. Please try again later.")"
+  if ! flock -n 9; then
+    force_take_over_lock
+  fi
 
   LOCK_HELD=1
+  write_lock_owner "$operation"
 }
 
 run_with_lock() {
   local fn="$1"
   shift
 
-  acquire_lock
+  acquire_lock "$fn"
   "$fn" "$@"
 }
 
