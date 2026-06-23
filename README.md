@@ -73,19 +73,8 @@ zargo
 - Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名
 
 - ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手
-
-- #### 一些优选域名
-<br> 
-cdns.doon.eu.org
-<br> 
-cloudflare-ip.mofashi.ltd
-<br> 
-freeyx.cloudflare88.eu.org
-<br>
-<br> 
-- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入
-- cloudflare-ech.com+https://dns.jhb.ovh/joeyblog
--（抄袭自 Joey 大佬）
+  
+- 客户端订阅导入后要检查，字段为空时手动填写，以 v2rayN 为例，找到 EchConfigList 字段，完整填入 cloudflare-ech.com+https://dns.jhb.ovh/joeyblog（抄袭自 Joey 大佬）
 
 <br>
 
