@@ -41,16 +41,19 @@ zargo
 
 ### 菜单
 
-```text
-1. 无交互 生成 / 重建 Argo
-2. 自定义 生成 / 重建 Argo
-3. 查看当前订阅
-4. 查看运行状态与最近日志
-5. 断开当前 Argo 并清理临时缓存
-6. 更新 sing-box 和 cloudflared
-7. 卸载 zdd-argo 及 sing-box 和 cloudflared
-0. 退出
-```
+<br>
+
+<img src="Menu.jpg" title="" alt="Menu" width="900">
+
+<br>
+
+### 使用
+
+<br>
+
+<img src="Gen.jpg" title="" alt="Gen" width="900">
+
+<br>
 
 ### 卸载
 
