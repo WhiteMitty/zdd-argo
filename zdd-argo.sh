@@ -998,7 +998,6 @@ run_with_lock() {
   acquire_lock "$fn"
   "$fn" "$@"
 }
-
 path_is_zdd_launcher() {
   local path="$1"
 
@@ -3288,6 +3287,11 @@ command_stop_clear_cache() {
 }
 
 start_tunnel() {
+  local parsed_host=""
+  local attempt=0
+  local max_attempts=3
+  local retry_delay=5
+
   if tmux_session_exists \
       && ! tunnel_is_running; then
 
@@ -3297,8 +3301,6 @@ start_tunnel() {
   fi
 
   if tunnel_is_running; then
-    local parsed_host=""
-
     parsed_host="$(
       extract_argo_host \
         || true
@@ -3326,11 +3328,11 @@ start_tunnel() {
       return 0
     fi
 
-    stop_tunnel || true
+    warn "$(T \
+      "现有临时隧道未返回有效域名，将停止异常会话并重新创建。" \
+      "The existing temporary tunnel did not return a valid hostname. The abnormal session will be stopped and recreated.")"
 
-    die "$(T \
-      "现有临时隧道未返回域名，已停止异常会话，请查看日志。" \
-      "The existing temporary tunnel did not return a hostname. The abnormal session was stopped; check the logs.")"
+    stop_tunnel || true
   fi
 
   : > "$LOG_FILE"
@@ -3345,36 +3347,65 @@ start_tunnel() {
   ARGO_HOST=""
   save_state
 
-  info "$(T \
-    "在后台 tmux 会话 ${TMUX_SESSION} 中创建临时 Argo……" \
-    "Creating a temporary Argo tunnel in background tmux session ${TMUX_SESSION}...")"
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if ((attempt > 1)); then
+      printf '\n===== Argo retry %d/%d =====\n' \
+        "$attempt" \
+        "$max_attempts" \
+        >> "$LOG_FILE"
+    fi
 
-  tmux new-session \
-    -d \
-    -s "$TMUX_SESSION" \
-    "$CLOUDFLARED_RUNNER" \
-    || die "$(T \
-      "无法创建 tmux 会话。" \
-      "Unable to create the tmux session.")"
+    info "$(T \
+      "正在创建临时 Argo（第 ${attempt}/${max_attempts} 次）……" \
+      "Creating a temporary Argo tunnel (attempt ${attempt}/${max_attempts})...")"
 
-  if ! wait_for_argo_host; then
+    if tmux new-session \
+        -d \
+        -s "$TMUX_SESSION" \
+        "$CLOUDFLARED_RUNNER"; then
+
+      if wait_for_argo_host; then
+        generate_vmess_link
+
+        ok "$(T \
+          "第 ${attempt}/${max_attempts} 次尝试成功取得临时域名。" \
+          "Attempt ${attempt}/${max_attempts} successfully obtained a temporary hostname.")"
+
+        return 0
+      fi
+    else
+      warn "$(T \
+        "第 ${attempt}/${max_attempts} 次无法创建 tmux 会话。" \
+        "Attempt ${attempt}/${max_attempts} could not create the tmux session.")"
+    fi
+
     warn "$(T \
-      "90 秒内未取得 trycloudflare.com 域名，最近日志如下：" \
-      "No trycloudflare.com hostname was obtained within 90 seconds. Recent logs:")"
-
-    tail -n 60 \
-      "$LOG_FILE" \
-      >&2 \
-      || true
+      "第 ${attempt}/${max_attempts} 次未取得 trycloudflare.com 域名。" \
+      "Attempt ${attempt}/${max_attempts} did not obtain a trycloudflare.com hostname.")"
 
     stop_tunnel || true
 
-    die "$(T \
-      "临时隧道创建失败。" \
-      "Failed to create the temporary tunnel.")"
-  fi
+    if ((attempt < max_attempts)); then
+      warn "$(T \
+        "${retry_delay} 秒后自动重试……" \
+        "Retrying automatically in ${retry_delay} seconds...")"
 
-  generate_vmess_link
+      sleep "$retry_delay"
+    fi
+  done
+
+  warn "$(T \
+    "连续 ${max_attempts} 次创建临时 Argo 均失败，最近日志如下：" \
+    "All ${max_attempts} attempts to create the temporary Argo tunnel failed. Recent logs:")"
+
+  tail -n 80 \
+    "$LOG_FILE" \
+    >&2 \
+    || true
+
+  die "$(T \
+    "临时隧道创建失败，请稍后重试。" \
+    "Failed to create the temporary tunnel. Please try again later.")"
 }
 
 prepare_deployment() {
