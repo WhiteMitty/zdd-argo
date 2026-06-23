@@ -74,8 +74,7 @@ zargo
 
 - ALPN 固定为 `http/1.1`，用于传统 WebSocket 的 HTTP/1.1 Upgrade 握手
 
-- ## 一些优选域名
-<br>  
+- #### 一些优选域名
 - cdns.doon.eu.org
 <br> 
 - cloudflare-ip.mofashi.ltd
