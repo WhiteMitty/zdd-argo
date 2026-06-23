@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # zdd-argo：Debian / Ubuntu 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
 # 版本：v0.1.0；安装后的管理命令：zargo
+# 构建标识：UTF8-ALIGN-UNINSTALL-20260623
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -165,6 +166,120 @@ clear_screen() {
   fi
 }
 
+ensure_utf8_locale() {
+  local current=""
+  local candidate=""
+
+  if command -v locale >/dev/null 2>&1; then
+    current="$(locale charmap 2>/dev/null || true)"
+    if [[ "${current^^}" == "UTF-8" || "${current^^}" == "UTF8" ]]; then
+      return 0
+    fi
+
+    for candidate in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
+      current="$(LC_ALL="$candidate" locale charmap 2>/dev/null || true)"
+      if [[ "${current^^}" == "UTF-8" || "${current^^}" == "UTF8" ]]; then
+        export LANG="$candidate"
+        export LC_ALL="$candidate"
+        return 0
+      fi
+    done
+  fi
+
+  # Debian / Ubuntu 的 glibc 通常内置 C.UTF-8；即使 locale 命令不可用，
+  # 仍优先使用它，确保中文输入、JSON 和终端宽度计算按 UTF-8 处理。
+  export LANG=C.UTF-8
+  export LC_ALL=C.UTF-8
+}
+
+text_is_valid_utf8() {
+  local value="$1"
+
+  if command -v iconv >/dev/null 2>&1; then
+    printf '%s' "$value" \
+      | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
+    return
+  fi
+
+  # iconv 尚未安装时不破坏只读菜单；真正进入部署前会安装 libc-bin。
+  return 0
+}
+
+text_display_width() {
+  local value="$1"
+  local width=""
+
+  if command -v wc >/dev/null 2>&1; then
+    width="$(printf '%s' "$value" | wc -L 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+
+  if [[ "$width" =~ ^[0-9]+$ ]]; then
+    printf '%s\n' "$width"
+  else
+    printf '%s\n' "${#value}"
+  fi
+}
+
+print_aligned_label() {
+  local label="$1"
+  local target_width="${2:-20}"
+  local actual_width=""
+  local padding=1
+
+  actual_width="$(text_display_width "$label")"
+  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#label}"
+
+  padding=$((target_width - actual_width))
+  ((padding >= 1)) || padding=1
+
+  printf '%s' "$label"
+  printf '%*s' "$padding" ''
+}
+
+print_kv() {
+  local label="$1"
+  local value="$2"
+  local target_width="${3:-20}"
+
+  print_aligned_label "$label" "$target_width"
+  printf '%s\n' "$value"
+}
+
+print_section_header() {
+  local title="$1"
+  local color="${2:-}"
+  local total_width="${3:-78}"
+  local title_width=""
+  local left=0
+  local right=0
+
+  title_width="$(text_display_width "$title")"
+  [[ "$title_width" =~ ^[0-9]+$ ]] || title_width="${#title}"
+
+  if ((title_width + 2 >= total_width)); then
+    printf '\n%s%s%s\n' "$color" "$title" "$C_RESET"
+    return 0
+  fi
+
+  left=$(((total_width - title_width - 2) / 2))
+  right=$((total_width - title_width - 2 - left))
+
+  printf '\n%s' "$color"
+  printf '%*s' "$left" '' | tr ' ' '='
+  printf ' %s ' "$title"
+  printf '%*s' "$right" '' | tr ' ' '='
+  printf '%s\n' "$C_RESET"
+}
+
+print_section_footer() {
+  local color="${1:-}"
+  local total_width="${2:-78}"
+
+  printf '%s' "$color"
+  printf '%*s' "$total_width" '' | tr ' ' '='
+  printf '%s\n' "$C_RESET"
+}
+
 wait_for_zero() {
   local prompt="$1"
   local choice=""
@@ -264,7 +379,7 @@ install_dependencies() {
   for cmd in \
     curl jq openssl tmux ss base64 awk sed grep tar sha256sum find \
     install mktemp readlink stat getent useradd groupadd userdel groupdel \
-    setpriv logrotate
+    setpriv logrotate wc iconv locale
   do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing=1
@@ -284,7 +399,7 @@ install_dependencies() {
 
     apt-get install -y \
       curl jq openssl ca-certificates tmux iproute2 coreutils tar \
-      findutils grep sed gawk passwd util-linux logrotate \
+      findutils grep sed gawk passwd util-linux logrotate libc-bin \
       || die "基础依赖安装失败。"
   fi
 }
@@ -1689,11 +1804,8 @@ install_or_update_singbox() {
       || true
   )"
 
-  printf '%s %s\n%s %s\n' \
-    "$(printf '%s' "更新前：")" \
-    "$before" \
-    "$(printf '%s' "更新后：")" \
-    "${after:-$(printf '%s' "未知")}"
+  print_kv "更新前：" "$before" 14
+  print_kv "更新后：" "${after:-未知}" 14
 
   ok "$(printf '%s' "sing-box 已通过 GitHub Release SHA-256 摘要校验。")"
 }
@@ -1904,11 +2016,8 @@ install_or_update_cloudflared() {
       || true
   )"
 
-  printf '%s %s\n%s %s\n' \
-    "$(printf '%s' "更新前：")" \
-    "$before" \
-    "$(printf '%s' "更新后：")" \
-    "${after:-$(printf '%s' "未知")}"
+  print_kv "更新前：" "$before" 14
+  print_kv "更新后：" "${after:-未知}" 14
 
   ok "$(printf '%s' "cloudflared 已通过 GitHub Release SHA-256 摘要校验。")"
 }
@@ -2045,12 +2154,20 @@ valid_local_port() {
 
 valid_node_name() {
   local value="$1"
+  local width=""
 
-  [[ -n "$value" && ${#value} -le 80 ]] || return 1
+  [[ -n "$value" ]] || return 1
+  text_is_valid_utf8 "$value" || return 1
+
+  # 在 UTF-8 locale 下 ${#value} 按字符数计算，不会把一个汉字当成 3 字节。
+  [[ ${#value} -le 80 ]] || return 1
 
   if LC_ALL=C grep -q '[[:cntrl:]]' < <(printf '%s' "$value"); then
     return 1
   fi
+
+  width="$(text_display_width "$value")"
+  [[ "$width" =~ ^[0-9]+$ && "$width" -le 160 ]] || return 1
 
   return 0
 }
@@ -3413,16 +3530,17 @@ show_subscription() {
     fi
   fi
 
-  printf '\n%s========== zdd-argo 当前节点 ==========%s\n' "$C_GREEN" "$C_RESET"
-  printf '%-22s %s\n' "节点名称：" "$NODE_NAME"
-  printf '%-22s %s\n' "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}"
-  printf '%-22s %s\n' "临时 Argo 域名：" "${ARGO_HOST:-尚未生成}"
-  printf '%-22s %s\n' "UUID：" "${UUID:-尚未生成}"
-  printf '%-22s %s\n' "WS 路径：" "${WSPATH:-尚未生成}"
-  printf '%-22s 127.0.0.1:%s\n' "本地监听：" "$LOCAL_PORT"
-  printf '%-22s %s\n' "后台隧道运行：" "$running"
-  printf '%-22s %s\n' "ECHConfigList：" "$ECH_CONFIG"
-  printf '%s========================================%s\n\n' "$C_GREEN" "$C_RESET"
+  print_section_header "zdd-argo 当前节点" "$C_GREEN" 78
+  print_kv "节点名称：" "$NODE_NAME" 20
+  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 20
+  print_kv "临时 Argo 域名：" "${ARGO_HOST:-尚未生成}" 20
+  print_kv "UUID：" "${UUID:-尚未生成}" 20
+  print_kv "WS 路径：" "${WSPATH:-尚未生成}" 20
+  print_kv "本地监听：" "127.0.0.1:${LOCAL_PORT}" 20
+  print_kv "后台隧道运行：" "$running" 20
+  print_kv "ECHConfigList：" "$ECH_CONFIG" 20
+  print_section_footer "$C_GREEN" 78
+  printf '\n'
 
   if [[ -f "$VMESS_LINK_FILE" ]]; then
     if ! tunnel_is_running; then
@@ -3457,158 +3575,89 @@ show_status() {
   resolve_singbox_bin
   resolve_cloudflared_bin
 
-  printf '\n%s========== %s ==========%s\n' \
-    "$C_CYAN" \
-    "$(printf '%s' "zdd-argo 运行状态")" \
-    "$C_RESET"
+  print_section_header "zdd-argo 运行状态" "$C_CYAN" 78
 
-  printf '%-24s v %s\n' \
-    "$(printf '%s' "脚本版本：")" \
-    "$SCRIPT_VERSION"
+  print_kv "脚本版本：" "v ${SCRIPT_VERSION}" 22
+  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
+  print_kv "节点名称：" "$NODE_NAME" 22
 
-  printf '%-24s %s\n' \
-    "$(printf '%s' "优选域名/IP：")" \
-    "${PREFERRED_ENDPOINT:-$(printf '%s' "未设置")}"
-
-  printf '%-24s %s\n' "节点名称：" "$NODE_NAME"
-
-  printf '%-24s ' "sing-box:"
-
+  print_aligned_label "sing-box：" 22
   if [[ -n "$SINGBOX_BIN" ]]; then
     "$SINGBOX_BIN" version \
       2>/dev/null \
       | head -n 1 \
-      || printf '%s\n' "$(printf '%s' "已安装")"
+      || printf '%s\n' "已安装"
 
-    printf '%-24s %s' \
-      "$(printf '%s' "sing-box 路径：")" \
-      "$SINGBOX_BIN"
+    print_aligned_label "sing-box 路径：" 22
+    printf '%s' "$SINGBOX_BIN"
 
     if [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]]; then
-      printf ' %s\n' "$(printf '%s' "（脚本专用，SHA-256 已校验）")"
+      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
     else
-      printf ' %s\n' "$(printf '%s' "（外部安装）")"
+      printf ' %s\n' "（外部安装）"
     fi
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未安装")" \
-      "$C_RESET"
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
   fi
 
-  printf '%-24s ' "cloudflared:"
-
+  print_aligned_label "cloudflared：" 22
   if [[ -n "$CLOUDFLARED_BIN" ]]; then
     "$CLOUDFLARED_BIN" --version \
       2>/dev/null \
-      || printf '%s\n' "$(printf '%s' "已安装")"
+      || printf '%s\n' "已安装"
 
-    printf '%-24s %s' \
-      "$(printf '%s' "cloudflared 路径：")" \
-      "$CLOUDFLARED_BIN"
+    print_aligned_label "cloudflared 路径：" 22
+    printf '%s' "$CLOUDFLARED_BIN"
 
     if [[ "$CLOUDFLARED_BIN" == "$MANAGED_CLOUDFLARED_BIN" ]]; then
-      printf ' %s\n' "$(printf '%s' "（脚本专用，SHA-256 已校验）")"
+      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
     else
-      printf ' %s\n' "$(printf '%s' "（外部安装）")"
+      printf ' %s\n' "（外部安装）"
     fi
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未安装")" \
-      "$C_RESET"
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
   fi
 
-  printf '%-24s ' "$(printf '%s' "sing-box 服务：")"
-
-  if systemctl is-active \
-      --quiet \
-      "$SERVICE_NAME"; then
-    printf '%s%s%s\n' \
-      "$C_GREEN" \
-      "$(printf '%s' "运行中")" \
-      "$C_RESET"
+  print_aligned_label "sing-box 服务：" 22
+  if systemctl is-active --quiet "$SERVICE_NAME"; then
+    printf '%s%s%s\n' "$C_GREEN" "运行中" "$C_RESET"
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未运行")" \
-      "$C_RESET"
+    printf '%s%s%s\n' "$C_RED" "未运行" "$C_RESET"
   fi
 
-  printf '%-24s ' "$(printf '%s' "本地端口：")"
-
+  print_aligned_label "本地端口：" 22
   if listener_exact_loopback; then
-    printf '%s127.0.0.1:%s %s%s\n' \
-      "$C_GREEN" \
-      "$LOCAL_PORT" \
-      "$(printf '%s' "正常")" \
-      "$C_RESET"
+    printf '%s127.0.0.1:%s 正常%s\n' "$C_GREEN" "$LOCAL_PORT" "$C_RESET"
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未检测到正确监听")" \
-      "$C_RESET"
+    printf '%s%s%s\n' "$C_RED" "未检测到正确监听" "$C_RESET"
   fi
 
-  printf '%-24s ' "Argo / tmux:"
-
+  print_aligned_label "Argo / tmux：" 22
   if tunnel_is_running; then
-    printf '%s%s%s (%s: %s)\n' \
-      "$C_GREEN" \
-      "$(printf '%s' "运行中")" \
-      "$C_RESET" \
-      "$(printf '%s' "会话")" \
-      "$TMUX_SESSION"
+    printf '%s运行中%s（会话：%s）\n' "$C_GREEN" "$C_RESET" "$TMUX_SESSION"
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未运行")" \
-      "$C_RESET"
+    printf '%s未运行%s\n' "$C_RED" "$C_RESET"
   fi
 
-  printf '%-24s %s\n' \
-    "$(printf '%s' "临时域名：")" \
-    "${ARGO_HOST:-$(printf '%s' "尚未生成")}"
+  print_kv "临时域名：" "${ARGO_HOST:-尚未生成}" 22
 
   local resolved_zargo=""
+  resolved_zargo="$(type -P zargo 2>/dev/null || true)"
 
-  resolved_zargo="$(
-    type -P zargo \
-      2>/dev/null \
-      || true
-  )"
-
-  printf '%-24s ' "$(printf '%s' "管理命令：")"
-
+  print_aligned_label "管理命令：" 22
   if resolved_zdd_is_ours "$resolved_zargo"; then
-    printf '%s%s%s (%s)\n' \
-      "$C_GREEN" \
-      "zargo" \
-      "$C_RESET" \
-      "$resolved_zargo"
+    printf '%szargo%s（%s）\n' "$C_GREEN" "$C_RESET" "$resolved_zargo"
   elif [[ -n "$resolved_zargo" ]]; then
-    printf '%s%s%s (%s)\n' \
-      "$C_RED" \
-      "$(printf '%s' "被其他程序占用")" \
-      "$C_RESET" \
-      "$resolved_zargo"
+    printf '%s被其他程序占用%s（%s）\n' "$C_RED" "$C_RESET" "$resolved_zargo"
   else
-    printf '%s%s%s\n' \
-      "$C_RED" \
-      "$(printf '%s' "未找到")" \
-      "$C_RESET"
+    printf '%s未找到%s\n' "$C_RED" "$C_RESET"
   fi
 
-  printf '%s========================================%s\n' \
-    "$C_CYAN" \
-    "$C_RESET"
+  print_section_footer "$C_CYAN" 78
 
   if [[ -f "$LOG_FILE" ]]; then
-    printf '\n%s\n' "$(printf '%s' "最近 20 行 cloudflared 日志：")"
-
-    tail -n 20 \
-      "$LOG_FILE" \
-      || true
+    printf '\n%s\n' "最近 20 行 cloudflared 日志："
+    tail -n 20 "$LOG_FILE" || true
   fi
 }
 
@@ -3750,7 +3799,7 @@ remove_shortcuts() {
         rm -f "$path"
       fi
     else
-      warn "$(printf '%s' "快捷命令路径不是本项目创建的，未删除：${path}")"
+      info "检测到非本项目创建的快捷命令，出于安全已保留：${path}"
     fi
   done
 }
@@ -3771,9 +3820,122 @@ remove_managed_script() {
   fi
 }
 
+snapshot_service_account_processes() {
+  local service_uid="$1"
+  local status=""
+  local pid=""
+  local uid=""
+  local start=""
+
+  for status in /proc/[0-9]*/status; do
+    [[ -r "$status" ]] || continue
+    pid="${status#/proc/}"
+    pid="${pid%/status}"
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+
+    uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
+    [[ "$uid" == "$service_uid" ]] || continue
+
+    start="$(process_start_time "$pid" 2>/dev/null || true)"
+    [[ "$start" =~ ^[0-9]+$ ]] || continue
+    printf '%s %s\n' "$pid" "$start"
+  done
+}
+
+service_process_identity_matches() {
+  local pid="$1"
+  local recorded_start="$2"
+  local expected_uid="$3"
+  local actual_start=""
+  local actual_uid=""
+  local state=""
+
+  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+  actual_uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
+  state="$(process_state "$pid" 2>/dev/null || true)"
+
+  [[ "$actual_start" == "$recorded_start" \
+    && "$actual_uid" == "$expected_uid" \
+    && "$state" != "Z" \
+    && "$state" != "X" ]]
+}
+
+signal_service_process_snapshot() {
+  local signal_name="$1"
+  local snapshot_file="$2"
+  local expected_uid="$3"
+  local pid=""
+  local recorded_start=""
+
+  while IFS=' ' read -r pid recorded_start; do
+    [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ ]] || continue
+    service_process_identity_matches "$pid" "$recorded_start" "$expected_uid" || continue
+    kill "-${signal_name}" "$pid" 2>/dev/null || true
+  done < "$snapshot_file"
+}
+
+service_process_snapshot_has_live_processes() {
+  local snapshot_file="$1"
+  local expected_uid="$2"
+  local pid=""
+  local recorded_start=""
+
+  while IFS=' ' read -r pid recorded_start; do
+    [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ ]] || continue
+    if service_process_identity_matches "$pid" "$recorded_start" "$expected_uid"; then
+      return 0
+    fi
+  done < "$snapshot_file"
+
+  return 1
+}
+
+stop_service_account_processes() {
+  local service_uid="$1"
+  local snapshot_file=""
+  local i=0
+
+  snapshot_file="$(mktemp)"
+  snapshot_service_account_processes "$service_uid" > "$snapshot_file"
+
+  if [[ ! -s "$snapshot_file" ]]; then
+    rm -f "$snapshot_file"
+    return 0
+  fi
+
+  warn "检测到低权限服务账户仍有残留进程，正在安全终止。"
+  signal_service_process_snapshot TERM "$snapshot_file" "$service_uid"
+
+  for ((i = 0; i < 8; i++)); do
+    service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid" || break
+    sleep 1
+  done
+
+  if service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid"; then
+    signal_service_process_snapshot KILL "$snapshot_file" "$service_uid"
+
+    for ((i = 0; i < 3; i++)); do
+      service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid" || break
+      sleep 1
+    done
+  fi
+
+  if service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid"; then
+    warn "以下残留进程在复核 PID、启动时间和 UID 后仍未退出："
+    cat "$snapshot_file" >&2
+    rm -f "$snapshot_file"
+    return 1
+  fi
+
+  rm -f "$snapshot_file"
+  return 0
+}
+
 remove_service_account() {
   local passwd_line=""
   local existing_home=""
+  local service_uid=""
+  local userdel_error=""
 
   if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
     if [[ -f "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]]; then
@@ -3789,17 +3951,35 @@ remove_service_account() {
   fi
 
   passwd_line="$(getent passwd "$SERVICE_USER")"
-  IFS=':' read -r _ _ _ _ _ existing_home _ <<< "$passwd_line"
+  IFS=':' read -r _ _ service_uid _ _ existing_home _ <<< "$passwd_line"
 
   if [[ "$existing_home" != "$SERVICE_HOME" ]]; then
     warn "低权限服务账户主目录不匹配，未删除：${SERVICE_USER}"
     return 0
   fi
 
-  if ! userdel -r "$SERVICE_USER" >/dev/null 2>&1 \
-      && ! userdel "$SERVICE_USER" >/dev/null 2>&1; then
-    die "无法删除低权限服务账户 ${SERVICE_USER}；请检查是否仍有残留进程。"
+  [[ "$service_uid" =~ ^[0-9]+$ ]] \
+    || die "无法读取低权限服务账户 ${SERVICE_USER} 的 UID。"
+
+  # userdel 会在账户仍被进程使用时失败。先停止 systemd cgroup，再对该项目专用
+  # UID 下的全部残留进程做 PID + 启动时间 + UID 三重校验后终止。
+  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
+  systemctl kill --kill-who=all --signal=TERM "$SERVICE_NAME" >/dev/null 2>&1 || true
+  stop_service_account_processes "$service_uid" \
+    || die "无法安全终止低权限服务账户 ${SERVICE_USER} 的残留进程。"
+
+  userdel_error="$(mktemp)"
+  if ! userdel "$SERVICE_USER" 2> "$userdel_error"; then
+    # 防止停止与删除之间出现极短的进程竞态，重新扫描一次后只重试一次。
+    stop_service_account_processes "$service_uid" || true
+
+    if ! userdel "$SERVICE_USER" 2>> "$userdel_error"; then
+      cat "$userdel_error" >&2 || true
+      rm -f "$userdel_error"
+      die "无法删除低权限服务账户 ${SERVICE_USER}。"
+    fi
   fi
+  rm -f "$userdel_error"
 
   if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
     groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
@@ -3884,12 +4064,14 @@ menu_header_status() {
     [[ -n "$host" ]] || host="—"
   fi
 
-  printf '%s%s zdd-argo 管理菜单 v %s%s\n' "$C_BOLD" "$C_CYAN" "$SCRIPT_VERSION" "$C_RESET"
-  printf 'sing-box: %s    Argo: %s\n' "$sb" "$argo"
-  printf '优选域名/IP： %s\n' "${PREFERRED_ENDPOINT:-未设置}"
-  printf '本地端口： %s    节点名称： %s\n' "$LOCAL_PORT" "$NODE_NAME"
-  printf '当前域名： %s\n' "$host"
-  printf '%s\n' '────────────────────────────────────────'
+  print_section_header "zdd-argo 管理菜单 v ${SCRIPT_VERSION}" "$C_CYAN" 78
+  print_kv "sing-box：" "$sb" 18
+  print_kv "Argo：" "$argo" 18
+  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 18
+  print_kv "本地端口：" "$LOCAL_PORT" 18
+  print_kv "节点名称：" "$NODE_NAME" 18
+  print_kv "当前域名：" "$host" 18
+  print_section_footer "$C_CYAN" 78
 }
 
 run_menu_action() {
@@ -3988,6 +4170,7 @@ bootstrap() {
 }
 
 main() {
+  ensure_utf8_locale
   resolve_script_path
 
   if [[ "$#" -ne 0 ]]; then
