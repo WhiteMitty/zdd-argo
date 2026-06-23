@@ -5,8 +5,7 @@
 
 ### 概览
 
-在 Debian / Ubuntu VPS 上生成临时 argo 隧道用于代理
-
+- 在 Debian / Ubuntu VPS 上生成临时 argo 隧道用于代理
 - 临时隧道由 `tmux` 保持，断开 SSH 之后仍可继续运行
 - Quick Tunnel 定位是开发测试，有 200 个并发请求限制，不支持 SSE
 
