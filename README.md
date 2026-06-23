@@ -41,15 +41,11 @@ zargo
 
 ### 菜单
 
-<br>
-
 <img src="Menu.jpg" title="" alt="Menu" width="900">
 
 <br>
 
-### 使用
-
-<br>
+### 订阅
 
 <img src="Gen.jpg" title="" alt="Gen" width="900">
 
