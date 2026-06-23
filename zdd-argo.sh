@@ -286,7 +286,7 @@ install_dependencies() {
 
   for cmd in \
     curl jq openssl tmux ss base64 flock awk sed grep \
-    tar sha256sum find install mktemp readlink
+    tar sha256sum find install mktemp readlink stat
   do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing=1
@@ -589,6 +589,226 @@ lock_operation_label() {
   esac
 }
 
+find_lock_holder_pid() {
+  local lock_major=""
+  local lock_minor=""
+  local lock_inode=""
+
+  local lock_id=""
+  local lock_type=""
+  local advisory=""
+  local mode=""
+  local pid=""
+  local device_inode=""
+  local range_start=""
+  local range_end=""
+
+  local proc_major=""
+  local proc_minor=""
+  local proc_inode=""
+
+  [[ -e "$LOCK_FILE" ]] || return 1
+  [[ -r /proc/locks ]] || return 1
+
+  lock_major="$(
+    stat -Lc '%t' "$LOCK_FILE" 2>/dev/null
+  )" || return 1
+
+  lock_minor="$(
+    stat -Lc '%T' "$LOCK_FILE" 2>/dev/null
+  )" || return 1
+
+  lock_inode="$(
+    stat -Lc '%i' "$LOCK_FILE" 2>/dev/null
+  )" || return 1
+
+  [[ "$lock_major" =~ ^[0-9A-Fa-f]+$ ]] || return 1
+  [[ "$lock_minor" =~ ^[0-9A-Fa-f]+$ ]] || return 1
+  [[ "$lock_inode" =~ ^[0-9]+$ ]] || return 1
+
+  while IFS=' ' read -r \
+      lock_id \
+      lock_type \
+      advisory \
+      mode \
+      pid \
+      device_inode \
+      range_start \
+      range_end; do
+
+    [[ "$lock_type" == "FLOCK" ]] || continue
+    [[ "$mode" == "WRITE" ]] || continue
+    [[ "$pid" =~ ^[0-9]+$ ]] || continue
+
+    if [[ "$device_inode" =~ ^([0-9A-Fa-f]+):([0-9A-Fa-f]+):([0-9]+)$ ]]; then
+      proc_major="${BASH_REMATCH[1]}"
+      proc_minor="${BASH_REMATCH[2]}"
+      proc_inode="${BASH_REMATCH[3]}"
+    else
+      continue
+    fi
+
+    if ((16#$proc_major == 16#$lock_major)) \
+        && ((16#$proc_minor == 16#$lock_minor)) \
+        && [[ "$proc_inode" == "$lock_inode" ]]; then
+
+      printf '%s\n' "$pid"
+      return 0
+    fi
+  done < /proc/locks
+
+  return 1
+}
+
+confirm_force() {
+  local prompt="$1"
+  local answer=""
+
+  read_interactive answer "$prompt" "" \
+    || die "$(T \
+      "此操作必须在交互式终端中执行。" \
+      "This operation must be run in an interactive terminal.")"
+
+  answer="${answer#"${answer%%[![:space:]]*}"}"
+  answer="${answer%"${answer##*[![:space:]]}"}"
+
+  [[ "$answer" == "FORCE" ]]
+}
+
+emergency_force_take_over_lock() {
+  local holder_pid=""
+  local holder_start=""
+  local holder_command=""
+  local snapshot_file=""
+  local new_holder_pid=""
+
+  holder_pid="$(
+    find_lock_holder_pid 2>/dev/null \
+      || true
+  )"
+
+  if [[ ! "$holder_pid" =~ ^[0-9]+$ ]]; then
+    die "$(T \
+      "zdd-argo 操作锁仍被占用，但无法定位实际持锁进程；为避免误杀，未强制停止。" \
+      "The zdd-argo operation lock is still held, but the actual lock-holding process could not be located. It was not forcibly stopped to avoid terminating an unrelated process.")"
+  fi
+
+  if [[ "$holder_pid" == "$BASHPID" \
+      || "$holder_pid" == "$$" ]]; then
+    die "$(T \
+      "检测到异常的自身锁状态，已拒绝强制停止当前进程。" \
+      "An abnormal self-lock state was detected. Refusing to terminate the current process.")"
+  fi
+
+  holder_start="$(
+    process_start_time "$holder_pid" 2>/dev/null \
+      || true
+  )"
+
+  if [[ ! "$holder_start" =~ ^[0-9]+$ ]]; then
+    if wait_for_lock 2; then
+      rm -f "$LOCK_OWNER_FILE"
+
+      ok "$(T \
+        "原持锁进程已经退出，当前操作已取得锁。" \
+        "The previous lock-holding process has exited, and the current operation acquired the lock.")"
+
+      return 0
+    fi
+
+    die "$(T \
+      "持锁进程状态已经变化，且操作锁仍未释放；为避免误杀，未强制停止。" \
+      "The lock-holding process state changed, but the operation lock was not released. It was not forcibly stopped to avoid terminating an unrelated process.")"
+  fi
+
+  holder_command="$(
+    tr '\0' ' ' \
+      < "/proc/${holder_pid}/cmdline" \
+      2>/dev/null \
+      || true
+  )"
+
+  warn "$(T \
+    "另一个进程正在占用 zdd-argo 操作锁，但无法通过原有记录安全确认其身份。" \
+    "Another process is holding the zdd-argo operation lock, but its identity could not be safely verified from the existing record.")"
+
+  printf '%s %s\n' \
+    "$(T \
+      "实际持锁进程 PID：" \
+      "Actual lock-holding PID:")" \
+    "$holder_pid"
+
+  printf '%s %s\n' \
+    "$(T \
+      "进程命令：" \
+      "Process command:")" \
+    "${holder_command:-$(T "无法读取" "unavailable")}"
+
+  warn "$(T \
+    "应急强制接管会终止实际持有本项目锁文件的进程及其子进程。" \
+    "Emergency force takeover will terminate the process actually holding this project's lock file and its child processes.")"
+
+  warn "$(T \
+    "如果该进程正在安装、更新或修改配置，当前操作会被立即中断。" \
+    "If that process is installing, updating, or modifying configuration, its current operation will be interrupted immediately.")"
+
+  printf '\n'
+
+  if ! confirm_force "$(T \
+      "输入大写 FORCE 强制停止并接管，输入其他内容取消：" \
+      "Type uppercase FORCE to stop it and take over, or enter anything else to cancel: ")"; then
+
+    die "$(T \
+      "已取消应急强制接管。" \
+      "Emergency force takeover was cancelled.")"
+  fi
+
+  snapshot_file="$(mktemp)"
+
+  snapshot_process_tree "$holder_pid" \
+    > "$snapshot_file"
+
+  signal_process_tree \
+    TERM \
+    "$snapshot_file"
+
+  if ! wait_for_lock 8; then
+    new_holder_pid="$(
+      find_lock_holder_pid 2>/dev/null \
+        || true
+    )"
+
+    : > "$snapshot_file"
+
+    if [[ "$new_holder_pid" =~ ^[0-9]+$ ]] \
+        && [[ "$new_holder_pid" != "$BASHPID" ]] \
+        && [[ "$new_holder_pid" != "$$" ]]; then
+
+      snapshot_process_tree "$new_holder_pid" \
+        > "$snapshot_file"
+
+      signal_process_tree \
+        KILL \
+        "$snapshot_file"
+    fi
+
+    if ! wait_for_lock 5; then
+      rm -f "$snapshot_file"
+
+      die "$(T \
+        "强制停止后操作锁仍未释放，当前操作不会继续。" \
+        "The operation lock is still held after forced termination. The current operation will not continue.")"
+    fi
+  fi
+
+  rm -f "$snapshot_file"
+  rm -f "$LOCK_OWNER_FILE"
+
+  ok "$(T \
+    "原持锁进程已停止，当前 zdd-argo 操作已强制接管。" \
+    "The previous lock-holding process was stopped, and the current zdd-argo operation forcibly took over.")"
+}
+
 force_take_over_lock() {
   local owner_pid=""
   local owner_start=""
@@ -602,9 +822,8 @@ force_take_over_lock() {
       owner_operation \
       < <(read_lock_owner 2>/dev/null); then
 
-    die "$(T \
-      "另一个 zdd-argo 操作正在运行，但无法安全确认其进程身份；为避免误杀，未强制停止。" \
-      "Another zdd-argo operation is running, but its process identity could not be verified safely. It was not forcibly stopped to avoid terminating an unrelated process.")"
+    emergency_force_take_over_lock
+    return 0
   fi
 
   actual_start="$(
@@ -616,9 +835,8 @@ force_take_over_lock() {
   if [[ "$actual_start" != "$owner_start" ]] \
       || ! process_is_zdd_argo "$owner_pid"; then
 
-    die "$(T \
-      "另一个 zdd-argo 操作正在运行，但无法安全确认其进程身份；为避免误杀，未强制停止。" \
-      "Another zdd-argo operation is running, but its process identity could not be verified safely. It was not forcibly stopped to avoid terminating an unrelated process.")"
+    emergency_force_take_over_lock
+    return 0
   fi
 
   warn "$(T \
@@ -674,6 +892,7 @@ force_take_over_lock() {
   fi
 
   rm -f "$snapshot_file"
+  rm -f "$LOCK_OWNER_FILE"
 
   ok "$(T \
     "原 zdd-argo 操作已停止，当前操作已接管。" \
