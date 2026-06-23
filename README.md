@@ -3,14 +3,14 @@
 ### version 0.1.0 
 ### 2026-06-22
 
-#### 概览
+### 概览
 
 在 Debian / Ubuntu VPS 上生成临时 argo 隧道用于代理
 
 - 临时隧道由 `tmux` 保持，断开 SSH 之后仍可继续运行
 - Quick Tunnel 定位是开发测试，有 200 个并发请求限制，不支持 SSE
 
-#### 要求
+### 要求
 
 - Debian / Ubuntu
 - root 权限
@@ -19,7 +19,7 @@
 - 已安装 curl 或 wget
 - 确保 10000 端口未被占用
 
-#### 安装
+### 安装
 
 ```bash
 curl -fsSL -o zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/zdd-argo.sh \
@@ -39,7 +39,7 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 zargo
 ```
 
-#### 菜单
+### 菜单
 
 ```text
 1. 无交互 生成 / 重建 Argo
@@ -52,7 +52,7 @@ zargo
 0. 退出
 ```
 
-#### 卸载
+### 卸载
 
 运行：
 
@@ -64,7 +64,7 @@ zargo
 
 完整卸载仅删除本脚本安装在 /usr/local/lib/zdd-argo/ 中的 sing-box、cloudflared，以及 zdd-argo 自己创建的服务和配置；不会删除或停止由 apt、其他脚本或手动安装的同名程序与服务，因此，机器上可能同时存在多个 sing-box 或 cloudflared 实例；只要它们使用不同的服务、配置和监听端口，即可相互独立运行。
 
-#### 说明
+### 其他
 
 - 停止或重建隧道后，旧分享链接会失效
 
@@ -84,6 +84,6 @@ zargo
 
 <br>
 
-## License
+### License
 
 MIT
