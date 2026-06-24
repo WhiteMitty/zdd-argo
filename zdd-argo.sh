@@ -7,7 +7,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0-r6"
+SCRIPT_VERSION="0.1.0-r7"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -3226,15 +3226,13 @@ EOF
 listener_on_local_port() {
   ss -H -ltn \
     2>/dev/null \
-    | awk '{print $4}' \
-    | grep -Eq "(^|:)${LOCAL_PORT}$"
+    | grep -Eq "(^|[[:space:]])[^[:space:]]*:${LOCAL_PORT}([[:space:]]|$)"
 }
 
 listener_exact_loopback() {
   ss -H -ltn \
     2>/dev/null \
-    | awk '{print $4}' \
-    | grep -qx "127.0.0.1:${LOCAL_PORT}"
+    | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)"
 }
 
 wait_for_singbox_ready() {
