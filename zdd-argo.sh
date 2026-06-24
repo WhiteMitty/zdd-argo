@@ -7,7 +7,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.0-r6"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -420,7 +420,8 @@ service_restart() {
       systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
       ;;
     openrc)
-      rc-service "$SERVICE_NAME" restart >/dev/null 2>&1
+      rc-service "$SERVICE_NAME" restart \
+        || rc-service "$SERVICE_NAME" start
       ;;
     *)
       return 1
@@ -507,6 +508,9 @@ service_print_logs() {
         || true
       ;;
     openrc)
+      rc-service "$SERVICE_NAME" status >&2 || true
+      ss -ltnp 2>/dev/null | grep -E "(^|:)${LOCAL_PORT}[[:space:]]" >&2 || true
+
       if [[ -f "$SINGBOX_LOG_FILE" ]]; then
         tail -n "$lines" "$SINGBOX_LOG_FILE" >&2 || true
       else
@@ -3165,13 +3169,13 @@ output_log="${SINGBOX_LOG_FILE}"
 error_log="${SINGBOX_LOG_FILE}"
 
 depend() {
-  need net
+  use net
 }
 
 start_pre() {
   checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
   checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${SINGBOX_CONFIG}"
-  checkpath -f -m 0600 -o root:root "${SINGBOX_LOG_FILE}"
+  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${SINGBOX_LOG_FILE}"
 }
 EOF
 
@@ -3242,6 +3246,11 @@ wait_for_singbox_ready() {
       return 0
     fi
 
+    if [[ "$INIT_SYSTEM" == "openrc" ]] \
+        && listener_exact_loopback; then
+      return 0
+    fi
+
     sleep 1
   done
 
@@ -3271,7 +3280,7 @@ ensure_singbox_running() {
   if ! wait_for_singbox_ready; then
     service_print_logs 80
 
-    die "$(printf '%s' "${SERVICE_NAME} 未能在 15 秒内进入正常状态，或未监听 127.0.0.1:${LOCAL_PORT}。")"
+    die "$(printf '%s' "${SERVICE_NAME} 未能在 15 秒内进入正常状态，或本机未监听 127.0.0.1:${LOCAL_PORT}；这不是 NAT 外部端口占用问题。")"
   fi
 }
 
