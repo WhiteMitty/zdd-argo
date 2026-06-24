@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # zdd-argo：Debian / Ubuntu / Alpine 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
 # 版本：v0.1.0；安装后的管理命令：zargo
+# 构建标识：UTF8-ALIGN-UNINSTALL-ALPINE-20260624
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0-r4"
+SCRIPT_VERSION="0.1.0"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -578,6 +579,102 @@ ensure_download_tool() {
     || die "已尝试安装 curl/wget，但仍未检测到可用下载工具。"
 }
 
+ensure_alpine_binary_compat() {
+  [[ "$INIT_SYSTEM" == "openrc" ]] || return 0
+  command -v apk >/dev/null 2>&1 \
+    || return 1
+
+  if apk info -e gcompat >/dev/null 2>&1; then
+    apk info -e libstdc++ >/dev/null 2>&1 \
+      || apk add --no-cache libstdc++ >/dev/null 2>&1 \
+      || true
+    return 0
+  fi
+
+  if apk info -e libc6-compat >/dev/null 2>&1; then
+    apk info -e libstdc++ >/dev/null 2>&1 \
+      || apk add --no-cache libstdc++ >/dev/null 2>&1 \
+      || true
+    return 0
+  fi
+
+  info "Alpine 正在安装二进制兼容库（gcompat/libstdc++）……"
+  if apk add --no-cache gcompat libstdc++ >/dev/null 2>&1; then
+    return 0
+  fi
+
+  ensure_alpine_community_repo || true
+  if apk add --no-cache gcompat libstdc++ >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "gcompat 安装失败，尝试 libc6-compat/libstdc++ 兼容层。"
+  if apk add --no-cache libc6-compat libstdc++ >/dev/null 2>&1; then
+    return 0
+  fi
+
+  warn "无法自动安装 Alpine 二进制兼容库；如仍自检失败，请手动启用 community 仓库后安装 gcompat。"
+  return 1
+}
+
+ensure_alpine_community_repo() {
+  local repo_file="/etc/apk/repositories"
+  local release_line=""
+  local branch=""
+  local community_line=""
+
+  [[ "$INIT_SYSTEM" == "openrc" ]] || return 0
+  [[ -f "$repo_file" ]] || return 1
+
+  if grep -Eq '^[[:space:]]*https?://.*/community([[:space:]]|$)' "$repo_file"; then
+    return 0
+  fi
+
+  release_line="$(cat /etc/alpine-release 2>/dev/null || true)"
+  if [[ "$release_line" =~ ^([0-9]+)\.([0-9]+) ]]; then
+    branch="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
+  else
+    branch="edge"
+  fi
+
+  community_line="https://dl-cdn.alpinelinux.org/alpine/${branch}/community"
+  warn "未检测到 Alpine community 仓库，正在追加：${community_line}"
+  printf '%s\n' "$community_line" >> "$repo_file" \
+    || return 1
+  apk update >/dev/null 2>&1 || true
+}
+
+print_binary_run_error() {
+  local binary="$1"
+  local err_file=""
+
+  shift
+  err_file="$(mktemp)"
+  "$binary" "$@" >/dev/null 2>"$err_file" || true
+
+  if [[ -s "$err_file" ]]; then
+    warn "二进制运行错误：$(head -n 1 "$err_file")"
+  fi
+
+  rm -f "$err_file"
+}
+
+singbox_version_ok() {
+  local binary="$1"
+  local first_line=""
+
+  first_line="$("$binary" version 2>/dev/null | head -n 1 || true)"
+  [[ "$first_line" == sing-box\ version\ * ]]
+}
+
+cloudflared_version_ok() {
+  local binary="$1"
+  local first_line=""
+
+  first_line="$("$binary" --version 2>/dev/null | head -n 1 || true)"
+  [[ "${first_line,,}" == cloudflared\ version\ * ]]
+}
+
 install_dependencies() {
   local missing=0
   local cmd=""
@@ -659,6 +756,8 @@ install_dependencies() {
         findutils grep sed gawk shadow su-exec logrotate musl-utils \
         || die "Alpine 基础依赖安装失败。"
     fi
+
+    ensure_alpine_binary_compat || true
   else
     die "无法识别服务管理器，当前 INIT_SYSTEM=${INIT_SYSTEM:-unknown}。"
   fi
@@ -1891,10 +1990,14 @@ install_or_update_singbox() {
   candidate="${sb_candidates[0]}"
   chmod 0755 "$candidate"
 
-  if ! "$candidate" version \
-      2>/dev/null \
-      | head -n 1 \
-      | grep -q '^sing-box version '; then
+  if ! singbox_version_ok "$candidate"; then
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      ensure_alpine_binary_compat || true
+    fi
+  fi
+
+  if ! singbox_version_ok "$candidate"; then
+    print_binary_run_error "$candidate" version
     rm -rf "$work"
 
     die "$(printf '%s' "sing-box 新二进制无法通过版本自检。")"
@@ -2182,9 +2285,14 @@ install_or_update_cloudflared() {
 
   chmod 0755 "$tmp_file"
 
-  if ! "$tmp_file" --version \
-      2>/dev/null \
-      | grep -qi '^cloudflared version '; then
+  if ! cloudflared_version_ok "$tmp_file"; then
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      ensure_alpine_binary_compat || true
+    fi
+  fi
+
+  if ! cloudflared_version_ok "$tmp_file"; then
+    print_binary_run_error "$tmp_file" --version
     rm -f "$tmp_file"
 
     die "$(printf '%s' "cloudflared 新二进制无法通过版本自检。")"
