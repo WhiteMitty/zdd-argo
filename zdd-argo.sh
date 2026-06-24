@@ -7,7 +7,7 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0-r7"
+SCRIPT_VERSION="0.1.0-r8"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -3223,16 +3223,66 @@ EOF
   rm -f "$tmp"
 }
 
+ss_listen_tcp_lines() {
+  ss -ltn \
+    2>/dev/null
+}
+
+ss_listen_tcp_process_lines() {
+  ss -ltnp \
+    2>/dev/null
+}
+
 listener_on_local_port() {
-  ss -H -ltn \
-    2>/dev/null \
+  ss_listen_tcp_lines \
     | grep -Eq "(^|[[:space:]])[^[:space:]]*:${LOCAL_PORT}([[:space:]]|$)"
 }
 
 listener_exact_loopback() {
-  ss -H -ltn \
-    2>/dev/null \
+  ss_listen_tcp_lines \
     | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)"
+}
+
+listener_exact_loopback_pid() {
+  local line=""
+  local pid=""
+
+  line="$(
+    ss_listen_tcp_process_lines \
+      | grep -E "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)" \
+      | head -n 1 \
+      || true
+  )"
+
+  [[ -n "$line" ]] || return 1
+
+  pid="$(
+    printf '%s\n' "$line" \
+      | grep -Eo 'pid=[0-9]+' \
+      | head -n 1 \
+      | cut -d= -f2 \
+      || true
+  )"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+listener_process_matches_singbox() {
+  local pid=""
+  local cmdline=""
+
+  pid="$(listener_exact_loopback_pid 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+
+  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
+  [[ -n "$cmdline" ]] || return 1
+
+  [[ "$cmdline" == *"${SINGBOX_CONFIG}"* ]] || return 1
+
+  [[ "$cmdline" == *"sing-box"* \
+    || ( -n "$SINGBOX_BIN" && "$cmdline" == *"${SINGBOX_BIN}"* ) \
+    || "$cmdline" == *"${MANAGED_SINGBOX_BIN}"* ]]
 }
 
 wait_for_singbox_ready() {
@@ -3259,10 +3309,20 @@ ensure_singbox_running() {
   if listener_on_local_port \
       && ! service_is_active; then
 
+    if [[ "$INIT_SYSTEM" == "openrc" ]] \
+        && listener_exact_loopback \
+        && listener_process_matches_singbox; then
+
+      service_enable \
+        || warn "$(printf '%s' "OpenRC 状态未同步，且暂时无法启用 ${SERVICE_NAME}；继续使用当前已监听的 sing-box。")"
+
+      warn "$(printf '%s' "检测到 sing-box 已监听 127.0.0.1:${LOCAL_PORT}，但 OpenRC 状态尚未同步；按已就绪处理。")"
+      return 0
+    fi
+
     warn "$(printf '%s' "端口 ${LOCAL_PORT} 已被其他进程占用：")"
 
-    ss -ltnp \
-      2>/dev/null \
+    ss_listen_tcp_process_lines \
       | grep -E \
         "(^|:)${LOCAL_PORT}[[:space:]]" \
       || true
