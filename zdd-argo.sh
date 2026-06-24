@@ -1,13 +1,12 @@
 #!/usr/bin/env bash
-# zdd-argo：Debian / Ubuntu 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
+# zdd-argo：Debian / Ubuntu / Alpine 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
 # 版本：v0.1.0；安装后的管理命令：zargo
-# 构建标识：UTF8-ALIGN-UNINSTALL-20260623
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0"
+SCRIPT_VERSION="0.1.0-r4"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -22,17 +21,23 @@ SERVICE_USER="zdd-argo-svc"
 SERVICE_GROUP="zdd-argo-svc"
 SERVICE_HOME="/var/lib/zdd-argo"
 SERVICE_MARKER="${SERVICE_HOME}/.managed-by-zdd-argo"
+SERVICE_SHELL="/usr/sbin/nologin"
+OS_ID=""
+INIT_SYSTEM=""
 
 DATA_DIR="/etc/zdd-argo"
 STATE_JSON="${DATA_DIR}/state.json"
 LEGACY_STATE_FILE="${DATA_DIR}/state.env"
 SINGBOX_CONFIG="${DATA_DIR}/sing-box.json"
-SINGBOX_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+SINGBOX_SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+SINGBOX_OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
+SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
 SINGBOX_UNIT_MARKER="# 由 zdd-argo v0.1.0 管理"
 CLOUDFLARED_RUNNER="${DATA_DIR}/run-cloudflared.sh"
 CLOUDFLARED_HOME="${SERVICE_HOME}/cloudflared-home"
 CLOUDFLARED_PID_FILE="${DATA_DIR}/cloudflared.pid"
 LOG_FILE="/var/log/zdd-argo-cloudflared.log"
+SINGBOX_LOG_FILE="/var/log/zdd-argo-singbox.log"
 LOGROTATE_CONFIG="/etc/logrotate.d/zdd-argo-cloudflared"
 LOGROTATE_MARKER="# 由 zdd-argo v0.1.0 管理"
 VMESS_JSON_FILE="${DATA_DIR}/vmess.json"
@@ -186,8 +191,8 @@ ensure_utf8_locale() {
     done
   fi
 
-  # Debian / Ubuntu 的 glibc 通常内置 C.UTF-8；即使 locale 命令不可用，
-  # 仍优先使用它，确保中文输入、JSON 和终端宽度计算按 UTF-8 处理。
+  # Debian / Ubuntu 的 glibc 与现代 Alpine 的 musl 通常可使用 C.UTF-8；
+  # 即使 locale 命令不可用，仍优先使用它，确保中文输入、JSON 和终端宽度计算按 UTF-8 处理。
   export LANG=C.UTF-8
   export LC_ALL=C.UTF-8
 }
@@ -341,66 +346,321 @@ require_root() {
 
 check_os() {
   [[ -r /etc/os-release ]] \
-    || die "$(printf '%s' "无法识别操作系统，仅支持 Debian / Ubuntu。")"
+    || die "$(printf '%s' "无法识别操作系统，仅支持 Debian / Ubuntu / Alpine。")"
 
   # shellcheck disable=SC1091
   source /etc/os-release
+  OS_ID="${ID:-}"
 
   case "${ID:-}" in
     debian|ubuntu)
+      INIT_SYSTEM="systemd"
+      SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
+      SERVICE_SHELL="/usr/sbin/nologin"
+      ;;
+
+    alpine)
+      INIT_SYSTEM="openrc"
+      SINGBOX_UNIT="$SINGBOX_OPENRC_SERVICE"
+      if [[ -x /sbin/nologin ]]; then
+        SERVICE_SHELL="/sbin/nologin"
+      else
+        SERVICE_SHELL="/bin/false"
+      fi
       ;;
 
     *)
       case " ${ID_LIKE:-} " in
         *" debian "*)
+          INIT_SYSTEM="systemd"
+          SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
+          SERVICE_SHELL="/usr/sbin/nologin"
           ;;
 
         *)
-          die "$(printf '%s' "当前系统为 ${PRETTY_NAME:-未知}，本脚本仅支持 Debian / Ubuntu。")"
+          die "$(printf '%s' "当前系统为 ${PRETTY_NAME:-未知}，本脚本仅支持 Debian / Ubuntu / Alpine。")"
           ;;
       esac
       ;;
   esac
 }
 
+service_is_active() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" status >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_enable() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
+      ;;
+    openrc)
+      rc-update add "$SERVICE_NAME" default >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_restart() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" restart >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_stop() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl stop "$SERVICE_NAME" >/dev/null 2>&1
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" stop >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_disable_now() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" stop >/dev/null 2>&1 || true
+      rc-update del "$SERVICE_NAME" default >/dev/null 2>&1 || true
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_enable_now() {
+  service_enable || return 1
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl start "$SERVICE_NAME" >/dev/null 2>&1
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" start >/dev/null 2>&1
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+service_daemon_reload() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl daemon-reload >/dev/null 2>&1 || true
+      ;;
+    openrc)
+      :
+      ;;
+  esac
+}
+
+service_reset_failed() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+      ;;
+    openrc)
+      :
+      ;;
+  esac
+}
+
+service_print_logs() {
+  local lines="${1:-80}"
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      journalctl \
+        -u "$SERVICE_NAME" \
+        -n "$lines" \
+        --no-pager \
+        >&2 \
+        || true
+      ;;
+    openrc)
+      if [[ -f "$SINGBOX_LOG_FILE" ]]; then
+        tail -n "$lines" "$SINGBOX_LOG_FILE" >&2 || true
+      else
+        warn "OpenRC 模式未找到 sing-box 日志文件：${SINGBOX_LOG_FILE}"
+      fi
+      ;;
+  esac
+}
+
+runtime_label() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      printf '%s' "Debian/Ubuntu + systemd"
+      ;;
+    openrc)
+      printf '%s' "Alpine + OpenRC"
+      ;;
+    *)
+      printf '%s' "未知"
+      ;;
+  esac
+}
+
+download_tool_available() {
+  command -v curl >/dev/null 2>&1 \
+    || wget_is_usable
+}
+
+wget_is_usable() {
+  command -v wget >/dev/null 2>&1 || return 1
+  wget --version >/dev/null 2>&1
+}
+
+ensure_download_tool() {
+  [[ -n "$INIT_SYSTEM" ]] || check_os
+
+  if download_tool_available; then
+    return 0
+  fi
+
+  info "未检测到 curl 或 wget，正在安装下载工具……"
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      command -v apt-get >/dev/null 2>&1 \
+        || die "未找到 curl/wget，且当前系统无法使用 apt-get 自动安装。"
+
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      export APT_LISTCHANGES_FRONTEND=none
+
+      apt-get update \
+        || die "apt-get update 失败，无法安装 curl/wget。"
+      apt-get install -y curl wget ca-certificates \
+        || die "curl/wget 安装失败。"
+      ;;
+    openrc)
+      command -v apk >/dev/null 2>&1 \
+        || die "未找到 curl/wget，且当前系统无法使用 apk 自动安装。"
+
+      apk add --no-cache curl wget ca-certificates \
+        || die "Alpine curl/wget 安装失败。"
+      ;;
+    *)
+      die "未检测到 curl/wget，且无法识别系统包管理器。"
+      ;;
+  esac
+
+  download_tool_available \
+    || die "已尝试安装 curl/wget，但仍未检测到可用下载工具。"
+}
+
 install_dependencies() {
   local missing=0
   local cmd=""
 
-  [[ -d /run/systemd/system ]] \
-    || die "当前系统不是由 systemd 管理，无法创建后台服务。"
+  [[ -n "$INIT_SYSTEM" ]] || check_os
 
-  command -v systemctl >/dev/null 2>&1 \
-    || die "未找到 systemctl。"
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    [[ -d /run/systemd/system ]] \
+      || die "当前系统不是由 systemd 管理，无法创建后台服务。"
 
-  command -v journalctl >/dev/null 2>&1 \
-    || die "未找到 journalctl。"
+    command -v systemctl >/dev/null 2>&1 \
+      || die "未找到 systemctl。"
 
-  for cmd in \
-    curl jq openssl tmux ss base64 awk sed grep tar sha256sum find \
-    install mktemp readlink stat getent useradd groupadd userdel groupdel \
-    setpriv logrotate wc iconv locale
-  do
-    if ! command -v "$cmd" >/dev/null 2>&1; then
-      missing=1
-      break
+    command -v journalctl >/dev/null 2>&1 \
+      || die "未找到 journalctl。"
+
+    ensure_download_tool
+
+    for cmd in \
+      jq openssl tmux ss base64 awk sed grep tar sha256sum find \
+      install mktemp readlink stat getent useradd groupadd userdel groupdel \
+      setpriv logrotate wc iconv locale
+    do
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        missing=1
+        break
+      fi
+    done
+
+    if [[ $missing -eq 1 ]]; then
+      info "安装 Debian / Ubuntu 基础依赖……"
+
+      export DEBIAN_FRONTEND=noninteractive
+      export NEEDRESTART_MODE=a
+      export APT_LISTCHANGES_FRONTEND=none
+
+      apt-get update \
+        || die "apt-get update 失败。"
+
+      apt-get install -y \
+        curl wget jq openssl ca-certificates tmux iproute2 coreutils tar \
+        findutils grep sed gawk passwd util-linux logrotate libc-bin \
+        || die "基础依赖安装失败。"
     fi
-  done
+  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    command -v apk >/dev/null 2>&1 \
+      || die "Alpine 模式未找到 apk。"
 
-  if [[ $missing -eq 1 ]]; then
-    info "安装基础依赖……"
+    if ! command -v rc-service >/dev/null 2>&1 \
+        || ! command -v rc-update >/dev/null 2>&1; then
+      info "未检测到完整 OpenRC 工具，正在安装 openrc……"
+      apk add --no-cache openrc \
+        || die "Alpine openrc 安装失败。"
+    fi
 
-    export DEBIAN_FRONTEND=noninteractive
-    export NEEDRESTART_MODE=a
-    export APT_LISTCHANGES_FRONTEND=none
+    command -v rc-service >/dev/null 2>&1 \
+      || die "Alpine 模式未找到 rc-service；请确认当前系统使用 OpenRC。"
+    command -v rc-update >/dev/null 2>&1 \
+      || die "Alpine 模式未找到 rc-update；请确认当前系统使用 OpenRC。"
 
-    apt-get update \
-      || die "apt-get update 失败。"
+    ensure_download_tool
 
-    apt-get install -y \
-      curl jq openssl ca-certificates tmux iproute2 coreutils tar \
-      findutils grep sed gawk passwd util-linux logrotate libc-bin \
-      || die "基础依赖安装失败。"
+    for cmd in \
+      jq openssl tmux ss base64 awk sed grep tar sha256sum find \
+      install mktemp readlink stat getent useradd groupadd userdel groupdel \
+      su-exec logrotate wc
+    do
+      if ! command -v "$cmd" >/dev/null 2>&1; then
+        missing=1
+        break
+      fi
+    done
+
+    if [[ $missing -eq 1 ]]; then
+      info "安装 Alpine / OpenRC 基础依赖……"
+
+      apk add --no-cache \
+        bash curl wget jq openssl ca-certificates tmux iproute2 coreutils tar \
+        findutils grep sed gawk shadow su-exec logrotate musl-utils \
+        || die "Alpine 基础依赖安装失败。"
+    fi
+  else
+    die "无法识别服务管理器，当前 INIT_SYSTEM=${INIT_SYSTEM:-unknown}。"
   fi
 }
 
@@ -1116,6 +1376,10 @@ install_shortcut() {
 
   mkdir -p "$BIN_DIR"
   chmod 0755 "$BIN_DIR"
+  mkdir -p \
+    "$(dirname -- "$SHORTCUT_PATH")" \
+    "$(dirname -- "$SHORTCUT_COMPAT_PATH")" \
+    "$(dirname -- "$SHORTCUT_FALLBACK_PATH")"
 
   if [[ "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]]; then
     local managed_tmp=""
@@ -1295,36 +1559,68 @@ safe_download() {
   local url="$1"
   local output="$2"
 
-  curl \
-    --proto '=https' \
-    --tlsv1.2 \
-    --user-agent "zdd-argo/${SCRIPT_VERSION}" \
-    -fL \
-    --retry 4 \
-    --retry-all-errors \
-    --connect-timeout 15 \
-    --max-time 300 \
-    "$url" \
-    -o "$output"
+  ensure_download_tool
+
+  if command -v curl >/dev/null 2>&1; then
+    curl \
+      --proto '=https' \
+      --tlsv1.2 \
+      --user-agent "zdd-argo/${SCRIPT_VERSION}" \
+      -fL \
+      --retry 4 \
+      --retry-all-errors \
+      --connect-timeout 15 \
+      --max-time 300 \
+      "$url" \
+      -o "$output"
+  elif wget_is_usable; then
+    wget \
+      --https-only \
+      --secure-protocol=TLSv1_2 \
+      --user-agent="zdd-argo/${SCRIPT_VERSION}" \
+      --tries=5 \
+      --timeout=300 \
+      -O "$output" \
+      "$url"
+  else
+    die "未检测到可用的 curl 或 GNU wget，无法下载：${url}"
+  fi
 }
 
 safe_download_github_api() {
   local url="$1"
   local output="$2"
 
-  curl \
-    --proto '=https' \
-    --tlsv1.2 \
-    --user-agent "zdd-argo/${SCRIPT_VERSION}" \
-    -H 'Accept: application/vnd.github+json' \
-    -H 'X-GitHub-Api-Version: 2022-11-28' \
-    -fL \
-    --retry 4 \
-    --retry-all-errors \
-    --connect-timeout 15 \
-    --max-time 120 \
-    "$url" \
-    -o "$output"
+  ensure_download_tool
+
+  if command -v curl >/dev/null 2>&1; then
+    curl \
+      --proto '=https' \
+      --tlsv1.2 \
+      --user-agent "zdd-argo/${SCRIPT_VERSION}" \
+      -H 'Accept: application/vnd.github+json' \
+      -H 'X-GitHub-Api-Version: 2022-11-28' \
+      -fL \
+      --retry 4 \
+      --retry-all-errors \
+      --connect-timeout 15 \
+      --max-time 120 \
+      "$url" \
+      -o "$output"
+  elif wget_is_usable; then
+    wget \
+      --https-only \
+      --secure-protocol=TLSv1_2 \
+      --user-agent="zdd-argo/${SCRIPT_VERSION}" \
+      --header='Accept: application/vnd.github+json' \
+      --header='X-GitHub-Api-Version: 2022-11-28' \
+      --tries=5 \
+      --timeout=120 \
+      -O "$output" \
+      "$url"
+  else
+    die "未检测到可用的 curl 或 GNU wget，无法读取 GitHub API：${url}"
+  fi
 }
 
 github_latest_asset_info() {
@@ -1638,10 +1934,7 @@ install_or_update_singbox() {
     had_unit=1
   fi
 
-  if systemctl is-active \
-      --quiet \
-      "$SERVICE_NAME" \
-      2>/dev/null; then
+  if service_is_active; then
     was_active=1
   fi
 
@@ -1727,10 +2020,7 @@ install_or_update_singbox() {
     write_singbox_service
 
     if [[ $was_active -eq 1 ]]; then
-      systemctl restart \
-        "$SERVICE_NAME" \
-        >/dev/null 2>&1 \
-        || true
+      service_restart || true
     fi
 
     if [[ $was_active -eq 1 ]] \
@@ -1763,31 +2053,18 @@ install_or_update_singbox() {
         write_singbox_service
 
         if [[ $was_active -eq 1 ]]; then
-          systemctl restart \
-            "$SERVICE_NAME" \
-            >/dev/null 2>&1 \
-            || true
+          service_restart || true
         fi
       fi
 
       if [[ $was_active -eq 1 ]] \
           && ! wait_for_singbox_ready; then
-        journalctl \
-          -u "$SERVICE_NAME" \
-          -n 80 \
-          --no-pager \
-          >&2 \
-          || true
+        service_print_logs 80
 
         die "$(printf '%s' "新版启动失败，且旧版回滚后也未恢复，请检查日志。")"
       fi
 
-      journalctl \
-        -u "$SERVICE_NAME" \
-        -n 40 \
-        --no-pager \
-        >&2 \
-        || true
+      service_print_logs 40
 
       die "$(printf '%s' "sing-box 更新后启动失败，已成功恢复旧版本。")"
     fi
@@ -2572,7 +2849,10 @@ ensure_service_account() {
       || die "服务账户 ${SERVICE_USER} 的主目录异常，已停止部署。"
     [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
       || die "服务账户 ${SERVICE_USER} 的主组异常，已停止部署。"
-    [[ "$existing_shell" == "/usr/sbin/nologin" || "$existing_shell" == "/bin/false" ]] \
+    [[ "$existing_shell" == "$SERVICE_SHELL" \
+      || "$existing_shell" == "/usr/sbin/nologin" \
+      || "$existing_shell" == "/sbin/nologin" \
+      || "$existing_shell" == "/bin/false" ]] \
       || die "服务账户 ${SERVICE_USER} 的登录 Shell 异常，已停止部署。"
   else
     if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
@@ -2587,7 +2867,7 @@ ensure_service_account() {
       --gid "$SERVICE_GROUP" \
       --home-dir "$SERVICE_HOME" \
       --create-home \
-      --shell /usr/sbin/nologin \
+      --shell "$SERVICE_SHELL" \
       "$SERVICE_USER" \
       || die "无法创建低权限服务账户 ${SERVICE_USER}。"
   fi
@@ -2687,13 +2967,25 @@ write_singbox_config() {
 
 singbox_unit_is_ours() {
   [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-  grep -Fqx "$SINGBOX_UNIT_MARKER" "$SINGBOX_UNIT" 2>/dev/null \
-    && grep -Fq "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
+  grep -Fqx "$SINGBOX_UNIT_MARKER" "$SINGBOX_UNIT" 2>/dev/null || return 1
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      grep -Fq "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
+      ;;
+    openrc)
+      grep -Fq "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fq "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 singbox_unit_is_legacy_ours() {
   [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-  grep -Fq 'Description=zdd-argo dedicated sing-box service' "$SINGBOX_UNIT" 2>/dev/null \
+  grep -Fq 'zdd-argo' "$SINGBOX_UNIT" 2>/dev/null \
     && grep -Fq "run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
 }
 
@@ -2703,13 +2995,14 @@ write_singbox_service() {
 
   if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
     singbox_unit_is_ours || singbox_unit_is_legacy_ours \
-      || die "systemd 服务路径已被其他程序占用：${SINGBOX_UNIT}"
+      || die "服务路径已被其他程序占用：${SINGBOX_UNIT}"
   fi
 
   local tmp=""
   tmp="$(mktemp)"
 
-  cat > "$tmp" <<EOF
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "$tmp" <<EOF
 ${SINGBOX_UNIT_MARKER}
 [Unit]
 Description=zdd-argo 专用 sing-box 服务
@@ -2745,9 +3038,43 @@ SystemCallArchitectures=native
 WantedBy=multi-user.target
 EOF
 
-  install -m 0644 "$tmp" "$SINGBOX_UNIT"
+    install -m 0644 "$tmp" "$SINGBOX_UNIT"
+  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    cat > "$tmp" <<EOF
+#!/sbin/openrc-run
+${SINGBOX_UNIT_MARKER}
+
+name="zdd-argo 专用 sing-box 服务"
+description="zdd-argo dedicated sing-box service"
+command="${SINGBOX_BIN}"
+command_args="run -c ${SINGBOX_CONFIG}"
+command_user="${SERVICE_USER}:${SERVICE_GROUP}"
+pidfile="/run/${SERVICE_NAME}.pid"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+output_log="${SINGBOX_LOG_FILE}"
+error_log="${SINGBOX_LOG_FILE}"
+
+depend() {
+  need net
+}
+
+start_pre() {
+  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
+  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${SINGBOX_CONFIG}"
+  checkpath -f -m 0600 -o root:root "${SINGBOX_LOG_FILE}"
+}
+EOF
+
+    install -m 0755 "$tmp" "$SINGBOX_UNIT"
+  else
+    rm -f "$tmp"
+    die "无法识别服务管理器，不能写入服务文件。"
+  fi
+
   rm -f "$tmp"
-  systemctl daemon-reload
+  service_daemon_reload
 }
 
 logrotate_config_is_ours() {
@@ -2764,10 +3091,11 @@ write_logrotate_config() {
 
   local tmp=""
   tmp="$(mktemp)"
+  mkdir -p "$(dirname -- "$LOGROTATE_CONFIG")"
 
   cat > "$tmp" <<EOF
 ${LOGROTATE_MARKER}
-${LOG_FILE} {
+${LOG_FILE} ${SINGBOX_LOG_FILE} {
     size 5M
     rotate 3
     compress
@@ -2801,9 +3129,7 @@ wait_for_singbox_ready() {
   local i=0
 
   for ((i = 1; i <= 15; i++)); do
-    if systemctl is-active \
-        --quiet \
-        "$SERVICE_NAME" \
+    if service_is_active \
         && listener_exact_loopback; then
       return 0
     fi
@@ -2816,9 +3142,7 @@ wait_for_singbox_ready() {
 
 ensure_singbox_running() {
   if listener_on_local_port \
-      && ! systemctl is-active \
-        --quiet \
-        "$SERVICE_NAME"; then
+      && ! service_is_active; then
 
     warn "$(printf '%s' "端口 ${LOCAL_PORT} 已被其他进程占用：")"
 
@@ -2831,23 +3155,13 @@ ensure_singbox_running() {
     die "$(printf '%s' "为避免覆盖其他服务，已停止部署。")"
   fi
 
-  systemctl enable \
-    "$SERVICE_NAME" \
-    >/dev/null 2>&1 \
+  service_enable \
     || die "$(printf '%s' "无法启用 ${SERVICE_NAME}。")"
 
-  systemctl restart \
-    "$SERVICE_NAME" \
-    >/dev/null 2>&1 \
-    || true
+  service_restart || true
 
   if ! wait_for_singbox_ready; then
-    journalctl \
-      -u "$SERVICE_NAME" \
-      -n 80 \
-      --no-pager \
-      >&2 \
-      || true
+    service_print_logs 80
 
     die "$(printf '%s' "${SERVICE_NAME} 未能在 15 秒内进入正常状态，或未监听 127.0.0.1:${LOCAL_PORT}。")"
   fi
@@ -2939,16 +3253,24 @@ cleanup() {
 
 trap cleanup EXIT HUP INT TERM
 
-setpriv \
-  --reuid=${service_uid} \
-  --regid=${service_gid} \
-  --clear-groups \
-  --no-new-privs \
-  -- \
-  "${CLOUDFLARED_BIN}" tunnel \
-    --url "http://127.0.0.1:${LOCAL_PORT}" \
-    --protocol http2 \
-    > >(tee -a "${LOG_FILE}") 2>&1 &
+if [[ "${INIT_SYSTEM}" == "openrc" ]]; then
+  su-exec ${service_uid}:${service_gid} \
+    "${CLOUDFLARED_BIN}" tunnel \
+      --url "http://127.0.0.1:${LOCAL_PORT}" \
+      --protocol http2 \
+      > >(tee -a "${LOG_FILE}") 2>&1 &
+else
+  setpriv \
+    --reuid=${service_uid} \
+    --regid=${service_gid} \
+    --clear-groups \
+    --no-new-privs \
+    -- \
+    "${CLOUDFLARED_BIN}" tunnel \
+      --url "http://127.0.0.1:${LOCAL_PORT}" \
+      --protocol http2 \
+      > >(tee -a "${LOG_FILE}") 2>&1 &
+fi
 
 CF_PID=\$!
 CF_START="\$(process_start_time "\${CF_PID}" 2>/dev/null || true)"
@@ -3358,7 +3680,7 @@ deployment_transaction_begin() {
     TRANSACTION_OLD_SERVICE_ACCOUNT=1
   fi
 
-  if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+  if service_is_active; then
     TRANSACTION_OLD_SERVICE_ACTIVE=1
   fi
   if tunnel_is_running; then
@@ -3403,7 +3725,7 @@ deployment_transaction_rollback() {
   stop_tunnel >/dev/null 2>&1 || true
 
   if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-    systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    service_disable_now || true
   fi
 
   rm -rf "$DATA_DIR"
@@ -3423,21 +3745,21 @@ deployment_transaction_rollback() {
     cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG"
   fi
 
-  systemctl daemon-reload >/dev/null 2>&1 || true
+  service_daemon_reload
   load_settings
   resolve_singbox_bin
   resolve_cloudflared_bin
 
   if [[ $TRANSACTION_OLD_SERVICE_ACTIVE -eq 1 ]] \
       && (singbox_unit_is_ours || singbox_unit_is_legacy_ours); then
-    systemctl enable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+    service_enable_now || true
   fi
 
   if [[ $TRANSACTION_OLD_TUNNEL_RUNNING -eq 1 \
       && -x "$CLOUDFLARED_RUNNER" \
       && -f "$STATE_JSON" ]]; then
     load_state >/dev/null 2>&1 || true
-    if systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null; then
+    if service_is_active; then
       start_tunnel >/dev/null 2>&1 || true
     fi
   fi
@@ -3578,6 +3900,7 @@ show_status() {
   print_section_header "zdd-argo 运行状态" "$C_CYAN" 78
 
   print_kv "脚本版本：" "v ${SCRIPT_VERSION}" 22
+  print_kv "运行平台：" "$(runtime_label)" 22
   print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
   print_kv "节点名称：" "$NODE_NAME" 22
 
@@ -3619,7 +3942,7 @@ show_status() {
   fi
 
   print_aligned_label "sing-box 服务：" 22
-  if systemctl is-active --quiet "$SERVICE_NAME"; then
+  if service_is_active; then
     printf '%s%s%s\n' "$C_GREEN" "运行中" "$C_RESET"
   else
     printf '%s%s%s\n' "$C_RED" "未运行" "$C_RESET"
@@ -3731,10 +4054,10 @@ remove_zdd_components() {
 
   if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
     if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-      systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1 || true
+      service_disable_now || true
       rm -f "$SINGBOX_UNIT"
     else
-      die "systemd 服务不是本项目创建的，拒绝继续卸载：${SINGBOX_UNIT}"
+      die "服务文件不是本项目创建的，拒绝继续卸载：${SINGBOX_UNIT}"
     fi
   fi
 
@@ -3746,8 +4069,8 @@ remove_zdd_components() {
     fi
   fi
 
-  systemctl daemon-reload >/dev/null 2>&1 || true
-  systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
+  service_daemon_reload
+  service_reset_failed
 
   rm -rf "$DATA_DIR"
   rm -f "$LOG_FILE"
@@ -3961,10 +4284,12 @@ remove_service_account() {
   [[ "$service_uid" =~ ^[0-9]+$ ]] \
     || die "无法读取低权限服务账户 ${SERVICE_USER} 的 UID。"
 
-  # userdel 会在账户仍被进程使用时失败。先停止 systemd cgroup，再对该项目专用
+  # userdel 会在账户仍被进程使用时失败。先停止服务管理器中的服务，再对该项目专用
   # UID 下的全部残留进程做 PID + 启动时间 + UID 三重校验后终止。
-  systemctl stop "$SERVICE_NAME" >/dev/null 2>&1 || true
-  systemctl kill --kill-who=all --signal=TERM "$SERVICE_NAME" >/dev/null 2>&1 || true
+  service_stop || true
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    systemctl kill --kill-who=all --signal=TERM "$SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
   stop_service_account_processes "$service_uid" \
     || die "无法安全终止低权限服务账户 ${SERVICE_USER} 的残留进程。"
 
@@ -4005,7 +4330,7 @@ command_uninstall_all() {
   remove_managed_script
   remove_service_account
   cleanup_bin_dir
-  systemctl daemon-reload >/dev/null 2>&1 || true
+  service_daemon_reload
 
   ok "zdd-argo 及脚本专用 sing-box、cloudflared 已完整卸载。"
 
@@ -4065,6 +4390,7 @@ menu_header_status() {
   fi
 
   print_section_header "zdd-argo 管理菜单 v ${SCRIPT_VERSION}" "$C_CYAN" 78
+  print_kv "运行平台：" "$(runtime_label)" 18
   print_kv "sing-box：" "$sb" 18
   print_kv "Argo：" "$argo" 18
   print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 18
