@@ -4,7 +4,7 @@ IFS=$'\n\t'
 umask 077
 
 SCRIPT_VERSION="0.1.0"
-BUILD_ID="WARP-FALLBACK-PORTS-20260626"
+BUILD_ID="WARP-FALLBACK-AUDITED-20260626"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -23,6 +23,7 @@ SERVICE_USER="zdd-argo-svc"
 SERVICE_GROUP="zdd-argo-svc"
 SERVICE_HOME="/var/lib/zdd-argo"
 SERVICE_MARKER="${SERVICE_HOME}/.managed-by-zdd-argo"
+SERVICE_MARKER_CONTENT="zdd-argo-service-account-v0.1.0"
 SERVICE_SHELL="/usr/sbin/nologin"
 OS_ID=""
 INIT_SYSTEM=""
@@ -34,14 +35,12 @@ SINGBOX_CONFIG="${DATA_DIR}/sing-box.json"
 SINGBOX_SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 SINGBOX_OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
 SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
-SINGBOX_UNIT_MARKER="# 由 zdd-argo v0.1.0 管理"
 CLOUDFLARED_RUNNER="${DATA_DIR}/run-cloudflared.sh"
 CLOUDFLARED_HOME="${SERVICE_HOME}/cloudflared-home"
 CLOUDFLARED_PID_FILE="${DATA_DIR}/cloudflared.pid"
 LOG_FILE="/var/log/zdd-argo-cloudflared.log"
 SINGBOX_LOG_FILE="/var/log/zdd-argo-singbox.log"
 LOGROTATE_CONFIG="/etc/logrotate.d/zdd-argo-cloudflared"
-LOGROTATE_MARKER="# 由 zdd-argo v0.1.0 管理"
 VMESS_JSON_FILE="${DATA_DIR}/vmess.json"
 VMESS_LINK_FILE="${DATA_DIR}/vmess.txt"
 ECH_NOTE_FILE="${DATA_DIR}/ech.txt"
@@ -55,7 +54,6 @@ LOCK_OWNER_FILE="${LOCK_DIR}/owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
 SHORTCUT_COMPAT_PATH="/usr/local/sbin/zargo"
 SHORTCUT_FALLBACK_PATH="/usr/bin/zargo"
-DEFAULT_SOURCE_PATH="/root/zdd-argo.sh"
 LEGACY_ZDD_PATHS=("/usr/bin/zdd" "/usr/local/sbin/zdd" "/usr/local/bin/zdd")
 LEGACY_SHORTCUT_PATH="/usr/local/sbin/zdd-argo"
 LEGACY_SHORTCUT_BIN="/usr/local/bin/zdd-argo"
@@ -97,6 +95,8 @@ TRANSACTION_DIR=""
 TRANSACTION_OLD_SERVICE_ACTIVE=0
 TRANSACTION_OLD_TUNNEL_RUNNING=0
 TRANSACTION_OLD_SERVICE_ACCOUNT=0
+TRANSACTION_OLD_SERVICE_GROUP=0
+TRANSACTION_OLD_SERVICE_HOME=0
 
 if [[ -t 1 ]]; then
   C_GREEN=$'\033[32m'
@@ -863,8 +863,9 @@ process_is_zdd_operation() {
 
   [[ ( -n "$SCRIPT_PATH" && "$cmdline" == *"${SCRIPT_PATH}"* ) \
     || "$cmdline" == *"${MANAGED_SCRIPT_PATH}"* \
-    || "$cmdline" == *"zdd-argo"* \
-    || "$cmdline" == *"zargo"* ]]
+    || "$cmdline" == *"${SHORTCUT_PATH}"* \
+    || "$cmdline" == *"${SHORTCUT_COMPAT_PATH}"* \
+    || "$cmdline" == *"${SHORTCUT_FALLBACK_PATH}"* ]]
 }
 
 secure_root_directory() {
@@ -892,15 +893,17 @@ secure_root_file() {
 }
 
 read_lock_owner() {
+  local lock_path="${1:-$LOCK_DIR}"
+  local owner_file="${lock_path}/owner"
   local pid=""
   local start=""
   local operation=""
   local extra=""
 
-  secure_root_directory "$LOCK_DIR" || return 1
-  secure_root_file "$LOCK_OWNER_FILE" || return 1
+  secure_root_directory "$lock_path" || return 1
+  secure_root_file "$owner_file" || return 1
 
-  IFS=' ' read -r pid start operation extra < "$LOCK_OWNER_FILE" \
+  IFS=' ' read -r pid start operation extra < "$owner_file" \
     || return 1
 
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
@@ -1160,21 +1163,67 @@ confirm_force() {
   [[ "$answer" == "FORCE" ]]
 }
 
-remove_lock_dir_if_owner_matches() {
-  local expected_pid="$1"
-  local expected_start="$2"
+quarantine_lock_dir() {
+  local expected_inode="$1"
+  local expected_pid="${2:-}"
+  local expected_start="${3:-}"
+  local quarantine=""
+  local moved_inode=""
   local pid=""
   local start=""
   local operation=""
 
-  if [[ ! -d "$LOCK_DIR" ]]; then
-    return 0
+  [[ "$expected_inode" =~ ^[0-9]+$ ]] || return 1
+
+  quarantine="${LOCK_DIR}.stale.${BASHPID}.${RANDOM}"
+  while [[ -e "$quarantine" || -L "$quarantine" ]]; do
+    quarantine="${LOCK_DIR}.stale.${BASHPID}.${RANDOM}"
+  done
+
+  mv -- "$LOCK_DIR" "$quarantine" 2>/dev/null || return 1
+
+  moved_inode="$(stat -Lc '%i' "$quarantine" 2>/dev/null || true)"
+  if [[ "$moved_inode" != "$expected_inode" ]]; then
+    if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
+      mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
+    fi
+    return 1
   fi
 
-  if ! IFS=' ' read -r \
-      pid \
-      start \
-      operation \
+  if [[ -n "$expected_pid" || -n "$expected_start" ]]; then
+    if ! IFS=' ' read -r pid start operation \
+        < <(read_lock_owner "$quarantine" 2>/dev/null); then
+      if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
+        mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
+      fi
+      return 1
+    fi
+
+    if [[ "$pid" != "$expected_pid" || "$start" != "$expected_start" ]]; then
+      if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
+        mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
+      fi
+      return 1
+    fi
+  fi
+
+  rm -rf -- "$quarantine"
+}
+
+remove_lock_dir_if_owner_matches() {
+  local expected_pid="$1"
+  local expected_start="$2"
+  local inode=""
+  local pid=""
+  local start=""
+  local operation=""
+
+  [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] || return 0
+
+  inode="$(stat -Lc '%i' "$LOCK_DIR" 2>/dev/null || true)"
+  [[ "$inode" =~ ^[0-9]+$ ]] || return 1
+
+  if ! IFS=' ' read -r pid start operation \
       < <(read_lock_owner 2>/dev/null); then
     return 1
   fi
@@ -1183,14 +1232,11 @@ remove_lock_dir_if_owner_matches() {
     && "$start" == "$expected_start" ]] \
     || return 1
 
-  rm -f "$LOCK_OWNER_FILE"
-  rmdir "$LOCK_DIR" 2>/dev/null \
-    || return 1
+  quarantine_lock_dir "$inode" "$expected_pid" "$expected_start"
 }
 
 clear_unverifiable_lock() {
   local inode_before=""
-  local inode_after=""
   local pid=""
   local start=""
   local operation=""
@@ -1204,34 +1250,20 @@ clear_unverifiable_lock() {
     || die "$(printf '%s' "zdd-argo 操作锁状态异常，无法安全处理。")"
 
   warn "$(printf '%s' "检测到无法验证所有者的 zdd-argo 操作锁。")"
-
   warn "$(printf '%s' "这通常表示上一次操作在创建锁后被强制中断；清理该锁不会终止任何已确认的进程。")"
 
   if ! confirm_force "$(printf '%s' "输入大写 FORCE 清理异常锁并继续，输入其他内容取消：")"; then
-
     die "$(printf '%s' "已取消清理异常操作锁。")"
   fi
 
-  if IFS=' ' read -r \
-      pid \
-      start \
-      operation \
+  if IFS=' ' read -r pid start operation \
       < <(read_lock_owner 2>/dev/null); then
     return 0
   fi
 
-  inode_after="$(
-    stat -Lc '%i' "$LOCK_DIR" 2>/dev/null \
-      || true
-  )"
-
-  if [[ "$inode_after" != "$inode_before" ]]; then
-    return 0
+  if quarantine_lock_dir "$inode_before"; then
+    ok "$(printf '%s' "异常的 zdd-argo 操作锁已清理。")"
   fi
-
-  rm -rf -- "$LOCK_DIR"
-
-  ok "$(printf '%s' "异常的 zdd-argo 操作锁已清理。")"
 }
 
 force_take_over_lock() {
@@ -1355,7 +1387,10 @@ acquire_lock() {
 
   while true; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
-      chmod 700 "$LOCK_DIR"
+      if ! chmod 700 "$LOCK_DIR"; then
+        rm -rf -- "$LOCK_DIR"
+        die "$(printf '%s' "无法设置 zdd-argo 操作锁目录权限。")"
+      fi
 
       LOCK_DIR_INODE="$(
         stat -Lc '%i' "$LOCK_DIR" 2>/dev/null \
@@ -1454,6 +1489,7 @@ record_source_file() {
   local tmp=""
 
   [[ -n "$SCRIPT_PATH" && "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]] || return 0
+  [[ "$SCRIPT_PATH" != *$'\n'* && "$SCRIPT_PATH" != *$'\r'* ]] || return 0
   [[ -f "$SCRIPT_PATH" && ! -L "$SCRIPT_PATH" ]] || return 0
   script_file_is_ours "$SCRIPT_PATH" || return 0
   command -v sha256sum >/dev/null 2>&1 || return 0
@@ -1550,8 +1586,8 @@ install_shortcut() {
 
   tmp="$(mktemp)"
 
-  cat > "$tmp" <<EOF
-#!/usr/bin/env bash
+  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
+  cat >> "$tmp" <<EOF
 set -Eeuo pipefail
 ZDD_ARGO_LAUNCHER=1
 
@@ -2766,6 +2802,33 @@ valid_ipv6() {
   fi
 }
 
+
+valid_ipv4_cidr() {
+  local value="$1"
+  local address=""
+  local prefix=""
+
+  [[ "$value" =~ ^([^/]+)/([0-9]{1,2})$ ]] || return 1
+  address="${BASH_REMATCH[1]}"
+  prefix="${BASH_REMATCH[2]}"
+
+  valid_ipv4 "$address" || return 1
+  ((10#$prefix >= 0 && 10#$prefix <= 32))
+}
+
+valid_ipv6_cidr() {
+  local value="$1"
+  local address=""
+  local prefix=""
+
+  [[ "$value" =~ ^([^/]+)/([0-9]{1,3})$ ]] || return 1
+  address="${BASH_REMATCH[1]}"
+  prefix="${BASH_REMATCH[2]}"
+
+  valid_ipv6 "$address" || return 1
+  ((10#$prefix >= 0 && 10#$prefix <= 128))
+}
+
 valid_local_port() {
   local value="$1"
   [[ "$value" =~ ^[0-9]{1,5}$ ]] || return 1
@@ -2947,6 +3010,7 @@ load_settings() {
   local node=""
   local doh=""
   local warp=""
+  local invalid_file=""
 
   PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
   LOCAL_PORT="$DEFAULT_LOCAL_PORT"
@@ -2955,12 +3019,22 @@ load_settings() {
   WARP_ENABLED="$DEFAULT_WARP_ENABLED"
   SETTINGS_CONFIGURED=0
 
-  [[ -f "$SETTINGS_JSON" ]] || return 0
+  [[ -e "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]] || return 0
   command -v jq >/dev/null 2>&1 || return 0
 
+  if [[ ! -f "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]]; then
+    warn "设置文件不是普通文件或属于符号链接，已忽略并恢复默认设置：${SETTINGS_JSON}"
+    return 0
+  fi
+
   if ! jq -e 'type == "object"' "$SETTINGS_JSON" >/dev/null 2>&1; then
-    warn "设置文件损坏，已移走；当前恢复默认设置。"
-    rm -f "$SETTINGS_JSON"
+    invalid_file="${SETTINGS_JSON}.invalid.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    if mv -- "$SETTINGS_JSON" "$invalid_file" 2>/dev/null; then
+      chmod 600 "$invalid_file" 2>/dev/null || true
+      warn "设置文件损坏，已隔离到 ${invalid_file}；当前恢复默认设置。"
+    else
+      warn "设置文件损坏且无法安全隔离；当前忽略该文件并恢复默认设置。"
+    fi
     return 0
   fi
 
@@ -2995,7 +3069,7 @@ load_settings() {
     WARP_ENABLED="$warp"
     SETTINGS_CONFIGURED=1
   else
-    warn "设置文件中的优选地址、端口、节点名称或功能开关无效；当前恢复默认设置。"
+    warn "设置文件内容无效，当前恢复默认设置。"
   fi
 }
 
@@ -3285,17 +3359,60 @@ generate_identity() {
   save_state
 }
 
+service_marker_is_ours() {
+  local content=""
+  local line_count=""
+
+  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] || return 1
+  [[ "$SERVICE_MARKER" == "${SERVICE_HOME}/.managed-by-zdd-argo" ]] || return 1
+  secure_root_file "$SERVICE_MARKER" || return 1
+
+  IFS= read -r content < "$SERVICE_MARKER" || return 1
+  [[ "$content" == "$SERVICE_MARKER_CONTENT" ]] || return 1
+
+  line_count="$(wc -l < "$SERVICE_MARKER" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$line_count" == "1" ]]
+}
+
+service_marker_is_legacy_ours() {
+  local content=""
+  local line_count=""
+
+  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] || return 1
+  [[ "$SERVICE_MARKER" == "${SERVICE_HOME}/.managed-by-zdd-argo" ]] || return 1
+  secure_root_file "$SERVICE_MARKER" || return 1
+
+  IFS= read -r content < "$SERVICE_MARKER" || return 1
+  [[ "$content" == "zdd-argo 管理的低权限服务账户" ]] || return 1
+
+  line_count="$(wc -l < "$SERVICE_MARKER" 2>/dev/null | tr -d '[:space:]' || true)"
+  [[ "$line_count" == "1" ]]
+}
+
+service_marker_is_recognized() {
+  service_marker_is_ours || service_marker_is_legacy_ours
+}
+
+
 ensure_service_account() {
   local passwd_line=""
   local existing_home=""
+  local existing_gid=""
+  local expected_gid=""
+  local existing_shell=""
+  local marker_tmp=""
+  local path=""
+
+  for path in "$SERVICE_HOME" "$CLOUDFLARED_HOME" "$DATA_DIR"; do
+    if [[ -e "$path" || -L "$path" ]]; then
+      [[ -d "$path" && ! -L "$path" ]] \
+        || die "受管目录不是普通目录或属于符号链接，已停止部署：${path}"
+    fi
+  done
 
   if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    [[ -f "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]] \
-      || die "系统中已存在同名服务账户 ${SERVICE_USER}，但无法确认归属，已停止部署。"
-
-    local existing_gid=""
-    local expected_gid=""
-    local existing_shell=""
+    service_marker_is_recognized \
+      || die "系统中已存在同名服务账户 ${SERVICE_USER}，但无法通过完整归属校验，已停止部署。"
 
     passwd_line="$(getent passwd "$SERVICE_USER")"
     IFS=':' read -r _ _ _ existing_gid _ existing_home existing_shell <<< "$passwd_line"
@@ -3312,8 +3429,8 @@ ensure_service_account() {
       || die "服务账户 ${SERVICE_USER} 的登录 Shell 异常，已停止部署。"
   else
     if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-      [[ -f "$SERVICE_MARKER" ]] \
-        || die "系统中已存在同名服务组 ${SERVICE_GROUP}，但无法确认归属，已停止部署。"
+      service_marker_is_recognized \
+        || die "系统中已存在同名服务组 ${SERVICE_GROUP}，但无法通过完整归属校验，已停止部署。"
     else
       groupadd --system "$SERVICE_GROUP" \
         || die "无法创建低权限服务组 ${SERVICE_GROUP}。"
@@ -3336,11 +3453,14 @@ ensure_service_account() {
   chown root:"$SERVICE_GROUP" "$DATA_DIR"
   chmod 750 "$DATA_DIR"
 
-  if [[ ! -f "$SERVICE_MARKER" ]]; then
-    printf '%s\n' "zdd-argo 管理的低权限服务账户" > "$SERVICE_MARKER"
-  fi
-  chown root:root "$SERVICE_MARKER"
-  chmod 600 "$SERVICE_MARKER"
+  marker_tmp="$(mktemp "${SERVICE_HOME}/.managed-by-zdd-argo.XXXXXX")"
+  printf '%s\n' "$SERVICE_MARKER_CONTENT" > "$marker_tmp"
+  chown root:root "$marker_tmp"
+  chmod 600 "$marker_tmp"
+  mv -f -- "$marker_tmp" "$SERVICE_MARKER"
+
+  service_marker_is_ours \
+    || die "低权限服务账户归属标记写入后校验失败。"
 }
 
 valid_warp_account_file() {
@@ -3410,7 +3530,6 @@ ensure_warp_profile() {
     die "wgcf 未生成有效的 WireGuard 配置。"
   fi
 
-  rm -f "$WARP_PROFILE_FILE"
   mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
   chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
   ok "Cloudflare WARP 设备与 WireGuard 配置已重新生成并覆盖。"
@@ -3477,9 +3596,9 @@ load_warp_profile_parameters() {
     || die "WARP 私钥格式无效。"
   [[ "$WARP_PEER_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
     || die "WARP 对端公钥格式无效。"
-  [[ "$WARP_IPV4" =~ ^[0-9.]+/[0-9]{1,2}$ ]] \
+  valid_ipv4_cidr "$WARP_IPV4" \
     || die "WARP IPv4 地址格式无效。"
-  [[ "$WARP_IPV6" =~ ^[0-9A-Fa-f:]+/[0-9]{1,3}$ ]] \
+  valid_ipv6_cidr "$WARP_IPV6" \
     || die "WARP IPv6 地址格式无效。"
 
   if [[ "$endpoint" =~ ^\[([^]]+)\]:([0-9]{1,5})$ ]]; then
@@ -3642,7 +3761,8 @@ singbox_template_warp() {
               tls: {
                 enabled: true,
                 server_name: "cloudflare-dns.com"
-              }
+              },
+              detour: "direct"
             }
           ],
           final: "local-dns",
@@ -3703,7 +3823,8 @@ singbox_template_doh_warp() {
               tls: {
                 enabled: true,
                 server_name: "cloudflare-dns.com"
-              }
+              },
+              detour: "direct"
             },
             {
               type: "https",
@@ -3810,7 +3931,6 @@ write_singbox_config() {
 
   expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
 
-  rm -f "$SINGBOX_CONFIG"
   mv -f "$tmp" "$SINGBOX_CONFIG"
   chmod 640 "$SINGBOX_CONFIG"
   chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
@@ -3875,21 +3995,31 @@ find_free_loopback_port() {
 
 stop_checked_process() {
   local pid="$1"
+  local recorded_start="$2"
+  local actual_start=""
   local i=0
 
   [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  [[ "$recorded_start" =~ ^[0-9]+$ ]] || return 0
+
+  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+  [[ "$actual_start" == "$recorded_start" ]] || return 0
 
   kill -TERM "$pid" 2>/dev/null || true
 
   for ((i = 0; i < 5; i++)); do
-    if ! kill -0 "$pid" 2>/dev/null; then
+    actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+    if [[ "$actual_start" != "$recorded_start" ]]; then
       wait "$pid" 2>/dev/null || true
       return 0
     fi
     sleep 1
   done
 
-  kill -KILL "$pid" 2>/dev/null || true
+  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+  if [[ "$actual_start" == "$recorded_start" ]]; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
   wait "$pid" 2>/dev/null || true
 }
 
@@ -3994,6 +4124,7 @@ verify_warp_runtime() {
   local test_config=""
   local test_log=""
   local test_pid=""
+  local test_start=""
   local response=""
   local warp_state=""
   local exit_ip=""
@@ -4073,6 +4204,14 @@ verify_warp_runtime() {
   "$SINGBOX_BIN" run -c "$test_config" \
     > "$test_log" 2>&1 &
   test_pid=$!
+  test_start="$(process_start_time "$test_pid" 2>/dev/null || true)"
+
+  if [[ ! "$test_start" =~ ^[0-9]+$ ]]; then
+    kill -TERM "$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
+    rm -f "$test_config" "$test_log"
+    die "无法确认 WARP 自检客户端进程身份。"
+  fi
 
   for ((i = 1; i <= 15; i++)); do
     if ss -ltn 2>/dev/null \
@@ -4080,19 +4219,19 @@ verify_warp_runtime() {
       break
     fi
 
-    if ! kill -0 "$test_pid" 2>/dev/null; then
+    if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]]; then
       break
     fi
 
     sleep 1
   done
 
-  if ! kill -0 "$test_pid" 2>/dev/null \
+  if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]] \
       || ! ss -ltn 2>/dev/null \
         | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
     warn "WARP 自检客户端未能正常启动，日志如下："
     tail -n 100 "$test_log" >&2 || true
-    stop_checked_process "$test_pid"
+    stop_checked_process "$test_pid" "$test_start"
     rm -f "$test_config" "$test_log"
     die "WARP 运行时自检客户端启动失败。"
   fi
@@ -4173,7 +4312,7 @@ verify_warp_runtime() {
     warn "WARP Endpoint UDP ${port} 未通过实际链路自检。"
   done
 
-  stop_checked_process "$test_pid"
+  stop_checked_process "$test_pid" "$test_start"
   rm -f "$test_config"
 
   if [[ -z "$selected_port" ]]; then
@@ -4215,15 +4354,19 @@ verify_warp_runtime() {
 
 singbox_unit_is_ours() {
   [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-  grep -Fqx "$SINGBOX_UNIT_MARKER" "$SINGBOX_UNIT" 2>/dev/null || return 1
 
   case "$INIT_SYSTEM" in
     systemd)
-      grep -Fq "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
+      grep -Fqx "Description=zdd-argo dedicated sing-box service managed-v0.1.0" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "User=${SERVICE_USER}" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "Group=${SERVICE_GROUP}" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
       ;;
     openrc)
-      grep -Fq "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fq "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null
+      grep -Fqx 'zdd_argo_managed="0.1.0"' "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$SINGBOX_UNIT" 2>/dev/null
       ;;
     *)
       return 1
@@ -4233,12 +4376,30 @@ singbox_unit_is_ours() {
 
 singbox_unit_is_legacy_ours() {
   [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-  grep -Fq 'zdd-argo' "$SINGBOX_UNIT" 2>/dev/null \
-    && grep -Fq "run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      grep -Fq "zdd-argo" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "User=${SERVICE_USER}" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "Group=${SERVICE_GROUP}" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
+      ;;
+    openrc)
+      grep -Fq "zdd-argo" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null \
+        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$SINGBOX_UNIT" 2>/dev/null
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 write_singbox_service() {
   [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box 可执行文件。"
+  [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]] \
+    || die "当前 sing-box 不是脚本专用二进制，拒绝写入受管服务。"
   ensure_service_account
 
   if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
@@ -4251,9 +4412,8 @@ write_singbox_service() {
 
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     cat > "$tmp" <<EOF
-${SINGBOX_UNIT_MARKER}
 [Unit]
-Description=zdd-argo 专用 sing-box 服务
+Description=zdd-argo dedicated sing-box service managed-v0.1.0
 After=network-online.target
 Wants=network-online.target
 
@@ -4261,7 +4421,7 @@ Wants=network-online.target
 Type=simple
 User=${SERVICE_USER}
 Group=${SERVICE_GROUP}
-ExecStart=${SINGBOX_BIN} run -c ${SINGBOX_CONFIG}
+ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}
 Restart=on-failure
 RestartSec=3s
 LimitNOFILE=1048576
@@ -4288,13 +4448,12 @@ EOF
 
     install -m 0644 "$tmp" "$SINGBOX_UNIT"
   elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-    cat > "$tmp" <<EOF
-#!/sbin/openrc-run
-${SINGBOX_UNIT_MARKER}
-
+    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
+    cat >> "$tmp" <<EOF
+zdd_argo_managed="0.1.0"
 name="zdd-argo 专用 sing-box 服务"
 description="zdd-argo dedicated sing-box service"
-command="${SINGBOX_BIN}"
+command="${MANAGED_SINGBOX_BIN}"
 command_args="run -c ${SINGBOX_CONFIG}"
 command_user="${SERVICE_USER}:${SERVICE_GROUP}"
 pidfile="/run/${SERVICE_NAME}.pid"
@@ -4325,24 +4484,8 @@ EOF
   service_daemon_reload
 }
 
-logrotate_config_is_ours() {
-  [[ -f "$LOGROTATE_CONFIG" && ! -L "$LOGROTATE_CONFIG" ]] || return 1
-  grep -Fqx "$LOGROTATE_MARKER" "$LOGROTATE_CONFIG" 2>/dev/null \
-    && grep -Fq "$LOG_FILE" "$LOGROTATE_CONFIG" 2>/dev/null
-}
-
-write_logrotate_config() {
-  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    logrotate_config_is_ours \
-      || die "日志轮转配置路径已被其他程序占用：${LOGROTATE_CONFIG}"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp)"
-  mkdir -p "$(dirname -- "$LOGROTATE_CONFIG")"
-
-  cat > "$tmp" <<EOF
-${LOGROTATE_MARKER}
+render_logrotate_config() {
+  cat <<EOF
 ${LOG_FILE} ${SINGBOX_LOG_FILE} {
     size 5M
     rotate 3
@@ -4354,6 +4497,36 @@ ${LOG_FILE} ${SINGBOX_LOG_FILE} {
     su root root
 }
 EOF
+}
+
+logrotate_config_is_ours() {
+  local expected=""
+  local actual=""
+
+  [[ -f "$LOGROTATE_CONFIG" && ! -L "$LOGROTATE_CONFIG" ]] || return 1
+  expected="$(render_logrotate_config)"
+  actual="$(cat "$LOGROTATE_CONFIG" 2>/dev/null || true)"
+  [[ "$actual" == "$expected" ]]
+}
+
+logrotate_config_is_legacy_ours() {
+  [[ -f "$LOGROTATE_CONFIG" && ! -L "$LOGROTATE_CONFIG" ]] || return 1
+  grep -Fqx '# 由 zdd-argo v0.1.0 管理' "$LOGROTATE_CONFIG" 2>/dev/null \
+    && grep -Fqx "${LOG_FILE} ${SINGBOX_LOG_FILE} {" "$LOGROTATE_CONFIG" 2>/dev/null \
+    && grep -Fqx "    copytruncate" "$LOGROTATE_CONFIG" 2>/dev/null
+}
+
+write_logrotate_config() {
+  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
+    logrotate_config_is_ours || logrotate_config_is_legacy_ours \
+      || die "日志轮转配置路径已被其他程序占用：${LOGROTATE_CONFIG}"
+  fi
+
+  local tmp=""
+  tmp="$(mktemp)"
+  mkdir -p "$(dirname -- "$LOGROTATE_CONFIG")"
+
+  render_logrotate_config > "$tmp"
 
   install -m 0644 "$tmp" "$LOGROTATE_CONFIG"
   rm -f "$tmp"
@@ -4494,8 +4667,8 @@ write_cloudflared_runner() {
 
   tmp="$(mktemp)"
 
-  cat > "$tmp" <<EOF
-#!/usr/bin/env bash
+  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
+  cat >> "$tmp" <<EOF
 set -Eeuo pipefail
 IFS=\$'\\n\\t'
 umask 077
@@ -4980,6 +5153,29 @@ deployment_transaction_exit_handler() {
   release_lock
 }
 
+transaction_dir_is_safe() {
+  local dir="$1"
+  local uid=""
+  local mode=""
+
+  [[ "$dir" == /tmp/zdd-argo-transaction.* \
+    && -d "$dir" \
+    && ! -L "$dir" ]] \
+    || return 1
+
+  uid="$(stat -Lc '%u' "$dir" 2>/dev/null || true)"
+  mode="$(stat -Lc '%a' "$dir" 2>/dev/null || true)"
+  [[ "$uid" == "0" && "$mode" == "700" ]]
+}
+
+cleanup_transaction_dir() {
+  local dir="${1:-}"
+
+  [[ -n "$dir" ]] || return 0
+  transaction_dir_is_safe "$dir" || return 1
+  rm -rf -- "$dir"
+}
+
 deployment_transaction_begin() {
   [[ $TRANSACTION_ACTIVE -eq 0 ]] || die "部署事务已经处于活动状态。"
 
@@ -4987,9 +5183,17 @@ deployment_transaction_begin() {
   TRANSACTION_OLD_SERVICE_ACTIVE=0
   TRANSACTION_OLD_TUNNEL_RUNNING=0
   TRANSACTION_OLD_SERVICE_ACCOUNT=0
+  TRANSACTION_OLD_SERVICE_GROUP=0
+  TRANSACTION_OLD_SERVICE_HOME=0
 
   if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
     TRANSACTION_OLD_SERVICE_ACCOUNT=1
+  fi
+  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+    TRANSACTION_OLD_SERVICE_GROUP=1
+  fi
+  if [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]]; then
+    TRANSACTION_OLD_SERVICE_HOME=1
   fi
 
   if service_is_active; then
@@ -5000,19 +5204,38 @@ deployment_transaction_begin() {
   fi
 
   if [[ -d "$DATA_DIR" ]]; then
-    cp -a "$DATA_DIR" "${TRANSACTION_DIR}/data"
+    if ! cp -a "$DATA_DIR" "${TRANSACTION_DIR}/data"; then
+      cleanup_transaction_dir "$TRANSACTION_DIR" || true
+      TRANSACTION_DIR=""
+      die "无法备份现有 zdd-argo 数据目录，部署尚未修改系统。"
+    fi
     : > "${TRANSACTION_DIR}/had-data"
   fi
+
   if [[ -d "$BIN_DIR" ]]; then
-    cp -a "$BIN_DIR" "${TRANSACTION_DIR}/bin"
+    if ! cp -a "$BIN_DIR" "${TRANSACTION_DIR}/bin"; then
+      cleanup_transaction_dir "$TRANSACTION_DIR" || true
+      TRANSACTION_DIR=""
+      die "无法备份现有 zdd-argo 程序目录，部署尚未修改系统。"
+    fi
     : > "${TRANSACTION_DIR}/had-bin"
   fi
+
   if [[ -f "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
-    cp -a "$SINGBOX_UNIT" "${TRANSACTION_DIR}/sing-box.service"
+    if ! cp -a "$SINGBOX_UNIT" "${TRANSACTION_DIR}/sing-box.service"; then
+      cleanup_transaction_dir "$TRANSACTION_DIR" || true
+      TRANSACTION_DIR=""
+      die "无法备份现有 sing-box 服务文件，部署尚未修改系统。"
+    fi
     : > "${TRANSACTION_DIR}/had-unit"
   fi
+
   if [[ -f "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    cp -a "$LOGROTATE_CONFIG" "${TRANSACTION_DIR}/logrotate"
+    if ! cp -a "$LOGROTATE_CONFIG" "${TRANSACTION_DIR}/logrotate"; then
+      cleanup_transaction_dir "$TRANSACTION_DIR" || true
+      TRANSACTION_DIR=""
+      die "无法备份现有日志轮转配置，部署尚未修改系统。"
+    fi
     : > "${TRANSACTION_DIR}/had-logrotate"
   fi
 
@@ -5022,7 +5245,11 @@ deployment_transaction_begin() {
 deployment_transaction_commit() {
   [[ $TRANSACTION_ACTIVE -eq 1 ]] || return 0
   TRANSACTION_ACTIVE=0
-  rm -rf "$TRANSACTION_DIR"
+
+  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
+    warn "部署已提交，但事务临时目录无法通过安全校验或清理失败：${TRANSACTION_DIR}"
+  fi
+
   TRANSACTION_DIR=""
 }
 
@@ -5034,27 +5261,37 @@ deployment_transaction_rollback() {
 
   warn "${reason}。"
 
-  stop_tunnel >/dev/null 2>&1 || true
+  if ! managed_paths_are_safe; then
+    warn "受管路径安全校验失败，未执行破坏性回滚；事务备份保留在：${TRANSACTION_DIR}"
+    TRANSACTION_DIR=""
+    return 0
+  fi
+
+  (stop_tunnel) >/dev/null 2>&1 || true
 
   if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
     service_disable_now || true
   fi
 
-  rm -rf "$DATA_DIR"
-  rm -rf "$BIN_DIR"
-  rm -f "$SINGBOX_UNIT" "$LOGROTATE_CONFIG"
+  rm -rf -- "$DATA_DIR"
+  rm -rf -- "$BIN_DIR"
+  rm -f -- "$SINGBOX_UNIT" "$LOGROTATE_CONFIG"
 
   if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
-    cp -a "${TRANSACTION_DIR}/data" "$DATA_DIR"
+    cp -a "${TRANSACTION_DIR}/data" "$DATA_DIR" \
+      || warn "回滚数据目录失败：${DATA_DIR}"
   fi
   if [[ -f "${TRANSACTION_DIR}/had-bin" ]]; then
-    cp -a "${TRANSACTION_DIR}/bin" "$BIN_DIR"
+    cp -a "${TRANSACTION_DIR}/bin" "$BIN_DIR" \
+      || warn "回滚程序目录失败：${BIN_DIR}"
   fi
   if [[ -f "${TRANSACTION_DIR}/had-unit" ]]; then
-    cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT"
+    cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT" \
+      || warn "回滚服务文件失败：${SINGBOX_UNIT}"
   fi
   if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
-    cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG"
+    cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
+      || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
   fi
 
   service_daemon_reload
@@ -5070,22 +5307,41 @@ deployment_transaction_rollback() {
   if [[ $TRANSACTION_OLD_TUNNEL_RUNNING -eq 1 \
       && -x "$CLOUDFLARED_RUNNER" \
       && -f "$STATE_JSON" ]]; then
-    load_state >/dev/null 2>&1 || true
-    if service_is_active; then
-      start_tunnel >/dev/null 2>&1 || true
-    fi
+    (
+      load_state
+      if service_is_active; then
+        start_tunnel
+      fi
+    ) >/dev/null 2>&1 || true
   fi
 
   if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]]; then
-    remove_service_account >/dev/null 2>&1 || true
+    (remove_service_account) >/dev/null 2>&1 || true
+
+    if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+      if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
+          && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
+      fi
+
+      if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 \
+          && -d "$SERVICE_HOME" \
+          && ! -L "$SERVICE_HOME" ]]; then
+        rm -rf -- "$SERVICE_HOME"
+      fi
+    fi
   fi
 
-  rm -rf "$TRANSACTION_DIR"
+  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
+    warn "事务回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
+  fi
   TRANSACTION_DIR=""
+
   warn "已执行回滚；Quick Tunnel 域名无法原样恢复，若旧隧道曾运行，脚本已尽力重新创建。"
 }
 
 prepare_deployment() {
+  load_settings
   install_singbox_if_needed
   install_cloudflared_if_needed
   ensure_service_account
@@ -5094,7 +5350,6 @@ prepare_deployment() {
   chown root:"$SERVICE_GROUP" "$DATA_DIR"
   chmod 750 "$DATA_DIR"
 
-  load_settings
   if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
     PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
     LOCAL_PORT="$DEFAULT_LOCAL_PORT"
@@ -5373,6 +5628,8 @@ show_status() {
 command_update_singbox() {
   local had_deployment=0
 
+  load_settings
+
   if [[ -f "$SINGBOX_CONFIG" \
       || -f "$SINGBOX_UNIT" ]]; then
     had_deployment=1
@@ -5403,6 +5660,8 @@ command_update_singbox() {
 
 command_update_cloudflared() {
   local had_deployment=0
+
+  load_settings
 
   if [[ -f "$CLOUDFLARED_RUNNER" \
       || -f "$STATE_JSON" ]]; then
@@ -5448,6 +5707,7 @@ command_update_components() {
 }
 
 remove_zdd_components() {
+  assert_safe_managed_paths
   load_settings
   resolve_singbox_bin
   resolve_cloudflared_bin
@@ -5463,7 +5723,7 @@ remove_zdd_components() {
   fi
 
   if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    if logrotate_config_is_ours; then
+    if logrotate_config_is_ours || logrotate_config_is_legacy_ours; then
       rm -f "$LOGROTATE_CONFIG"
     else
       warn "日志轮转配置不是本项目创建的，未删除：${LOGROTATE_CONFIG}"
@@ -5479,7 +5739,6 @@ remove_zdd_components() {
     "$LOG_FILE".* \
     "$SINGBOX_LOG_FILE" \
     "$SINGBOX_LOG_FILE".*
-  rm -rf -- /tmp/zdd-argo-transaction.*
 }
 
 confirm_yes() {
@@ -5496,42 +5755,42 @@ confirm_yes() {
 }
 
 resolve_recorded_source() {
-  local source=""
-  local expected_sha=""
+  local -a lines=()
 
-  if secure_root_file "$SOURCE_RECORD_FILE"; then
-    IFS= read -r source < "$SOURCE_RECORD_FILE" || source=""
-    expected_sha="$(sed -n '2p' "$SOURCE_RECORD_FILE" 2>/dev/null || true)"
-  fi
+  secure_root_file "$SOURCE_RECORD_FILE" || return 1
+  mapfile -t lines < "$SOURCE_RECORD_FILE"
 
-  if [[ -z "$source" || "$source" != /* || "$source" == "$MANAGED_SCRIPT_PATH" ]]; then
-    source="$DEFAULT_SOURCE_PATH"
-    expected_sha=""
-  fi
+  [[ ${#lines[@]} -eq 2 ]] || return 1
+  [[ "${lines[0]}" == /* \
+    && "${lines[0]}" != "$MANAGED_SCRIPT_PATH" \
+    && "${lines[0]}" != *$'\n'* \
+    && "${lines[0]}" != *$'\r'* ]] \
+    || return 1
+  [[ "${lines[1]}" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
 
-  printf '%s\n%s\n' "$source" "$expected_sha"
+  printf '%s\n%s\n' "${lines[0]}" "${lines[1],,}"
 }
 
 remove_downloaded_source_if_confirmed() {
+  local record=""
+  local -a lines=()
   local source=""
   local expected_sha=""
   local actual_sha=""
   local owner_uid=""
 
-  {
-    IFS= read -r source || source=""
-    IFS= read -r expected_sha || expected_sha=""
-  } < <(resolve_recorded_source)
-
-  [[ -n "$source" ]] || return 0
-
-  if [[ ! -e "$source" && ! -L "$source" ]]; then
-    info "未发现安装源文件：${source}"
+  if ! record="$(resolve_recorded_source 2>/dev/null)"; then
+    info "未找到可信且完整的安装源记录，不自动定位或删除 root 目录中的其他脚本。"
     return 0
   fi
 
-  if ! confirm_yes "是否同时删除安装源文件 ${source}？请输入 yes："; then
-    info "已保留安装源文件：${source}"
+  mapfile -t lines <<< "$record"
+  [[ ${#lines[@]} -eq 2 ]] || return 0
+  source="${lines[0]}"
+  expected_sha="${lines[1]}"
+
+  if [[ ! -e "$source" && ! -L "$source" ]]; then
+    info "已记录的安装源文件不存在：${source}"
     return 0
   fi
 
@@ -5551,12 +5810,16 @@ remove_downloaded_source_if_confirmed() {
     return 0
   fi
 
-  if [[ "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
-    actual_sha="$(sha256sum "$source" | awk '{print $1}')"
-    if [[ "${actual_sha,,}" != "${expected_sha,,}" ]]; then
-      warn "安装源文件内容已发生变化，未删除：${source}"
-      return 0
-    fi
+  actual_sha="$(sha256sum "$source" | awk '{print $1}')"
+  if [[ ! "$actual_sha" =~ ^[0-9a-fA-F]{64}$ \
+      || "${actual_sha,,}" != "$expected_sha" ]]; then
+    warn "安装源文件内容与安装时记录不一致，未删除：${source}"
+    return 0
+  fi
+
+  if ! confirm_yes "是否同时删除安装源文件 ${source}？请输入 yes："; then
+    info "已保留安装源文件：${source}"
+    return 0
   fi
 
   rm -f -- "$source" \
@@ -5589,14 +5852,6 @@ remove_shortcuts() {
       rm -f "$path"
     elif path_is_replaceable_zdd_launcher "$path"; then
       rm -f "$path"
-    elif [[ "$path" == "$LEGACY_SHORTCUT_PATH" \
-        || "$path" == "$LEGACY_SHORTCUT_BIN" ]]; then
-      if grep -Fq \
-          'zdd-argo' \
-          "$path" \
-          2>/dev/null; then
-        rm -f "$path"
-      fi
     else
       info "检测到非本项目创建的快捷命令，出于安全已保留：${path}"
     fi
@@ -5726,33 +5981,71 @@ stop_service_account_processes() {
   return 0
 }
 
+validate_service_account_removal() {
+  local passwd_line=""
+  local existing_home=""
+  local existing_gid=""
+  local expected_gid=""
+
+  if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+    service_marker_is_recognized \
+      || die "低权限服务账户无法通过完整归属校验，卸载尚未修改系统：${SERVICE_USER}"
+
+    passwd_line="$(getent passwd "$SERVICE_USER")"
+    IFS=':' read -r _ _ _ existing_gid _ existing_home _ <<< "$passwd_line"
+    expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
+
+    [[ "$existing_home" == "$SERVICE_HOME" ]] \
+      || die "低权限服务账户主目录不匹配，卸载尚未修改系统：${SERVICE_USER}"
+    [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
+      || die "低权限服务账户主组不匹配，卸载尚未修改系统：${SERVICE_USER}"
+  elif [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]]; then
+    service_marker_is_recognized \
+      || die "服务账户标记无法通过完整归属校验，卸载尚未修改系统：${SERVICE_MARKER}"
+    [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
+      || die "低权限服务主目录不是普通目录，卸载尚未修改系统：${SERVICE_HOME}"
+  fi
+}
+
 remove_service_account() {
   local passwd_line=""
   local existing_home=""
+  local existing_gid=""
+  local expected_gid=""
   local service_uid=""
   local userdel_error=""
 
+  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] \
+    || die "低权限服务账户主目录常量异常，拒绝卸载账户。"
+
   if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    if [[ -f "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]]; then
-      groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
-      rm -rf "$SERVICE_HOME"
+    if [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]]; then
+      service_marker_is_recognized \
+        || die "检测到无法确认归属的服务账户标记，已保留服务组和主目录：${SERVICE_MARKER}"
+
+      if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
+          || die "无法删除低权限服务组 ${SERVICE_GROUP}。"
+      fi
+
+      [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
+        || die "低权限服务主目录不是普通目录，拒绝删除：${SERVICE_HOME}"
+      rm -rf -- "$SERVICE_HOME"
     fi
     return 0
   fi
 
-  if [[ ! -f "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]]; then
-    warn "低权限服务账户无法确认归属，未删除：${SERVICE_USER}"
-    return 0
-  fi
+  service_marker_is_recognized \
+    || die "低权限服务账户无法通过完整归属校验，已停止卸载：${SERVICE_USER}"
 
   passwd_line="$(getent passwd "$SERVICE_USER")"
-  IFS=':' read -r _ _ service_uid _ _ existing_home _ <<< "$passwd_line"
+  IFS=':' read -r _ _ service_uid existing_gid _ existing_home _ <<< "$passwd_line"
+  expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
 
-  if [[ "$existing_home" != "$SERVICE_HOME" ]]; then
-    warn "低权限服务账户主目录不匹配，未删除：${SERVICE_USER}"
-    return 0
-  fi
-
+  [[ "$existing_home" == "$SERVICE_HOME" ]] \
+    || die "低权限服务账户主目录不匹配，已停止卸载：${SERVICE_USER}"
+  [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
+    || die "低权限服务账户主组不匹配，已停止卸载：${SERVICE_USER}"
   [[ "$service_uid" =~ ^[0-9]+$ ]] \
     || die "无法读取低权限服务账户 ${SERVICE_USER} 的 UID。"
 
@@ -5780,7 +6073,9 @@ remove_service_account() {
       || die "无法删除低权限服务组 ${SERVICE_GROUP}。"
   fi
 
-  rm -rf "$SERVICE_HOME"
+  [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
+    || die "低权限服务主目录不是普通目录，拒绝删除：${SERVICE_HOME}"
+  rm -rf -- "$SERVICE_HOME"
 }
 
 command_uninstall_all() {
@@ -5792,13 +6087,14 @@ command_uninstall_all() {
     return 0
   fi
 
+  validate_service_account_removal
   remove_zdd_components
+  remove_service_account
   remove_singbox_program
   remove_cloudflared_program
   remove_wgcf_program
   remove_shortcuts
   remove_managed_script
-  remove_service_account
   service_daemon_reload
   remove_downloaded_source_if_confirmed
   cleanup_bin_dir
@@ -5975,10 +6271,32 @@ EOF
   done
 }
 
+managed_paths_are_safe() {
+  [[ "$DATA_DIR" == "/etc/zdd-argo" \
+    && "$BIN_DIR" == "/usr/local/lib/zdd-argo" \
+    && "$SERVICE_HOME" == "/var/lib/zdd-argo" \
+    && "$LOCK_DIR" == "/run/lock/zdd-argo.lock.d" \
+    && "$SINGBOX_SYSTEMD_UNIT" == "/etc/systemd/system/zdd-argo-singbox.service" \
+    && "$SINGBOX_OPENRC_SERVICE" == "/etc/init.d/zdd-argo-singbox" \
+    && "$LOGROTATE_CONFIG" == "/etc/logrotate.d/zdd-argo-cloudflared" ]] \
+    || return 1
+
+  local path=""
+  for path in "$DATA_DIR" "$BIN_DIR" "$SERVICE_HOME"; do
+    [[ ! -L "$path" ]] || return 1
+  done
+}
+
+assert_safe_managed_paths() {
+  managed_paths_are_safe \
+    || die "受管路径常量异常或路径属于符号链接，拒绝继续。"
+}
+
 bootstrap() {
   require_root
   check_os
-
+  assert_safe_managed_paths
+  install_dependencies
   install_shortcut
 }
 
