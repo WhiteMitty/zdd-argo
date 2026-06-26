@@ -1,19 +1,20 @@
 #!/usr/bin/env bash
-# zdd-argo：Debian / Ubuntu / Alpine 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
-# 版本：v0.1.0；安装后的管理命令：zargo
-# 构建标识：UTF8-ALIGN-UNINSTALL-ALPINE-20260624
 
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0-r8"
+SCRIPT_VERSION="0.1.0"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
+DEFAULT_DOH_ENABLED="0"
+DEFAULT_WARP_ENABLED="0"
 NODE_NAME="$DEFAULT_NODE_NAME"
 LOCAL_PORT="$DEFAULT_LOCAL_PORT"
 PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
+DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+WARP_ENABLED="$DEFAULT_WARP_ENABLED"
 ECH_CONFIG="cloudflare-ech.com+https://dns.jhb.ovh/joeyblog"
 SETTINGS_CONFIGURED=0
 TMUX_SESSION="zdd-argo"
@@ -45,6 +46,9 @@ VMESS_JSON_FILE="${DATA_DIR}/vmess.json"
 VMESS_LINK_FILE="${DATA_DIR}/vmess.txt"
 ECH_NOTE_FILE="${DATA_DIR}/ech.txt"
 SETTINGS_JSON="${DATA_DIR}/settings.json"
+WARP_DIR="${DATA_DIR}/warp"
+WARP_ACCOUNT_FILE="${WARP_DIR}/wgcf-account.toml"
+WARP_PROFILE_FILE="${WARP_DIR}/wgcf-profile.conf"
 LOCK_DIR="/run/lock/zdd-argo.lock.d"
 LOCK_OWNER_FILE="${LOCK_DIR}/owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
@@ -54,14 +58,14 @@ LEGACY_ZDD_PATHS=("/usr/bin/zdd" "/usr/local/sbin/zdd" "/usr/local/bin/zdd")
 LEGACY_SHORTCUT_PATH="/usr/local/sbin/zdd-argo"
 LEGACY_SHORTCUT_BIN="/usr/local/bin/zdd-argo"
 
-# 脚本使用独立目录保存经过 GitHub Release SHA-256 摘要校验的二进制，
-# 不覆盖系统中可能由 apt 或其他脚本维护的 sing-box / cloudflared。
 BIN_DIR="/usr/local/lib/zdd-argo"
 MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"
 MANAGED_SINGBOX_BIN="${BIN_DIR}/sing-box"
 MANAGED_CLOUDFLARED_BIN="${BIN_DIR}/cloudflared"
+MANAGED_WGCF_BIN="${BIN_DIR}/wgcf"
 SINGBOX_RELEASE_META="${BIN_DIR}/sing-box.release.json"
 CLOUDFLARED_RELEASE_META="${BIN_DIR}/cloudflared.release.json"
+WGCF_RELEASE_META="${BIN_DIR}/wgcf.release.json"
 GITHUB_API_BASE="https://api.github.com"
 
 SCRIPT_PATH=""
@@ -71,6 +75,14 @@ ARGO_HOST=""
 CREATED_AT=""
 SINGBOX_BIN=""
 CLOUDFLARED_BIN=""
+WGCF_BIN=""
+WARP_PRIVATE_KEY=""
+WARP_IPV4=""
+WARP_IPV6=""
+WARP_PEER_PUBLIC_KEY=""
+WARP_ENDPOINT_IP=""
+WARP_ENDPOINT_PORT=""
+WARP_MTU="1280"
 MENU_MODE=0
 LOCK_HELD=0
 LOCK_OWNER_PID=""
@@ -679,6 +691,15 @@ cloudflared_version_ok() {
   [[ "${first_line,,}" == cloudflared\ version\ * ]]
 }
 
+wgcf_version_ok() {
+  local binary="$1"
+  local help_text=""
+
+  help_text="$("$binary" --help 2>&1 || true)"
+  [[ "$help_text" == *"WireGuard Cloudflare Warp utility"* \
+    || "$help_text" == *"wgcf is a utility for Cloudflare Warp"* ]]
+}
+
 install_dependencies() {
   local missing=0
   local cmd=""
@@ -1102,7 +1123,10 @@ wait_for_process_exit() {
 lock_operation_label() {
   case "${1:-unknown}" in
     command_generate_noninteractive)
-      printf '%s' "无交互生成 / 重建 Argo"
+      printf '%s' "无交互生成 / 重建 Argo（直接出站）"
+      ;;
+    command_generate_noninteractive_doh_warp)
+      printf '%s' "无交互生成 / 重建 Argo（DoH + WARP 出站）"
       ;;
     command_generate_custom)
       printf '%s' "自定义生成 / 重建 Argo"
@@ -1111,13 +1135,13 @@ lock_operation_label() {
       printf '%s' "查看当前订阅"
       ;;
     command_update_components)
-      printf '%s' "更新 sing-box 和 cloudflared"
+      printf '%s' "更新 sing-box、cloudflared 和 WARP 工具"
       ;;
     command_stop_clear_cache)
       printf '%s' "断开当前 Argo 并清理临时缓存"
       ;;
     command_uninstall_all)
-      printf '%s' "卸载 zdd-argo 及核心组件"
+      printf '%s' "卸载 zdd-argo 及核心组件（含 wgcf）"
       ;;
     *)
       printf '%s' "未知操作"
@@ -1655,6 +1679,18 @@ resolve_cloudflared_bin() {
     CLOUDFLARED_BIN="$(command -v cloudflared)"
   elif [[ -x /usr/local/bin/cloudflared ]]; then
     CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
+  fi
+}
+
+resolve_wgcf_bin() {
+  WGCF_BIN=""
+
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    WGCF_BIN="$MANAGED_WGCF_BIN"
+  elif command -v wgcf >/dev/null 2>&1; then
+    WGCF_BIN="$(command -v wgcf)"
+  elif [[ -x /usr/local/bin/wgcf ]]; then
+    WGCF_BIN="/usr/local/bin/wgcf"
   fi
 }
 
@@ -2422,6 +2458,183 @@ install_cloudflared_if_needed() {
   install_or_update_cloudflared
 }
 
+install_or_update_wgcf() {
+  local arch=""
+  local asset_regex=""
+  local info_line=""
+  local asset_name=""
+  local asset_url=""
+  local digest=""
+  local release_tag=""
+  local tmp_file=""
+  local new_binary=""
+  local backup=""
+  local meta_backup=""
+  local before="未安装"
+  local after=""
+  local had_managed=0
+
+  arch="$(uname -m)"
+
+  case "$arch" in
+    x86_64|amd64)
+      asset_regex='^wgcf_[0-9][0-9.]*_linux_amd64$'
+      ;;
+
+    aarch64|arm64)
+      asset_regex='^wgcf_[0-9][0-9.]*_linux_arm64$'
+      ;;
+
+    *)
+      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；wgcf 当前仅启用 amd64 与 arm64。")"
+      ;;
+  esac
+
+  resolve_wgcf_bin
+
+  if [[ -f "$WGCF_RELEASE_META" ]]; then
+    before="$(jq -r '.tag // "未知"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "未知")"
+  elif [[ -n "$WGCF_BIN" ]]; then
+    before="已安装（外部版本）"
+  fi
+
+  info "查询 wgcf GitHub 最新稳定版……"
+
+  info_line="$(
+    github_latest_asset_info \
+      "ViRb3/wgcf" \
+      "$asset_regex"
+  )"
+
+  IFS=$'\t' read -r \
+    asset_name \
+    asset_url \
+    digest \
+    release_tag \
+    <<< "$info_line"
+
+  [[ -n "$asset_name" \
+    && -n "$asset_url" \
+    && -n "$release_tag" ]] \
+    || die "wgcf Release 信息不完整。"
+
+  tmp_file="$(mktemp)"
+
+  if ! safe_download "$asset_url" "$tmp_file"; then
+    rm -f "$tmp_file"
+    die "wgcf 下载失败。"
+  fi
+
+  verify_github_asset \
+    "ViRb3/wgcf" \
+    "$asset_name" \
+    "$asset_url" \
+    "$digest" \
+    "$tmp_file"
+
+  chmod 0755 "$tmp_file"
+
+  if ! wgcf_version_ok "$tmp_file"; then
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      ensure_alpine_binary_compat || true
+    fi
+  fi
+
+  if ! wgcf_version_ok "$tmp_file"; then
+    print_binary_run_error "$tmp_file" --help
+    rm -f "$tmp_file"
+    die "wgcf 新二进制无法通过自检。"
+  fi
+
+  mkdir -p "$BIN_DIR"
+  chmod 0755 "$BIN_DIR"
+
+  new_binary="${MANAGED_WGCF_BIN}.new.$$"
+  backup="${MANAGED_WGCF_BIN}.backup.$$"
+  meta_backup="${WGCF_RELEASE_META}.backup.$$"
+
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    cp -a "$MANAGED_WGCF_BIN" "$backup"
+    had_managed=1
+  fi
+
+  if [[ -f "$WGCF_RELEASE_META" ]]; then
+    cp -a "$WGCF_RELEASE_META" "$meta_backup"
+  fi
+
+  install -m 0755 "$tmp_file" "$new_binary"
+  rm -f "$tmp_file"
+  mv -f "$new_binary" "$MANAGED_WGCF_BIN"
+
+  if ! write_release_metadata \
+      "$WGCF_RELEASE_META" \
+      "ViRb3/wgcf" \
+      "$release_tag" \
+      "$asset_name" \
+      "$digest"; then
+
+    warn "wgcf 元数据写入失败，正在回滚……"
+
+    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
+      mv -f "$backup" "$MANAGED_WGCF_BIN"
+    else
+      rm -f "$MANAGED_WGCF_BIN"
+    fi
+
+    if [[ -f "$meta_backup" ]]; then
+      mv -f "$meta_backup" "$WGCF_RELEASE_META"
+    else
+      rm -f "$WGCF_RELEASE_META"
+    fi
+
+    hash -r
+    resolve_wgcf_bin
+    die "wgcf 更新失败，已恢复旧版本。"
+  fi
+
+  hash -r
+  resolve_wgcf_bin
+
+  if [[ "$WGCF_BIN" != "$MANAGED_WGCF_BIN" ]] \
+      || ! wgcf_version_ok "$MANAGED_WGCF_BIN"; then
+
+    warn "wgcf 安装后校验失败，正在回滚……"
+
+    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
+      mv -f "$backup" "$MANAGED_WGCF_BIN"
+    else
+      rm -f "$MANAGED_WGCF_BIN"
+    fi
+
+    if [[ -f "$meta_backup" ]]; then
+      mv -f "$meta_backup" "$WGCF_RELEASE_META"
+    else
+      rm -f "$WGCF_RELEASE_META"
+    fi
+
+    hash -r
+    resolve_wgcf_bin
+    die "wgcf 更新失败，已恢复旧版本。"
+  fi
+
+  rm -f "$backup" "$meta_backup"
+  after="$release_tag"
+
+  print_kv "更新前：" "$before" 14
+  print_kv "更新后：" "$after" 14
+  ok "wgcf 已通过 GitHub Release SHA-256 摘要校验。"
+}
+
+install_wgcf_if_needed() {
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    resolve_wgcf_bin
+    return 0
+  fi
+
+  info "安装脚本专用 wgcf；不会覆盖系统中由其他方式安装的同名程序。"
+  install_or_update_wgcf
+}
+
 valid_uuid() {
   [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
 }
@@ -2636,14 +2849,93 @@ valid_preferred_endpoint() {
     || valid_domain_name "$value"
 }
 
+valid_feature_flag() {
+  [[ "$1" == "0" || "$1" == "1" ]]
+}
+
+feature_label() {
+  if [[ "${1:-0}" == "1" ]]; then
+    printf '%s' "已启用"
+  else
+    printf '%s' "未启用"
+  fi
+}
+
+normalize_feature_flag() {
+  case "${1,,}" in
+    1|true|yes|y|on|enable|enabled)
+      printf '%s' "1"
+      ;;
+    0|false|no|n|off|disable|disabled)
+      printf '%s' "0"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+read_feature_choice() {
+  local variable_name="$1"
+  local label="$2"
+  local current="$3"
+  local input=""
+  local normalized=""
+  local hint="Y/n"
+
+  [[ "$current" == "1" ]] || hint="y/N"
+
+  while true; do
+    read_interactive input "${label} [${hint}]：" "" || input=""
+
+    if [[ -z "$input" ]]; then
+      printf -v "$variable_name" '%s' "$current"
+      return 0
+    fi
+
+    if normalized="$(normalize_feature_flag "$input" 2>/dev/null)"; then
+      printf -v "$variable_name" '%s' "$normalized"
+      return 0
+    fi
+
+    warn "请输入 yes/y 或 no/n；直接回车保留当前值。"
+  done
+}
+
+infer_legacy_feature_settings() {
+  DOH_ENABLED="0"
+  WARP_ENABLED="0"
+
+  [[ -f "$SINGBOX_CONFIG" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  if jq -e '
+      .dns.servers? // []
+      | any(.tag == "cloudflare-doh" and .type == "https")
+    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+    DOH_ENABLED="1"
+  fi
+
+  if jq -e '
+      .endpoints? // []
+      | any(.tag == "warp" and .type == "wireguard")
+    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+    WARP_ENABLED="1"
+  fi
+}
+
 load_settings() {
   local endpoint=""
   local port=""
   local node=""
+  local doh=""
+  local warp=""
 
   PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
   LOCAL_PORT="$DEFAULT_LOCAL_PORT"
   NODE_NAME="$DEFAULT_NODE_NAME"
+  DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+  WARP_ENABLED="$DEFAULT_WARP_ENABLED"
   SETTINGS_CONFIGURED=0
 
   [[ -f "$SETTINGS_JSON" ]] || return 0
@@ -2658,20 +2950,35 @@ load_settings() {
   endpoint="$(jq -r '.preferred_endpoint // ""' "$SETTINGS_JSON")"
   port="$(jq -r '.local_port // ""' "$SETTINGS_JSON")"
   node="$(jq -r '.node_name // ""' "$SETTINGS_JSON")"
+  doh="$(jq -r '.doh_enabled // ""' "$SETTINGS_JSON")"
+  warp="$(jq -r '.warp_enabled // ""' "$SETTINGS_JSON")"
 
   [[ -n "$port" ]] || port="$DEFAULT_LOCAL_PORT"
   [[ -n "$node" ]] || node="$DEFAULT_NODE_NAME"
   endpoint="$(normalize_preferred_endpoint "$endpoint")"
 
+  if [[ -z "$doh" || -z "$warp" ]]; then
+    infer_legacy_feature_settings
+    doh="$DOH_ENABLED"
+    warp="$WARP_ENABLED"
+  else
+    doh="$(normalize_feature_flag "$doh" 2>/dev/null || printf '%s' "invalid")"
+    warp="$(normalize_feature_flag "$warp" 2>/dev/null || printf '%s' "invalid")"
+  fi
+
   if valid_preferred_endpoint "$endpoint" \
       && valid_local_port "$port" \
-      && valid_node_name "$node"; then
+      && valid_node_name "$node" \
+      && valid_feature_flag "$doh" \
+      && valid_feature_flag "$warp"; then
     PREFERRED_ENDPOINT="$endpoint"
     LOCAL_PORT="$((10#$port))"
     NODE_NAME="$node"
+    DOH_ENABLED="$doh"
+    WARP_ENABLED="$warp"
     SETTINGS_CONFIGURED=1
   else
-    warn "设置文件中的优选地址、端口或节点名称无效；当前恢复默认设置。"
+    warn "设置文件中的优选地址、端口、节点名称或功能开关无效；当前恢复默认设置。"
   fi
 }
 
@@ -2686,21 +2993,29 @@ save_settings() {
     || die "sing-box 本地端口无效；只允许 1024–65535。"
   valid_node_name "$NODE_NAME" \
     || die "订阅节点名称无效；不能为空、不能包含控制字符，且最多 80 个字符。"
+  valid_feature_flag "$DOH_ENABLED" \
+    || die "DoH 功能开关无效。"
+  valid_feature_flag "$WARP_ENABLED" \
+    || die "WARP 功能开关无效。"
 
   local tmp=""
   tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
 
   jq -n \
-    --argjson schema 2 \
+    --argjson schema 3 \
     --arg preferred_endpoint "$PREFERRED_ENDPOINT" \
     --argjson local_port "$LOCAL_PORT" \
     --arg node_name "$NODE_NAME" \
+    --argjson doh_enabled "$DOH_ENABLED" \
+    --argjson warp_enabled "$WARP_ENABLED" \
     --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
     '{
       schema: $schema,
       preferred_endpoint: $preferred_endpoint,
       local_port: $local_port,
       node_name: $node_name,
+      doh_enabled: $doh_enabled,
+      warp_enabled: $warp_enabled,
       updated_at: $updated_at
     }' > "$tmp"
 
@@ -2757,6 +3072,18 @@ configure_custom_settings() {
     fi
     warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
   done
+
+  printf '\n%s\n' "出站功能模块"
+  read_feature_choice DOH_ENABLED \
+    "启用 Cloudflare DoH（1.1.1.1）" \
+    "$DOH_ENABLED"
+  read_feature_choice WARP_ENABLED \
+    "启用 Cloudflare WARP 出站" \
+    "$WARP_ENABLED"
+
+  if [[ "$WARP_ENABLED" == "1" ]]; then
+    warn "首次启用 WARP 时，脚本会调用第三方 wgcf，并以 --accept-tos 非交互注册 Cloudflare WARP 设备。"
+  fi
 
   save_settings
   ok "自定义设置已保存。"
@@ -2999,18 +3326,191 @@ ensure_service_account() {
   chmod 600 "$SERVICE_MARKER"
 }
 
-write_singbox_config() {
-  [[ -n "$SINGBOX_BIN" ]] || resolve_singbox_bin
-  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box。"
+valid_warp_account_file() {
+  [[ -f "$WARP_ACCOUNT_FILE" \
+    && ! -L "$WARP_ACCOUNT_FILE" \
+    && -s "$WARP_ACCOUNT_FILE" ]]
+}
 
-  valid_uuid "$UUID" || die "UUID 为空或格式错误。"
-  valid_ws_path "$WSPATH" || die "WS 路径为空或格式错误。"
-  valid_local_port "$LOCAL_PORT" || die "本地监听端口无效。"
-  valid_node_name "$NODE_NAME" || die "节点名称无效。"
+valid_warp_profile_file() {
+  [[ -f "$WARP_PROFILE_FILE" \
+    && ! -L "$WARP_PROFILE_FILE" \
+    && -s "$WARP_PROFILE_FILE" ]] \
+    || return 1
 
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
+  grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$WARP_PROFILE_FILE"
+}
 
+ensure_warp_profile() {
+  [[ "$WARP_ENABLED" == "1" ]] || return 0
+
+  mkdir -p "$WARP_DIR"
+  chown root:root "$WARP_DIR"
+  chmod 700 "$WARP_DIR"
+
+  if valid_warp_account_file && valid_warp_profile_file; then
+    chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
+    return 0
+  fi
+
+  install_wgcf_if_needed
+  [[ -n "$WGCF_BIN" ]] || die "未找到 wgcf。"
+
+  if [[ -e "$WARP_ACCOUNT_FILE" || -L "$WARP_ACCOUNT_FILE" ]]; then
+    if ! valid_warp_account_file; then
+      mv -f "$WARP_ACCOUNT_FILE" "${WARP_ACCOUNT_FILE}.invalid.$(date +%s)"
+    fi
+  fi
+
+  if ! valid_warp_account_file; then
+    warn "正在注册新的 Cloudflare WARP 设备；wgcf 是第三方非官方工具。"
+
+    if ! "$WGCF_BIN" \
+        --config "$WARP_ACCOUNT_FILE" \
+        register \
+        --accept-tos; then
+      die "Cloudflare WARP 设备注册失败。"
+    fi
+  fi
+
+  rm -f "$WARP_PROFILE_FILE"
+
+  if ! "$WGCF_BIN" \
+      --config "$WARP_ACCOUNT_FILE" \
+      generate \
+      --profile "$WARP_PROFILE_FILE"; then
+    die "Cloudflare WARP WireGuard 配置生成失败。"
+  fi
+
+  valid_warp_account_file \
+    || die "wgcf 未生成有效的 WARP 账户文件。"
+  valid_warp_profile_file \
+    || die "wgcf 未生成有效的 WireGuard 配置。"
+
+  chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
+  ok "Cloudflare WARP 设备与 WireGuard 配置已准备完成。"
+}
+
+strip_ini_value() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+warp_profile_value() {
+  local key="$1"
+  local value=""
+
+  value="$(
+    awk -F '=' -v wanted="$key" '
+      $1 ~ "^[[:space:]]*" wanted "[[:space:]]*$" {
+        sub(/^[^=]*=/, "")
+        print
+        exit
+      }
+    ' "$WARP_PROFILE_FILE"
+  )"
+
+  strip_ini_value "$value"
+}
+
+resolve_warp_endpoint_ip() {
+  local host="$1"
+  local candidate=""
+
+  if valid_ipv4 "$host" || valid_ipv6 "$host"; then
+    printf '%s\n' "$host"
+    return 0
+  fi
+
+  while IFS= read -r candidate; do
+    candidate="${candidate%%[[:space:]]*}"
+    if valid_ipv4 "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(getent ahostsv4 "$host" 2>/dev/null || true)
+
+  while IFS= read -r candidate; do
+    candidate="${candidate%%[[:space:]]*}"
+    if valid_ipv4 "$candidate" || valid_ipv6 "$candidate"; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done < <(getent hosts "$host" 2>/dev/null || true)
+
+  return 1
+}
+
+load_warp_profile_parameters() {
+  local address_line=""
+  local item=""
+  local endpoint=""
+  local endpoint_host=""
+  local mtu=""
+
+  ensure_warp_profile
+  valid_warp_profile_file || die "WARP WireGuard 配置不存在或格式不完整。"
+
+  WARP_PRIVATE_KEY="$(warp_profile_value PrivateKey)"
+  WARP_PEER_PUBLIC_KEY="$(warp_profile_value PublicKey)"
+  address_line="$(warp_profile_value Address)"
+  endpoint="$(warp_profile_value Endpoint)"
+  mtu="$(warp_profile_value MTU)"
+
+  WARP_IPV4=""
+  WARP_IPV6=""
+
+  while IFS= read -r item; do
+    item="$(strip_ini_value "$item")"
+    [[ -n "$item" ]] || continue
+
+    if [[ "$item" == *.*/* ]]; then
+      WARP_IPV4="$item"
+    elif [[ "$item" == *:*/* ]]; then
+      WARP_IPV6="$item"
+    fi
+  done < <(printf '%s\n' "$address_line" | tr ',' '\n')
+
+  [[ "$WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+    || die "WARP 私钥格式无效。"
+  [[ "$WARP_PEER_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+    || die "WARP 对端公钥格式无效。"
+  [[ "$WARP_IPV4" =~ ^[0-9.]+/[0-9]{1,2}$ ]] \
+    || die "WARP IPv4 地址格式无效。"
+  [[ "$WARP_IPV6" =~ ^[0-9A-Fa-f:]+/[0-9]{1,3}$ ]] \
+    || die "WARP IPv6 地址格式无效。"
+
+  if [[ "$endpoint" =~ ^\[([^]]+)\]:([0-9]{1,5})$ ]]; then
+    endpoint_host="${BASH_REMATCH[1]}"
+    WARP_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+  elif [[ "$endpoint" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
+    endpoint_host="${BASH_REMATCH[1]}"
+    WARP_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+  else
+    die "WARP Endpoint 格式无效：${endpoint}"
+  fi
+
+  ((10#$WARP_ENDPOINT_PORT >= 1 && 10#$WARP_ENDPOINT_PORT <= 65535)) \
+    || die "WARP Endpoint 端口无效。"
+
+  WARP_ENDPOINT_IP="$(resolve_warp_endpoint_ip "$endpoint_host" 2>/dev/null || true)"
+  [[ -n "$WARP_ENDPOINT_IP" ]] \
+    || die "无法解析 WARP Endpoint：${endpoint_host}"
+
+  if [[ "$mtu" =~ ^[0-9]{3,5}$ ]] \
+      && ((10#$mtu >= 576 && 10#$mtu <= 9000)); then
+    WARP_MTU="$((10#$mtu))"
+  else
+    WARP_MTU="1280"
+  fi
+}
+
+singbox_template_base() {
   jq -n \
     --arg name "$NODE_NAME" \
     --arg uuid "$UUID" \
@@ -3064,13 +3564,197 @@ write_singbox_config() {
         ],
         final: "direct"
       }
-    }' > "$tmp"
+    }'
+}
+
+singbox_template_direct() {
+  singbox_template_base
+}
+
+singbox_template_doh() {
+  singbox_template_base \
+    | jq '
+      .dns = {
+        servers: [
+          {
+            type: "https",
+            tag: "cloudflare-doh",
+            server: "1.1.1.1",
+            server_port: 443,
+            path: "/dns-query",
+            tls: {
+              enabled: true,
+              server_name: "cloudflare-dns.com"
+            },
+            detour: "direct"
+          }
+        ],
+        final: "cloudflare-doh",
+        strategy: "prefer_ipv4"
+      }
+      | .route.default_domain_resolver = {
+          server: "cloudflare-doh",
+          strategy: "prefer_ipv4"
+        }
+    '
+}
+
+singbox_template_warp() {
+  singbox_template_base \
+    | jq \
+      --arg private_key "$WARP_PRIVATE_KEY" \
+      --arg ipv4 "$WARP_IPV4" \
+      --arg ipv6 "$WARP_IPV6" \
+      --arg peer_ip "$WARP_ENDPOINT_IP" \
+      --argjson peer_port "$WARP_ENDPOINT_PORT" \
+      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+      --argjson mtu "$WARP_MTU" \
+      '
+        .dns = {
+          servers: [
+            {
+              type: "local",
+              tag: "local-dns",
+              prefer_go: true
+            }
+          ],
+          final: "local-dns",
+          strategy: "prefer_ipv4"
+        }
+        | .endpoints = [
+            {
+              type: "wireguard",
+              tag: "warp",
+              system: false,
+              mtu: $mtu,
+              address: [$ipv4, $ipv6],
+              private_key: $private_key,
+              peers: [
+                {
+                  address: $peer_ip,
+                  port: $peer_port,
+                  public_key: $public_key,
+                  allowed_ips: ["0.0.0.0/0", "::/0"],
+                  persistent_keepalive_interval: 30,
+                  reserved: [0, 0, 0]
+                }
+              ],
+              detour: "direct"
+            }
+          ]
+        | .route.default_domain_resolver = {
+            server: "local-dns",
+            strategy: "prefer_ipv4"
+          }
+        | .route.final = "warp"
+      '
+}
+
+singbox_template_doh_warp() {
+  singbox_template_base \
+    | jq \
+      --arg private_key "$WARP_PRIVATE_KEY" \
+      --arg ipv4 "$WARP_IPV4" \
+      --arg ipv6 "$WARP_IPV6" \
+      --arg peer_ip "$WARP_ENDPOINT_IP" \
+      --argjson peer_port "$WARP_ENDPOINT_PORT" \
+      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+      --argjson mtu "$WARP_MTU" \
+      '
+        .dns = {
+          servers: [
+            {
+              type: "https",
+              tag: "cloudflare-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              },
+              detour: "warp"
+            }
+          ],
+          final: "cloudflare-doh",
+          strategy: "prefer_ipv4"
+        }
+        | .endpoints = [
+            {
+              type: "wireguard",
+              tag: "warp",
+              system: false,
+              mtu: $mtu,
+              address: [$ipv4, $ipv6],
+              private_key: $private_key,
+              peers: [
+                {
+                  address: $peer_ip,
+                  port: $peer_port,
+                  public_key: $public_key,
+                  allowed_ips: ["0.0.0.0/0", "::/0"],
+                  persistent_keepalive_interval: 30,
+                  reserved: [0, 0, 0]
+                }
+              ],
+              detour: "direct"
+            }
+          ]
+        | .route.default_domain_resolver = {
+            server: "cloudflare-doh",
+            strategy: "prefer_ipv4"
+          }
+        | .route.final = "warp"
+      '
+}
+
+write_singbox_config() {
+  [[ -n "$SINGBOX_BIN" ]] || resolve_singbox_bin
+  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box。"
+
+  valid_uuid "$UUID" || die "UUID 为空或格式错误。"
+  valid_ws_path "$WSPATH" || die "WS 路径为空或格式错误。"
+  valid_local_port "$LOCAL_PORT" || die "本地监听端口无效。"
+  valid_node_name "$NODE_NAME" || die "节点名称无效。"
+  valid_feature_flag "$DOH_ENABLED" || die "DoH 功能开关无效。"
+  valid_feature_flag "$WARP_ENABLED" || die "WARP 功能开关无效。"
+
+  if [[ "$WARP_ENABLED" == "1" ]]; then
+    load_warp_profile_parameters
+  fi
+
+  local tmp=""
+  tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
+
+  case "${DOH_ENABLED}:${WARP_ENABLED}" in
+    0:0)
+      singbox_template_direct > "$tmp"
+      ;;
+    1:0)
+      singbox_template_doh > "$tmp"
+      ;;
+    0:1)
+      singbox_template_warp > "$tmp"
+      ;;
+    1:1)
+      singbox_template_doh_warp > "$tmp"
+      ;;
+    *)
+      rm -f "$tmp"
+      die "无法选择 sing-box 配置模板。"
+      ;;
+  esac
 
   chmod 640 "$tmp"
   chown root:"$SERVICE_GROUP" "$tmp"
 
   if ! "$SINGBOX_BIN" check -c "$tmp"; then
     rm -f "$tmp"
+
+    if [[ "$DOH_ENABLED" == "1" || "$WARP_ENABLED" == "1" ]]; then
+      die "新 sing-box 配置校验失败，未覆盖现有配置；请先通过菜单 7 更新 sing-box，再重试 DoH/WARP 部署。"
+    fi
+
     die "新 sing-box 配置校验失败，未覆盖现有配置。"
   fi
 
@@ -3726,7 +4410,7 @@ command_stop_clear_cache() {
 
   ok "$(printf '%s' "当前临时 Argo 已断开，旧订阅和临时缓存已清理。")"
 
-  info "$(printf '%s' "以后选择菜单 1 或 2 可重新生成 Argo；当前自定义设置会保留。")"
+  info "$(printf '%s' "以后选择菜单 1、2 或 3 可重新生成 Argo；当前自定义设置会保留。")"
 }
 
 start_tunnel() {
@@ -3962,6 +4646,8 @@ prepare_deployment() {
     PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
     LOCAL_PORT="$DEFAULT_LOCAL_PORT"
     NODE_NAME="$DEFAULT_NODE_NAME"
+    DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+    WARP_ENABLED="$DEFAULT_WARP_ENABLED"
     save_settings
   fi
 
@@ -3983,10 +4669,34 @@ command_generate_noninteractive() {
   prepare_deployment
 
   stop_tunnel || die "无法安全停止现有临时隧道。"
+
+  # 默认无交互部署保持原始行为：不启用服务端 DoH，也不启用 WARP。
+  DOH_ENABLED="0"
+  WARP_ENABLED="0"
+  save_settings
+
   rebuild_deployment_after_stop
 
   deployment_transaction_commit
-  ok "临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
+  ok "临时 Argo 已完成全新生成，当前使用直接出站；现在可以直接断开 SSH。"
+  show_subscription
+}
+
+command_generate_noninteractive_doh_warp() {
+  deployment_transaction_begin
+  prepare_deployment
+
+  stop_tunnel || die "无法安全停止现有临时隧道。"
+
+  DOH_ENABLED="1"
+  WARP_ENABLED="1"
+  save_settings
+  warn "本次无交互部署将启用 Cloudflare DoH（1.1.1.1）和 WARP；首次注册会调用第三方 wgcf 并使用 --accept-tos。"
+
+  rebuild_deployment_after_stop
+
+  deployment_transaction_commit
+  ok "临时 Argo 已完成全新生成，并已启用 DoH 与 WARP 出站；现在可以直接断开 SSH。"
   show_subscription
 }
 
@@ -4034,6 +4744,12 @@ show_subscription() {
   print_kv "UUID：" "${UUID:-尚未生成}" 20
   print_kv "WS 路径：" "${WSPATH:-尚未生成}" 20
   print_kv "本地监听：" "127.0.0.1:${LOCAL_PORT}" 20
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 20
+  else
+    print_kv "Cloudflare DoH：" "未启用" 20
+  fi
+  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 20
   print_kv "后台隧道运行：" "$running" 20
   print_kv "ECHConfigList：" "$ECH_CONFIG" 20
   print_section_footer "$C_GREEN" 78
@@ -4053,7 +4769,7 @@ show_subscription() {
     printf '%s%s%s\n' "$C_YELLOW" "$ECH_CONFIG" "$C_RESET"
     printf '%s\n' "若客户端忽略旧式 VMess JSON 的扩展字段，请手动粘贴这一行。"
   else
-    warn "尚未生成 VMess 分享链接，请先选择菜单 1 或 2。"
+    warn "尚未生成 VMess 分享链接，请先选择菜单 1、2 或 3。"
   fi
 }
 
@@ -4071,6 +4787,7 @@ show_status() {
 
   resolve_singbox_bin
   resolve_cloudflared_bin
+  resolve_wgcf_bin
 
   print_section_header "zdd-argo 运行状态" "$C_CYAN" 78
 
@@ -4078,6 +4795,12 @@ show_status() {
   print_kv "运行平台：" "$(runtime_label)" 22
   print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
   print_kv "节点名称：" "$NODE_NAME" 22
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 22
+  else
+    print_kv "Cloudflare DoH：" "未启用" 22
+  fi
+  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 22
 
   print_aligned_label "sing-box：" 22
   if [[ -n "$SINGBOX_BIN" ]]; then
@@ -4112,6 +4835,19 @@ show_status() {
     else
       printf ' %s\n' "（外部安装）"
     fi
+  else
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
+  fi
+
+  print_aligned_label "wgcf：" 22
+  if [[ -n "$WGCF_BIN" ]]; then
+    if [[ -f "$WGCF_RELEASE_META" ]]; then
+      printf '%s\n' "$(jq -r '.tag // \"已安装\"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "已安装")"
+    else
+      printf '%s\n' "已安装（外部版本）"
+    fi
+
+    print_kv "WARP 配置：" "$([[ -f "$WARP_PROFILE_FILE" ]] && printf '%s' "已生成" || printf '%s' "未生成")" 22
   else
     printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
   fi
@@ -4210,15 +4946,30 @@ command_update_cloudflared() {
   fi
 }
 
+command_update_wgcf() {
+  load_settings
+
+  if [[ "$WARP_ENABLED" != "1" \
+      && ! -x "$MANAGED_WGCF_BIN" ]]; then
+    info "WARP 未启用且脚本专用 wgcf 未安装，跳过 wgcf 更新。"
+    return 0
+  fi
+
+  install_or_update_wgcf
+  resolve_wgcf_bin
+  ok "脚本专用 wgcf 已安装或更新；现有 WARP 账户与 WireGuard 配置保持不变。"
+}
+
 command_update_components() {
-  info "开始更新 sing-box 和 cloudflared……"
+  info "开始更新 sing-box、cloudflared 和已启用的 WARP 工具……"
   deployment_transaction_begin
 
   command_update_singbox
   command_update_cloudflared
+  command_update_wgcf
 
   deployment_transaction_commit
-  ok "sing-box 和 cloudflared 已完成更新检查。"
+  ok "sing-box、cloudflared 与 WARP 工具已完成更新检查。"
 }
 
 remove_zdd_components() {
@@ -4490,8 +5241,8 @@ remove_service_account() {
 }
 
 command_uninstall_all() {
-  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、快捷命令、低权限账户及脚本专用 sing-box/cloudflared。"
-  warn "不会删除 apt 或其他脚本安装的 sing-box/cloudflared，也不会删除当前下载的源文件。"
+  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户及脚本专用 sing-box/cloudflared/wgcf。"
+  warn "不会删除 apt 或其他脚本安装的 sing-box/cloudflared/wgcf，也不会删除当前下载的源文件。"
 
   if ! confirm_yes "确认完整卸载请输入 yes："; then
     info "已取消。"
@@ -4501,13 +5252,14 @@ command_uninstall_all() {
   remove_zdd_components
   remove_singbox_program
   remove_cloudflared_program
+  remove_wgcf_program
   remove_shortcuts
   remove_managed_script
   remove_service_account
   cleanup_bin_dir
   service_daemon_reload
 
-  ok "zdd-argo 及脚本专用 sing-box、cloudflared 已完整卸载。"
+  ok "zdd-argo 及脚本专用 sing-box、cloudflared、wgcf 已完整卸载。"
 
   if [[ $MENU_MODE -eq 1 ]]; then
     return 10
@@ -4532,6 +5284,17 @@ remove_cloudflared_program() {
     "${MANAGED_CLOUDFLARED_BIN}.new."* \
     "${MANAGED_CLOUDFLARED_BIN}.backup."* \
     "${CLOUDFLARED_RELEASE_META}.backup."*
+
+  hash -r
+}
+
+remove_wgcf_program() {
+  rm -f \
+    "$MANAGED_WGCF_BIN" \
+    "$WGCF_RELEASE_META" \
+    "${MANAGED_WGCF_BIN}.new."* \
+    "${MANAGED_WGCF_BIN}.backup."* \
+    "${WGCF_RELEASE_META}.backup."*
 
   hash -r
 }
@@ -4571,6 +5334,7 @@ menu_header_status() {
   print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 18
   print_kv "本地端口：" "$LOCAL_PORT" 18
   print_kv "节点名称：" "$NODE_NAME" 18
+  print_kv "DoH / WARP：" "$(feature_label "$DOH_ENABLED") / $(feature_label "$WARP_ENABLED")" 18
   print_kv "当前域名：" "$host" 18
   print_section_footer "$C_CYAN" 78
 }
@@ -4612,20 +5376,21 @@ interactive_menu() {
     menu_header_status
 
     cat <<'EOF'
-1. 无交互 生成 / 重建 Argo
-2. 自定义 生成 / 重建 Argo
-3. 查看当前订阅
-4. 查看运行状态与最近日志
-5. 断开当前 Argo 并清理临时缓存
-6. 更新 sing-box 和 cloudflared
-7. 卸载 zdd-argo 及 sing-box 和 cloudflared
+1. 无交互 生成 / 重建 Argo（直接出站）
+2. 无交互 生成 / 重建 Argo（启用 DoH + WARP）
+3. 自定义 生成 / 重建 Argo（分别配置 DoH / WARP）
+4. 查看当前订阅
+5. 查看运行状态与最近日志
+6. 断开当前 Argo 并清理临时缓存
+7. 更新 sing-box、cloudflared 和 WARP 工具
+8. 卸载 zdd-argo 及 sing-box、cloudflared、wgcf
 0. 退出
 EOF
 
     printf '%s\n' '────────────────────────────────────────'
 
     local choice=""
-    read_interactive choice "请选择 [0-7]：" "0" || choice="0"
+    read_interactive choice "请选择 [0-8]：" "0" || choice="0"
     clear_screen
 
     case "$choice" in
@@ -4633,21 +5398,24 @@ EOF
         run_menu_action run_with_lock command_generate_noninteractive
         ;;
       2)
-        run_menu_action run_with_lock command_generate_custom
+        run_menu_action run_with_lock command_generate_noninteractive_doh_warp
         ;;
       3)
-        run_menu_action run_with_lock show_subscription
+        run_menu_action run_with_lock command_generate_custom
         ;;
       4)
-        run_menu_action show_status
+        run_menu_action run_with_lock show_subscription
         ;;
       5)
-        run_menu_action run_with_lock command_stop_clear_cache
+        run_menu_action show_status
         ;;
       6)
-        run_menu_action run_with_lock command_update_components
+        run_menu_action run_with_lock command_stop_clear_cache
         ;;
       7)
+        run_menu_action run_with_lock command_update_components
+        ;;
+      8)
         run_menu_action run_with_lock command_uninstall_all
         ;;
       0)
