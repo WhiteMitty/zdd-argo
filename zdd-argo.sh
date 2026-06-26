@@ -4,7 +4,7 @@ IFS=$'\n\t'
 umask 077
 
 SCRIPT_VERSION="0.1.0"
-BUILD_ID="CLEAN-UNINSTALL-SOURCE-20260626"
+BUILD_ID="WARP-FALLBACK-PORTS-20260626"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -85,6 +85,7 @@ WARP_IPV6=""
 WARP_PEER_PUBLIC_KEY=""
 WARP_ENDPOINT_ADDRESS=""
 WARP_ENDPOINT_PORT=""
+WARP_PROFILE_ENDPOINT_PORT=""
 WARP_MTU="1280"
 MENU_MODE=0
 LOCK_HELD=0
@@ -3445,6 +3446,8 @@ load_warp_profile_parameters() {
   local endpoint=""
   local endpoint_host=""
   local mtu=""
+  local checked_endpoint=""
+  local checked_port=""
 
   ensure_warp_profile
   valid_warp_profile_file || die "WARP WireGuard 配置不存在或格式不完整。"
@@ -3481,16 +3484,19 @@ load_warp_profile_parameters() {
 
   if [[ "$endpoint" =~ ^\[([^]]+)\]:([0-9]{1,5})$ ]]; then
     endpoint_host="${BASH_REMATCH[1]}"
-    WARP_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
   elif [[ "$endpoint" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
     endpoint_host="${BASH_REMATCH[1]}"
-    WARP_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
   else
     die "WARP Endpoint 格式无效：${endpoint}"
   fi
 
-  ((10#$WARP_ENDPOINT_PORT >= 1 && 10#$WARP_ENDPOINT_PORT <= 65535)) \
+  ((10#$WARP_PROFILE_ENDPOINT_PORT >= 1 && 10#$WARP_PROFILE_ENDPOINT_PORT <= 65535)) \
     || die "WARP Endpoint 端口无效。"
+
+  WARP_PROFILE_ENDPOINT_PORT="$((10#$WARP_PROFILE_ENDPOINT_PORT))"
+  WARP_ENDPOINT_PORT="$WARP_PROFILE_ENDPOINT_PORT"
 
   if ! valid_ipv4 "$endpoint_host" \
       && ! valid_ipv6 "$endpoint_host" \
@@ -3500,6 +3506,17 @@ load_warp_profile_parameters() {
 
   WARP_ENDPOINT_ADDRESS="${endpoint_host%.}"
   WARP_ENDPOINT_ADDRESS="${WARP_ENDPOINT_ADDRESS,,}"
+
+  if [[ -f "$WARP_CHECK_FILE" && ! -L "$WARP_CHECK_FILE" ]]; then
+    checked_endpoint="$(jq -r '.endpoint // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
+    checked_port="$(jq -r '.port // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
+
+    if [[ "${checked_endpoint,,}" == "$WARP_ENDPOINT_ADDRESS" \
+        && "$checked_port" =~ ^[0-9]{1,5}$ ]] \
+        && ((10#$checked_port >= 1 && 10#$checked_port <= 65535)); then
+      WARP_ENDPOINT_PORT="$((10#$checked_port))"
+    fi
+  fi
 
   if [[ "$mtu" =~ ^[0-9]{3,5}$ ]] \
       && ((10#$mtu >= 576 && 10#$mtu <= 9000)); then
@@ -3652,7 +3669,7 @@ singbox_template_warp() {
               connect_timeout: "10s",
               domain_resolver: {
                 server: "warp-bootstrap-doh",
-                strategy: "ipv4_only"
+                strategy: "prefer_ipv4"
               }
             }
           ]
@@ -3725,7 +3742,7 @@ singbox_template_doh_warp() {
               connect_timeout: "10s",
               domain_resolver: {
                 server: "warp-bootstrap-doh",
-                strategy: "ipv4_only"
+                strategy: "prefer_ipv4"
               }
             }
           ]
@@ -3876,6 +3893,100 @@ stop_checked_process() {
   wait "$pid" 2>/dev/null || true
 }
 
+valid_warp_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  ((10#$port >= 1 && 10#$port <= 65535))
+}
+
+warp_candidate_ports() {
+  local port=""
+  local seen=""
+
+  for port in \
+    "$WARP_ENDPOINT_PORT" \
+    "$WARP_PROFILE_ENDPOINT_PORT" \
+    2408 \
+    500 \
+    1701 \
+    4500
+  do
+    valid_warp_port "$port" || continue
+    port="$((10#$port))"
+
+    case " ${seen} " in
+      *" ${port} "*)
+        continue
+        ;;
+    esac
+
+    printf '%s\n' "$((10#$port))"
+    seen="${seen} ${port}"
+  done
+}
+
+set_warp_peer_port() {
+  local port="$1"
+  local tmp=""
+  local expected_sha=""
+  local actual_sha=""
+
+  valid_warp_port "$port" || return 1
+  [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
+  [[ -n "$SINGBOX_BIN" ]] || return 1
+
+  tmp="$(mktemp "${DATA_DIR}/.sing-box-port.json.XXXXXX")"
+
+  if ! jq \
+      --argjson port "$((10#$port))" \
+      '
+        (.endpoints[] | select(.type == "wireguard" and .tag == "warp") | .peers[0].port) = $port
+      ' \
+      "$SINGBOX_CONFIG" \
+      > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  chmod 640 "$tmp"
+  chown root:"$SERVICE_GROUP" "$tmp"
+
+  if ! "$SINGBOX_BIN" check -c "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  if ! jq -e \
+      --argjson port "$((10#$port))" \
+      '
+        (.endpoints // [])
+        | any(
+            .type == "wireguard"
+            and .tag == "warp"
+            and .peers[0].port == $port
+          )
+      ' \
+      "$tmp" \
+      >/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
+
+  mv -f "$tmp" "$SINGBOX_CONFIG"
+  chmod 640 "$SINGBOX_CONFIG"
+  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
+
+  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || return 1
+
+  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" || return 1
+
+  WARP_ENDPOINT_PORT="$((10#$port))"
+  return 0
+}
+
 verify_warp_runtime() {
   [[ "$WARP_ENABLED" == "1" ]] || return 0
 
@@ -3887,12 +3998,25 @@ verify_warp_runtime() {
   local warp_state=""
   local exit_ip=""
   local colo=""
+  local selected_port=""
+  local attempted_ports=""
+  local chain_label="VMess/WS → WARP"
+  local port=""
   local i=0
+  local -a candidate_ports=()
+
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    chain_label="VMess/WS → DoH → WARP"
+  fi
 
   service_is_active \
     || die "WARP 自检前发现 sing-box 服务未运行。"
   listener_exact_loopback \
     || die "WARP 自检前发现 127.0.0.1:${LOCAL_PORT} 未监听。"
+
+  mapfile -t candidate_ports < <(warp_candidate_ports)
+  ((${#candidate_ports[@]} > 0)) \
+    || die "没有可用于 WARP 自检的 Endpoint UDP 端口。"
 
   test_port="$(find_free_loopback_port)" \
     || die "无法找到用于 WARP 本机自检的空闲回环端口。"
@@ -3973,42 +4097,93 @@ verify_warp_runtime() {
     die "WARP 运行时自检客户端启动失败。"
   fi
 
-  for ((i = 1; i <= 3; i++)); do
-    response="$(
-      curl \
-        --silent \
-        --show-error \
-        --max-time 25 \
-        --connect-timeout 8 \
-        --proxy "socks5h://127.0.0.1:${test_port}" \
-        https://www.cloudflare.com/cdn-cgi/trace \
-        2>> "$test_log" \
-        || true
-    )"
+  for port in "${candidate_ports[@]}"; do
+    if [[ -n "$attempted_ports" ]]; then
+      attempted_ports="${attempted_ports},${port}"
+    else
+      attempted_ports="$port"
+    fi
 
-    warp_state="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "warp" {print $2; exit}')"
+    printf '\n===== WARP Endpoint UDP %s =====\n' "$port" >> "$test_log"
+    info "正在测试 WARP Endpoint：${WARP_ENDPOINT_ADDRESS}:${port}/UDP"
 
-    if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
+    if ! set_warp_peer_port "$port"; then
+      warn "无法将 WARP Endpoint 端口切换为 UDP ${port}，跳过该端口。"
+      continue
+    fi
+
+    if ! service_restart; then
+      warn "切换到 UDP ${port} 后 sing-box 重启失败，跳过该端口。"
+      service_print_logs 40
+      continue
+    fi
+
+    if ! wait_for_singbox_ready; then
+      warn "切换到 UDP ${port} 后 sing-box 未能正常监听，跳过该端口。"
+      service_print_logs 40
+      continue
+    fi
+
+    response=""
+    warp_state=""
+    exit_ip=""
+    colo=""
+
+    for ((i = 1; i <= 2; i++)); do
+      response="$(
+        curl \
+          --silent \
+          --show-error \
+          --max-time 15 \
+          --connect-timeout 5 \
+          --proxy "socks5h://127.0.0.1:${test_port}" \
+          https://www.cloudflare.com/cdn-cgi/trace \
+          2>> "$test_log" \
+          || true
+      )"
+
+      warp_state="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "warp" {print $2; exit}'
+      )"
+
+      if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
+        selected_port="$port"
+        break
+      fi
+
+      sleep 1
+    done
+
+    if [[ -n "$selected_port" ]]; then
+      exit_ip="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "ip" {print $2; exit}'
+      )"
+      colo="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "colo" {print $2; exit}'
+      )"
       break
     fi
 
-    sleep 2
+    warn "WARP Endpoint UDP ${port} 未通过实际链路自检。"
   done
-
-  exit_ip="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "ip" {print $2; exit}')"
-  colo="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "colo" {print $2; exit}')"
 
   stop_checked_process "$test_pid"
   rm -f "$test_config"
 
-  if [[ "$warp_state" != "on" && "$warp_state" != "plus" ]]; then
-    warn "通过当前 VMess/WS 服务访问 Cloudflare Trace 时，未确认 WARP 已接管出站。"
+  if [[ -z "$selected_port" ]]; then
+    warn "已依次测试 WARP WireGuard 的配置端口及 Cloudflare 官方回退端口，均未确认隧道可用。"
     printf '\n%s\n' "WARP 自检客户端日志：" >&2
-    tail -n 120 "$test_log" >&2 || true
+    tail -n 200 "$test_log" >&2 || true
     printf '\n%s\n' "当前 sing-box 服务日志：" >&2
-    service_print_logs 120
+    service_print_logs 160
     rm -f "$test_log" "$WARP_CHECK_FILE"
-    die "DoH + WARP 实际链路不可用；未继续创建 Quick Tunnel 和分享链接。"
+    die "WARP 实际链路不可用；常见原因是 VPS 提供商阻断 UDP 2408/500/1701/4500、到 Cloudflare WARP 网段路由异常，或该网络限制 WireGuard。"
   fi
 
   rm -f "$test_log"
@@ -4019,18 +4194,23 @@ verify_warp_runtime() {
     --arg ip "$exit_ip" \
     --arg colo "$colo" \
     --arg endpoint "$WARP_ENDPOINT_ADDRESS" \
-    --argjson port "$WARP_ENDPOINT_PORT" \
+    --arg attempted_ports "$attempted_ports" \
+    --argjson port "$selected_port" \
+    --argjson profile_port "$WARP_PROFILE_ENDPOINT_PORT" \
     '{
       checked_at: $checked_at,
       warp: $warp,
       exit_ip: $ip,
       colo: $colo,
       endpoint: $endpoint,
-      port: $port
+      port: $port,
+      profile_port: $profile_port,
+      attempted_ports: $attempted_ports
     }' > "$WARP_CHECK_FILE"
 
   chmod 600 "$WARP_CHECK_FILE"
-  ok "WARP 实际链路自检通过：VMess/WS → DoH → WARP，warp=${warp_state}，出口=${exit_ip:-未知}，机房=${colo:-未知}。"
+  WARP_ENDPOINT_PORT="$selected_port"
+  ok "WARP 实际链路自检通过：${chain_label}，Endpoint=${WARP_ENDPOINT_ADDRESS}:${selected_port}/UDP，warp=${warp_state}，出口=${exit_ip:-未知}，机房=${colo:-未知}。"
 }
 
 singbox_unit_is_ours() {
