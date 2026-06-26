@@ -43,7 +43,7 @@ zargo
 
 - 停止或重建隧道后，旧分享链接会失效
 
-- 优选域名默认使用 saas.sin.fan，可根据情况调整
+- 优选域名默认使用 saas.sin.fan，可根据情况调整（有时候会不通）
 
 - Quick Tunnel 每次重建都可能获得新的 `*.trycloudflare.com` 域名
 
