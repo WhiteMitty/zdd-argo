@@ -3720,8 +3720,7 @@ singbox_template_doh() {
             tls: {
               enabled: true,
               server_name: "cloudflare-dns.com"
-            },
-            detour: "direct"
+            }
           }
         ],
         final: "cloudflare-doh",
@@ -3761,8 +3760,7 @@ singbox_template_warp() {
               tls: {
                 enabled: true,
                 server_name: "cloudflare-dns.com"
-              },
-              detour: "direct"
+              }
             }
           ],
           final: "local-dns",
@@ -3823,8 +3821,7 @@ singbox_template_doh_warp() {
               tls: {
                 enabled: true,
                 server_name: "cloudflare-dns.com"
-              },
-              detour: "direct"
+              }
             },
             {
               type: "https",
@@ -5814,11 +5811,6 @@ remove_downloaded_source_if_confirmed() {
   if [[ ! "$actual_sha" =~ ^[0-9a-fA-F]{64}$ \
       || "${actual_sha,,}" != "$expected_sha" ]]; then
     warn "安装源文件内容与安装时记录不一致，未删除：${source}"
-    return 0
-  fi
-
-  if ! confirm_yes "是否同时删除安装源文件 ${source}？请输入 yes："; then
-    info "已保留安装源文件：${source}"
     return 0
   fi
 
