@@ -1,13 +1,10 @@
 #!/usr/bin/env bash
-# zdd-argo：Debian / Ubuntu / Alpine 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
-# 版本：v0.1.0；安装后的管理命令：zargo
-# 构建标识：WARP-RUNTIME-CHECK-DIRECT-OVERWRITE-20260626
-
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
 SCRIPT_VERSION="0.1.0"
+BUILD_ID="CLEAN-UNINSTALL-SOURCE-20260626"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
@@ -58,13 +55,13 @@ LOCK_OWNER_FILE="${LOCK_DIR}/owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
 SHORTCUT_COMPAT_PATH="/usr/local/sbin/zargo"
 SHORTCUT_FALLBACK_PATH="/usr/bin/zargo"
+DEFAULT_SOURCE_PATH="/root/zdd-argo.sh"
 LEGACY_ZDD_PATHS=("/usr/bin/zdd" "/usr/local/sbin/zdd" "/usr/local/bin/zdd")
 LEGACY_SHORTCUT_PATH="/usr/local/sbin/zdd-argo"
 LEGACY_SHORTCUT_BIN="/usr/local/bin/zdd-argo"
 
-# 脚本使用独立目录保存经过 GitHub Release SHA-256 摘要校验的二进制，
-# 不覆盖系统中可能由 apt 或其他脚本维护的 sing-box / cloudflared。
 BIN_DIR="/usr/local/lib/zdd-argo"
+SOURCE_RECORD_FILE="${BIN_DIR}/source-record"
 MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"
 MANAGED_SINGBOX_BIN="${BIN_DIR}/sing-box"
 MANAGED_CLOUDFLARED_BIN="${BIN_DIR}/cloudflared"
@@ -210,8 +207,6 @@ ensure_utf8_locale() {
     done
   fi
 
-  # Debian / Ubuntu 的 glibc 与现代 Alpine 的 musl 通常可使用 C.UTF-8；
-  # 即使 locale 命令不可用，仍优先使用它，确保中文输入、JSON 和终端宽度计算按 UTF-8 处理。
   export LANG=C.UTF-8
   export LC_ALL=C.UTF-8
 }
@@ -225,7 +220,6 @@ text_is_valid_utf8() {
     return
   fi
 
-  # iconv 尚未安装时不破坏只读菜单；真正进入部署前会安装 libc-bin。
   return 0
 }
 
@@ -354,7 +348,6 @@ resolve_script_path() {
       || printf '%s' "$dir"
   )"
 
-  # 只规范化目录，不解析最终文件的符号链接。
   SCRIPT_PATH="${dir}/${base}"
 }
 
@@ -367,7 +360,6 @@ check_os() {
   [[ -r /etc/os-release ]] \
     || die "$(printf '%s' "无法识别操作系统，仅支持 Debian / Ubuntu / Alpine。")"
 
-  # shellcheck disable=SC1091
   source /etc/os-release
   OS_ID="${ID:-}"
 
@@ -807,7 +799,6 @@ process_start_time() {
   IFS= read -r stat_line < "/proc/${pid}/stat" \
     || return 1
 
-  # 第二字段 comm 可能包含空格和右括号，因此从最后一个 ") " 后截取。
   [[ "$stat_line" == *") "* ]] || return 1
   remainder="${stat_line##*) }"
 
@@ -1249,7 +1240,6 @@ force_take_over_lock() {
   local owner_command=""
   local snapshot_file=""
 
-  # mkdir 与 owner 文件写入之间存在极短窗口，先等待片刻再判断。
   for _ in 1 2 3 4 5; do
     if IFS=' ' read -r \
         owner_pid \
@@ -1336,7 +1326,6 @@ force_take_over_lock() {
       die "$(printf '%s' "无法停止原 zdd-argo 操作，当前操作不会继续。")"
     fi
   else
-    # 父进程已退出时，仍清理快照中可能残留的子进程。
     sleep 1
 
     signal_process_tree \
@@ -1408,10 +1397,10 @@ path_is_zdd_launcher() {
   local path="$1"
 
   [[ -f "$path" ]] \
-    && grep -Fq \
-      '# zdd-argo launcher' \
-      "$path" \
-      2>/dev/null \
+    && { \
+      grep -Fqx 'ZDD_ARGO_LAUNCHER=1' "$path" 2>/dev/null \
+        || grep -Fq '# zdd-argo launcher' "$path" 2>/dev/null; \
+    } \
     && grep -Fq \
       "$MANAGED_SCRIPT_PATH" \
       "$path" \
@@ -1450,13 +1439,39 @@ resolved_zdd_is_ours() {
     && path_is_zdd_launcher "$resolved"
 }
 
+script_file_is_ours() {
+  local path="$1"
+
+  [[ -f "$path" ]] \
+    && grep -Fqx 'SCRIPT_VERSION="0.1.0"' "$path" 2>/dev/null \
+    && grep -Fqx 'DEFAULT_NODE_NAME="zdd-argo"' "$path" 2>/dev/null \
+    && grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null
+}
+
+record_source_file() {
+  local source_sha=""
+  local tmp=""
+
+  [[ -n "$SCRIPT_PATH" && "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]] || return 0
+  [[ -f "$SCRIPT_PATH" && ! -L "$SCRIPT_PATH" ]] || return 0
+  script_file_is_ours "$SCRIPT_PATH" || return 0
+  command -v sha256sum >/dev/null 2>&1 || return 0
+
+  source_sha="$(sha256sum "$SCRIPT_PATH" | awk '{print $1}')"
+  [[ "$source_sha" =~ ^[0-9a-fA-F]{64}$ ]] || return 0
+
+  tmp="${SOURCE_RECORD_FILE}.new.$$"
+  printf '%s\n%s\n' "$SCRIPT_PATH" "${source_sha,,}" > "$tmp"
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$SOURCE_RECORD_FILE"
+}
+
 install_shortcut() {
   [[ -n "$SCRIPT_PATH" \
     && -f "$SCRIPT_PATH" ]] \
     || die "$(printf '%s' "无法识别当前脚本文件，不能安装快捷命令。")"
 
-  grep -q '^# zdd-argo' \
-    "$SCRIPT_PATH" \
+  script_file_is_ours "$SCRIPT_PATH" \
     || die "$(printf '%s' "当前文件未通过 zdd-argo 脚本标识校验。")"
 
   bash -n "$SCRIPT_PATH" \
@@ -1499,16 +1514,14 @@ install_shortcut() {
   done
 
   if [[ -e "$MANAGED_SCRIPT_PATH" ]] \
-      && ! grep -q \
-        '^# zdd-argo' \
-        "$MANAGED_SCRIPT_PATH" \
-        2>/dev/null; then
+      && ! script_file_is_ours "$MANAGED_SCRIPT_PATH"; then
 
     die "$(printf '%s' "目标路径已存在非 zdd-argo 文件：${MANAGED_SCRIPT_PATH}")"
   fi
 
   mkdir -p "$BIN_DIR"
   chmod 0755 "$BIN_DIR"
+  record_source_file
   mkdir -p \
     "$(dirname -- "$SHORTCUT_PATH")" \
     "$(dirname -- "$SHORTCUT_COMPAT_PATH")" \
@@ -1538,8 +1551,8 @@ install_shortcut() {
 
   cat > "$tmp" <<EOF
 #!/usr/bin/env bash
-# zdd-argo launcher
 set -Eeuo pipefail
+ZDD_ARGO_LAUNCHER=1
 
 if [[ "\$#" -ne 0 ]]; then
   printf '%s\n' '用法：zargo' >&2
@@ -1637,7 +1650,6 @@ EOF
   resolved_zdd_is_ours "$resolved_zargo" \
     || die "$(printf '%s' "快捷命令已写入磁盘，但当前 shell 未解析到本项目的 zargo；请检查 PATH。")"
 
-  # 仅删除旧版 zdd-argo 创建的 zdd 启动器。
   for path in "${LEGACY_ZDD_PATHS[@]}"; do
     [[ -e "$path" || -L "$path" ]] || continue
 
@@ -2723,7 +2735,6 @@ valid_ipv6() {
     [[ -n "$part" ]] || return 1
 
     if [[ "$part" == *.* ]]; then
-      # 使用 :: 时，IPv4 尾部不能位于压缩段左侧。
       [[ $compressed -eq 0 && $index -eq $((${#left_parts[@]} - 1)) ]] || return 1
       valid_ipv4 "$part" || return 1
       ((units+=2))
@@ -2767,7 +2778,6 @@ valid_node_name() {
   [[ -n "$value" ]] || return 1
   text_is_valid_utf8 "$value" || return 1
 
-  # 在 UTF-8 locale 下 ${#value} 按字符数计算，不会把一个汉字当成 3 字节。
   [[ ${#value} -le 80 ]] || return 1
 
   if LC_ALL=C grep -q '[[:cntrl:]]' < <(printf '%s' "$value"); then
@@ -3399,7 +3409,6 @@ ensure_warp_profile() {
     die "wgcf 未生成有效的 WireGuard 配置。"
   fi
 
-  # 每次启用 WARP 都重新生成并直接覆盖当前 profile，不保留历史副本。
   rm -f "$WARP_PROFILE_FILE"
   mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
   chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
@@ -3489,8 +3498,6 @@ load_warp_profile_parameters() {
     die "WARP Endpoint 地址无效：${endpoint_host}"
   fi
 
-  # 保留 wgcf 返回的 Endpoint 域名，不再固定为 getent 返回的第一个 IP。
-  # sing-box 使用独立的直连 DoH bootstrap 解析它，可避免单个失效 IP 导致 WARP 全部不通。
   WARP_ENDPOINT_ADDRESS="${endpoint_host%.}"
   WARP_ENDPOINT_ADDRESS="${WARP_ENDPOINT_ADDRESS,,}"
 
@@ -3786,7 +3793,6 @@ write_singbox_config() {
 
   expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
 
-  # 明确停止沿用旧配置：删除目标后直接写入当前模板，不保存历史配置副本。
   rm -f "$SINGBOX_CONFIG"
   mv -f "$tmp" "$SINGBOX_CONFIG"
   chmod 640 "$SINGBOX_CONFIG"
@@ -4924,7 +4930,6 @@ prepare_deployment() {
 rebuild_deployment_after_stop() {
   generate_identity
 
-  # 先停止旧 sing-box，确保后续启动的一定是刚刚覆盖写入的新配置。
   service_stop || true
   service_reset_failed
 
@@ -4944,7 +4949,6 @@ command_generate_noninteractive() {
 
   stop_tunnel || die "无法安全停止现有临时隧道。"
 
-  # 默认无交互部署保持原始行为：不启用服务端 DoH，也不启用 WARP。
   DOH_ENABLED="0"
   WARP_ENABLED="0"
   save_settings
@@ -4978,7 +4982,6 @@ command_generate_custom() {
   deployment_transaction_begin
   prepare_deployment
 
-  # 必须先按旧设置停止旧隧道，避免自定义端口后无法识别残留进程。
   stop_tunnel || die "无法安全停止现有临时隧道。"
   configure_custom_settings
   rebuild_deployment_after_stop
@@ -5290,8 +5293,13 @@ remove_zdd_components() {
   service_daemon_reload
   service_reset_failed
 
-  rm -rf "$DATA_DIR"
-  rm -f "$LOG_FILE"
+  rm -rf -- "$DATA_DIR"
+  rm -f -- \
+    "$LOG_FILE" \
+    "$LOG_FILE".* \
+    "$SINGBOX_LOG_FILE" \
+    "$SINGBOX_LOG_FILE".*
+  rm -rf -- /tmp/zdd-argo-transaction.*
 }
 
 confirm_yes() {
@@ -5305,6 +5313,76 @@ confirm_yes() {
   answer="${answer%"${answer##*[![:space:]]}"}"
 
   [[ "${answer,,}" == "yes" ]]
+}
+
+resolve_recorded_source() {
+  local source=""
+  local expected_sha=""
+
+  if secure_root_file "$SOURCE_RECORD_FILE"; then
+    IFS= read -r source < "$SOURCE_RECORD_FILE" || source=""
+    expected_sha="$(sed -n '2p' "$SOURCE_RECORD_FILE" 2>/dev/null || true)"
+  fi
+
+  if [[ -z "$source" || "$source" != /* || "$source" == "$MANAGED_SCRIPT_PATH" ]]; then
+    source="$DEFAULT_SOURCE_PATH"
+    expected_sha=""
+  fi
+
+  printf '%s\n%s\n' "$source" "$expected_sha"
+}
+
+remove_downloaded_source_if_confirmed() {
+  local source=""
+  local expected_sha=""
+  local actual_sha=""
+  local owner_uid=""
+
+  {
+    IFS= read -r source || source=""
+    IFS= read -r expected_sha || expected_sha=""
+  } < <(resolve_recorded_source)
+
+  [[ -n "$source" ]] || return 0
+
+  if [[ ! -e "$source" && ! -L "$source" ]]; then
+    info "未发现安装源文件：${source}"
+    return 0
+  fi
+
+  if ! confirm_yes "是否同时删除安装源文件 ${source}？请输入 yes："; then
+    info "已保留安装源文件：${source}"
+    return 0
+  fi
+
+  if [[ ! -f "$source" || -L "$source" ]]; then
+    warn "安装源路径不是普通文件或属于符号链接，未删除：${source}"
+    return 0
+  fi
+
+  owner_uid="$(stat -Lc '%u' "$source" 2>/dev/null || true)"
+  if [[ "$owner_uid" != "0" ]]; then
+    warn "安装源文件不属于 root，未删除：${source}"
+    return 0
+  fi
+
+  if ! script_file_is_ours "$source"; then
+    warn "安装源文件未通过项目标识校验，未删除：${source}"
+    return 0
+  fi
+
+  if [[ "$expected_sha" =~ ^[0-9a-fA-F]{64}$ ]]; then
+    actual_sha="$(sha256sum "$source" | awk '{print $1}')"
+    if [[ "${actual_sha,,}" != "${expected_sha,,}" ]]; then
+      warn "安装源文件内容已发生变化，未删除：${source}"
+      return 0
+    fi
+  fi
+
+  rm -f -- "$source" \
+    || die "无法删除安装源文件：${source}"
+
+  ok "安装源文件已删除：${source}"
 }
 
 remove_shortcuts() {
@@ -5347,11 +5425,7 @@ remove_shortcuts() {
 
 remove_managed_script() {
   if [[ -e "$MANAGED_SCRIPT_PATH" ]]; then
-    if grep -q \
-        '^# zdd-argo' \
-        "$MANAGED_SCRIPT_PATH" \
-        2>/dev/null; then
-
+    if script_file_is_ours "$MANAGED_SCRIPT_PATH"; then
       rm -f \
         "$MANAGED_SCRIPT_PATH" \
         "${MANAGED_SCRIPT_PATH}.new."*
@@ -5502,8 +5576,6 @@ remove_service_account() {
   [[ "$service_uid" =~ ^[0-9]+$ ]] \
     || die "无法读取低权限服务账户 ${SERVICE_USER} 的 UID。"
 
-  # userdel 会在账户仍被进程使用时失败。先停止服务管理器中的服务，再对该项目专用
-  # UID 下的全部残留进程做 PID + 启动时间 + UID 三重校验后终止。
   service_stop || true
   if [[ "$INIT_SYSTEM" == "systemd" ]]; then
     systemctl kill --kill-who=all --signal=TERM "$SERVICE_NAME" >/dev/null 2>&1 || true
@@ -5513,7 +5585,6 @@ remove_service_account() {
 
   userdel_error="$(mktemp)"
   if ! userdel "$SERVICE_USER" 2> "$userdel_error"; then
-    # 防止停止与删除之间出现极短的进程竞态，重新扫描一次后只重试一次。
     stop_service_account_processes "$service_uid" || true
 
     if ! userdel "$SERVICE_USER" 2>> "$userdel_error"; then
@@ -5534,7 +5605,7 @@ remove_service_account() {
 
 command_uninstall_all() {
   warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户及脚本专用 sing-box/cloudflared/wgcf。"
-  warn "不会删除 apt 或其他脚本安装的 sing-box/cloudflared/wgcf，也不会删除当前下载的源文件。"
+  warn "不会删除 apt、apk 或其他脚本安装的共享程序和系统依赖。"
 
   if ! confirm_yes "确认完整卸载请输入 yes："; then
     info "已取消。"
@@ -5548,8 +5619,9 @@ command_uninstall_all() {
   remove_shortcuts
   remove_managed_script
   remove_service_account
-  cleanup_bin_dir
   service_daemon_reload
+  remove_downloaded_source_if_confirmed
+  cleanup_bin_dir
 
   ok "zdd-argo 及脚本专用 sing-box、cloudflared、wgcf 已完整卸载。"
 
@@ -5592,6 +5664,7 @@ remove_wgcf_program() {
 }
 
 cleanup_bin_dir() {
+  rm -f -- "$SOURCE_RECORD_FILE" "${SOURCE_RECORD_FILE}.new."*
   rmdir "$BIN_DIR" \
     2>/dev/null \
     || true
@@ -5726,7 +5799,6 @@ bootstrap() {
   require_root
   check_os
 
-  # 启动阶段只安装 zargo 管理入口，不自动安装依赖、核心或创建 Argo。
   install_shortcut
 }
 
