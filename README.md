@@ -30,12 +30,6 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
   && bash zdd-argo.sh
 ```
 
-唤醒菜单：
-
-```bash
-zargo
-```
-
 ### 卸载
 
 运行：
