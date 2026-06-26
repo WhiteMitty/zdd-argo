@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# zdd-argo：Debian / Ubuntu / Alpine 临时 Cloudflare Quick Tunnel + VMess/WS 管理脚本
+# 版本：v0.1.0；安装后的管理命令：zargo
+# 构建标识：WARP-RUNTIME-CHECK-DIRECT-OVERWRITE-20260626
 
 set -Eeuo pipefail
 IFS=$'\n\t'
@@ -49,6 +52,7 @@ SETTINGS_JSON="${DATA_DIR}/settings.json"
 WARP_DIR="${DATA_DIR}/warp"
 WARP_ACCOUNT_FILE="${WARP_DIR}/wgcf-account.toml"
 WARP_PROFILE_FILE="${WARP_DIR}/wgcf-profile.conf"
+WARP_CHECK_FILE="${WARP_DIR}/warp-check.json"
 LOCK_DIR="/run/lock/zdd-argo.lock.d"
 LOCK_OWNER_FILE="${LOCK_DIR}/owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
@@ -58,6 +62,8 @@ LEGACY_ZDD_PATHS=("/usr/bin/zdd" "/usr/local/sbin/zdd" "/usr/local/bin/zdd")
 LEGACY_SHORTCUT_PATH="/usr/local/sbin/zdd-argo"
 LEGACY_SHORTCUT_BIN="/usr/local/bin/zdd-argo"
 
+# 脚本使用独立目录保存经过 GitHub Release SHA-256 摘要校验的二进制，
+# 不覆盖系统中可能由 apt 或其他脚本维护的 sing-box / cloudflared。
 BIN_DIR="/usr/local/lib/zdd-argo"
 MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"
 MANAGED_SINGBOX_BIN="${BIN_DIR}/sing-box"
@@ -80,7 +86,7 @@ WARP_PRIVATE_KEY=""
 WARP_IPV4=""
 WARP_IPV6=""
 WARP_PEER_PUBLIC_KEY=""
-WARP_ENDPOINT_IP=""
+WARP_ENDPOINT_ADDRESS=""
 WARP_ENDPOINT_PORT=""
 WARP_MTU="1280"
 MENU_MODE=0
@@ -719,7 +725,7 @@ install_dependencies() {
     ensure_download_tool
 
     for cmd in \
-      jq openssl tmux ss base64 awk sed grep tar sha256sum find \
+      curl jq openssl tmux ss base64 awk sed grep tar sha256sum find \
       install mktemp readlink stat getent useradd groupadd userdel groupdel \
       setpriv logrotate wc iconv locale
     do
@@ -763,7 +769,7 @@ install_dependencies() {
     ensure_download_tool
 
     for cmd in \
-      jq openssl tmux ss base64 awk sed grep tar sha256sum find \
+      curl jq openssl tmux ss base64 awk sed grep tar sha256sum find \
       install mktemp readlink stat getent useradd groupadd userdel groupdel \
       su-exec logrotate wc
     do
@@ -2943,7 +2949,7 @@ load_settings() {
 
   if ! jq -e 'type == "object"' "$SETTINGS_JSON" >/dev/null 2>&1; then
     warn "设置文件损坏，已移走；当前恢复默认设置。"
-    mv -f "$SETTINGS_JSON" "${SETTINGS_JSON}.invalid.$(date +%s)"
+    rm -f "$SETTINGS_JSON"
     return 0
   fi
 
@@ -3351,47 +3357,53 @@ ensure_warp_profile() {
   chown root:root "$WARP_DIR"
   chmod 700 "$WARP_DIR"
 
-  if valid_warp_account_file && valid_warp_profile_file; then
-    chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
-    return 0
-  fi
-
   install_wgcf_if_needed
   [[ -n "$WGCF_BIN" ]] || die "未找到 wgcf。"
 
-  if [[ -e "$WARP_ACCOUNT_FILE" || -L "$WARP_ACCOUNT_FILE" ]]; then
-    if ! valid_warp_account_file; then
-      mv -f "$WARP_ACCOUNT_FILE" "${WARP_ACCOUNT_FILE}.invalid.$(date +%s)"
-    fi
-  fi
-
   if ! valid_warp_account_file; then
+    rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
     warn "正在注册新的 Cloudflare WARP 设备；wgcf 是第三方非官方工具。"
 
     if ! "$WGCF_BIN" \
         --config "$WARP_ACCOUNT_FILE" \
         register \
         --accept-tos; then
+      rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
       die "Cloudflare WARP 设备注册失败。"
     fi
   fi
 
-  rm -f "$WARP_PROFILE_FILE"
+  local profile_tmp=""
+  profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
 
   if ! "$WGCF_BIN" \
       --config "$WARP_ACCOUNT_FILE" \
       generate \
-      --profile "$WARP_PROFILE_FILE"; then
+      --profile "$profile_tmp"; then
+    rm -f "$profile_tmp"
     die "Cloudflare WARP WireGuard 配置生成失败。"
   fi
 
-  valid_warp_account_file \
-    || die "wgcf 未生成有效的 WARP 账户文件。"
-  valid_warp_profile_file \
-    || die "wgcf 未生成有效的 WireGuard 配置。"
+  chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
 
+  if ! valid_warp_account_file; then
+    rm -f "$profile_tmp"
+    die "wgcf 未生成有效的 WARP 账户文件。"
+  fi
+
+  if ! grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$profile_tmp"; then
+    rm -f "$profile_tmp"
+    die "wgcf 未生成有效的 WireGuard 配置。"
+  fi
+
+  # 每次启用 WARP 都重新生成并直接覆盖当前 profile，不保留历史副本。
+  rm -f "$WARP_PROFILE_FILE"
+  mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
   chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
-  ok "Cloudflare WARP 设备与 WireGuard 配置已准备完成。"
+  ok "Cloudflare WARP 设备与 WireGuard 配置已重新生成并覆盖。"
 }
 
 strip_ini_value() {
@@ -3418,34 +3430,6 @@ warp_profile_value() {
   strip_ini_value "$value"
 }
 
-resolve_warp_endpoint_ip() {
-  local host="$1"
-  local candidate=""
-
-  if valid_ipv4 "$host" || valid_ipv6 "$host"; then
-    printf '%s\n' "$host"
-    return 0
-  fi
-
-  while IFS= read -r candidate; do
-    candidate="${candidate%%[[:space:]]*}"
-    if valid_ipv4 "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done < <(getent ahostsv4 "$host" 2>/dev/null || true)
-
-  while IFS= read -r candidate; do
-    candidate="${candidate%%[[:space:]]*}"
-    if valid_ipv4 "$candidate" || valid_ipv6 "$candidate"; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done < <(getent hosts "$host" 2>/dev/null || true)
-
-  return 1
-}
-
 load_warp_profile_parameters() {
   local address_line=""
   local item=""
@@ -3464,6 +3448,7 @@ load_warp_profile_parameters() {
 
   WARP_IPV4=""
   WARP_IPV6=""
+  WARP_ENDPOINT_ADDRESS=""
 
   while IFS= read -r item; do
     item="$(strip_ini_value "$item")"
@@ -3498,9 +3483,16 @@ load_warp_profile_parameters() {
   ((10#$WARP_ENDPOINT_PORT >= 1 && 10#$WARP_ENDPOINT_PORT <= 65535)) \
     || die "WARP Endpoint 端口无效。"
 
-  WARP_ENDPOINT_IP="$(resolve_warp_endpoint_ip "$endpoint_host" 2>/dev/null || true)"
-  [[ -n "$WARP_ENDPOINT_IP" ]] \
-    || die "无法解析 WARP Endpoint：${endpoint_host}"
+  if ! valid_ipv4 "$endpoint_host" \
+      && ! valid_ipv6 "$endpoint_host" \
+      && ! valid_domain_name "$endpoint_host"; then
+    die "WARP Endpoint 地址无效：${endpoint_host}"
+  fi
+
+  # 保留 wgcf 返回的 Endpoint 域名，不再固定为 getent 返回的第一个 IP。
+  # sing-box 使用独立的直连 DoH bootstrap 解析它，可避免单个失效 IP 导致 WARP 全部不通。
+  WARP_ENDPOINT_ADDRESS="${endpoint_host%.}"
+  WARP_ENDPOINT_ADDRESS="${WARP_ENDPOINT_ADDRESS,,}"
 
   if [[ "$mtu" =~ ^[0-9]{3,5}$ ]] \
       && ((10#$mtu >= 576 && 10#$mtu <= 9000)); then
@@ -3605,7 +3597,7 @@ singbox_template_warp() {
       --arg private_key "$WARP_PRIVATE_KEY" \
       --arg ipv4 "$WARP_IPV4" \
       --arg ipv6 "$WARP_IPV6" \
-      --arg peer_ip "$WARP_ENDPOINT_IP" \
+      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
       --argjson peer_port "$WARP_ENDPOINT_PORT" \
       --arg public_key "$WARP_PEER_PUBLIC_KEY" \
       --argjson mtu "$WARP_MTU" \
@@ -3616,6 +3608,17 @@ singbox_template_warp() {
               type: "local",
               tag: "local-dns",
               prefer_go: true
+            },
+            {
+              type: "https",
+              tag: "warp-bootstrap-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              }
             }
           ],
           final: "local-dns",
@@ -3631,15 +3634,19 @@ singbox_template_warp() {
               private_key: $private_key,
               peers: [
                 {
-                  address: $peer_ip,
+                  address: $peer_address,
                   port: $peer_port,
                   public_key: $public_key,
                   allowed_ips: ["0.0.0.0/0", "::/0"],
-                  persistent_keepalive_interval: 30,
-                  reserved: [0, 0, 0]
+                  persistent_keepalive_interval: 30
                 }
               ],
-              detour: "direct"
+              udp_timeout: "5m",
+              connect_timeout: "10s",
+              domain_resolver: {
+                server: "warp-bootstrap-doh",
+                strategy: "ipv4_only"
+              }
             }
           ]
         | .route.default_domain_resolver = {
@@ -3656,13 +3663,24 @@ singbox_template_doh_warp() {
       --arg private_key "$WARP_PRIVATE_KEY" \
       --arg ipv4 "$WARP_IPV4" \
       --arg ipv6 "$WARP_IPV6" \
-      --arg peer_ip "$WARP_ENDPOINT_IP" \
+      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
       --argjson peer_port "$WARP_ENDPOINT_PORT" \
       --arg public_key "$WARP_PEER_PUBLIC_KEY" \
       --argjson mtu "$WARP_MTU" \
       '
         .dns = {
           servers: [
+            {
+              type: "https",
+              tag: "warp-bootstrap-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              }
+            },
             {
               type: "https",
               tag: "cloudflare-doh",
@@ -3689,15 +3707,19 @@ singbox_template_doh_warp() {
               private_key: $private_key,
               peers: [
                 {
-                  address: $peer_ip,
+                  address: $peer_address,
                   port: $peer_port,
                   public_key: $public_key,
                   allowed_ips: ["0.0.0.0/0", "::/0"],
-                  persistent_keepalive_interval: 30,
-                  reserved: [0, 0, 0]
+                  persistent_keepalive_interval: 30
                 }
               ],
-              detour: "direct"
+              udp_timeout: "5m",
+              connect_timeout: "10s",
+              domain_resolver: {
+                server: "warp-bootstrap-doh",
+                strategy: "ipv4_only"
+              }
             }
           ]
         | .route.default_domain_resolver = {
@@ -3721,9 +3743,13 @@ write_singbox_config() {
 
   if [[ "$WARP_ENABLED" == "1" ]]; then
     load_warp_profile_parameters
+  else
+    rm -f "$WARP_CHECK_FILE"
   fi
 
   local tmp=""
+  local expected_sha=""
+  local actual_sha=""
   tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
 
   case "${DOH_ENABLED}:${WARP_ENABLED}" in
@@ -3752,13 +3778,253 @@ write_singbox_config() {
     rm -f "$tmp"
 
     if [[ "$DOH_ENABLED" == "1" || "$WARP_ENABLED" == "1" ]]; then
-      die "新 sing-box 配置校验失败，未覆盖现有配置；请先通过菜单 7 更新 sing-box，再重试 DoH/WARP 部署。"
+      die "新 sing-box 配置校验失败；请先通过菜单 7 更新 sing-box，再重试 DoH/WARP 部署。"
     fi
 
-    die "新 sing-box 配置校验失败，未覆盖现有配置。"
+    die "新 sing-box 配置校验失败。"
   fi
 
+  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
+
+  # 明确停止沿用旧配置：删除目标后直接写入当前模板，不保存历史配置副本。
+  rm -f "$SINGBOX_CONFIG"
   mv -f "$tmp" "$SINGBOX_CONFIG"
+  chmod 640 "$SINGBOX_CONFIG"
+  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
+
+  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] \
+    || die "sing-box 配置覆盖后摘要不一致。"
+
+  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" \
+    || die "已覆盖的 sing-box 配置未通过二次校验。"
+
+  case "${DOH_ENABLED}:${WARP_ENABLED}" in
+    0:0)
+      jq -e '
+        (.route.final == "direct")
+        and ((.endpoints // []) | length == 0)
+        and ((.dns // null) == null)
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "直接出站模板写入结果不符合预期。"
+      ;;
+    1:0)
+      jq -e '
+        (.route.final == "direct")
+        and (.dns.final == "cloudflare-doh")
+        and ((.endpoints // []) | length == 0)
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "DoH 模板写入结果不符合预期。"
+      ;;
+    0:1)
+      jq -e '
+        (.route.final == "warp")
+        and (.dns.final == "local-dns")
+        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "WARP 模板写入结果不符合预期。"
+      ;;
+    1:1)
+      jq -e '
+        (.route.final == "warp")
+        and (.dns.final == "cloudflare-doh")
+        and ((.dns.servers // []) | any(.tag == "cloudflare-doh" and .detour == "warp"))
+        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "DoH + WARP 模板写入结果不符合预期。"
+      ;;
+  esac
+}
+
+find_free_loopback_port() {
+  local port=0
+
+  for ((port = 18080; port <= 18179; port++)); do
+    if ! ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${port}([[:space:]]|$)"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+stop_checked_process() {
+  local pid="$1"
+  local i=0
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+
+  kill -TERM "$pid" 2>/dev/null || true
+
+  for ((i = 0; i < 5; i++)); do
+    if ! kill -0 "$pid" 2>/dev/null; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 1
+  done
+
+  kill -KILL "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+verify_warp_runtime() {
+  [[ "$WARP_ENABLED" == "1" ]] || return 0
+
+  local test_port=""
+  local test_config=""
+  local test_log=""
+  local test_pid=""
+  local response=""
+  local warp_state=""
+  local exit_ip=""
+  local colo=""
+  local i=0
+
+  service_is_active \
+    || die "WARP 自检前发现 sing-box 服务未运行。"
+  listener_exact_loopback \
+    || die "WARP 自检前发现 127.0.0.1:${LOCAL_PORT} 未监听。"
+
+  test_port="$(find_free_loopback_port)" \
+    || die "无法找到用于 WARP 本机自检的空闲回环端口。"
+
+  test_config="$(mktemp "${DATA_DIR}/.warp-client-check.json.XXXXXX")"
+  test_log="$(mktemp "${DATA_DIR}/.warp-client-check.log.XXXXXX")"
+
+  jq -n \
+    --arg uuid "$UUID" \
+    --arg path "$WSPATH" \
+    --argjson server_port "$LOCAL_PORT" \
+    --argjson listen_port "$test_port" \
+    '{
+      log: {
+        level: "debug",
+        timestamp: true
+      },
+      inbounds: [
+        {
+          type: "mixed",
+          tag: "warp-check-in",
+          listen: "127.0.0.1",
+          listen_port: $listen_port
+        }
+      ],
+      outbounds: [
+        {
+          type: "vmess",
+          tag: "local-vmess-check",
+          server: "127.0.0.1",
+          server_port: $server_port,
+          uuid: $uuid,
+          security: "auto",
+          alter_id: 0,
+          transport: {
+            type: "ws",
+            path: $path
+          }
+        }
+      ],
+      route: {
+        final: "local-vmess-check"
+      }
+    }' > "$test_config"
+
+  chmod 600 "$test_config"
+
+  "$SINGBOX_BIN" check -c "$test_config" \
+    || {
+      rm -f "$test_config" "$test_log"
+      die "WARP 自检客户端配置未通过 sing-box 校验。"
+    }
+
+  "$SINGBOX_BIN" run -c "$test_config" \
+    > "$test_log" 2>&1 &
+  test_pid=$!
+
+  for ((i = 1; i <= 15; i++)); do
+    if ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
+      break
+    fi
+
+    if ! kill -0 "$test_pid" 2>/dev/null; then
+      break
+    fi
+
+    sleep 1
+  done
+
+  if ! kill -0 "$test_pid" 2>/dev/null \
+      || ! ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
+    warn "WARP 自检客户端未能正常启动，日志如下："
+    tail -n 100 "$test_log" >&2 || true
+    stop_checked_process "$test_pid"
+    rm -f "$test_config" "$test_log"
+    die "WARP 运行时自检客户端启动失败。"
+  fi
+
+  for ((i = 1; i <= 3; i++)); do
+    response="$(
+      curl \
+        --silent \
+        --show-error \
+        --max-time 25 \
+        --connect-timeout 8 \
+        --proxy "socks5h://127.0.0.1:${test_port}" \
+        https://www.cloudflare.com/cdn-cgi/trace \
+        2>> "$test_log" \
+        || true
+    )"
+
+    warp_state="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "warp" {print $2; exit}')"
+
+    if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
+      break
+    fi
+
+    sleep 2
+  done
+
+  exit_ip="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "ip" {print $2; exit}')"
+  colo="$(printf '%s\n' "$response" | tr -d '\r' | awk -F= '$1 == "colo" {print $2; exit}')"
+
+  stop_checked_process "$test_pid"
+  rm -f "$test_config"
+
+  if [[ "$warp_state" != "on" && "$warp_state" != "plus" ]]; then
+    warn "通过当前 VMess/WS 服务访问 Cloudflare Trace 时，未确认 WARP 已接管出站。"
+    printf '\n%s\n' "WARP 自检客户端日志：" >&2
+    tail -n 120 "$test_log" >&2 || true
+    printf '\n%s\n' "当前 sing-box 服务日志：" >&2
+    service_print_logs 120
+    rm -f "$test_log" "$WARP_CHECK_FILE"
+    die "DoH + WARP 实际链路不可用；未继续创建 Quick Tunnel 和分享链接。"
+  fi
+
+  rm -f "$test_log"
+
+  jq -n \
+    --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg warp "$warp_state" \
+    --arg ip "$exit_ip" \
+    --arg colo "$colo" \
+    --arg endpoint "$WARP_ENDPOINT_ADDRESS" \
+    --argjson port "$WARP_ENDPOINT_PORT" \
+    '{
+      checked_at: $checked_at,
+      warp: $warp,
+      exit_ip: $ip,
+      colo: $colo,
+      endpoint: $endpoint,
+      port: $port
+    }' > "$WARP_CHECK_FILE"
+
+  chmod 600 "$WARP_CHECK_FILE"
+  ok "WARP 实际链路自检通过：VMess/WS → DoH → WARP，warp=${warp_state}，出口=${exit_ip:-未知}，机房=${colo:-未知}。"
 }
 
 singbox_unit_is_ours() {
@@ -4017,7 +4283,8 @@ ensure_singbox_running() {
   service_enable \
     || die "$(printf '%s' "无法启用 ${SERVICE_NAME}。")"
 
-  service_restart || true
+  service_restart \
+    || die "$(printf '%s' "无法重启 ${SERVICE_NAME}，拒绝继续使用可能仍在运行的旧配置。")"
 
   if ! wait_for_singbox_ready; then
     service_print_logs 80
@@ -4656,11 +4923,18 @@ prepare_deployment() {
 
 rebuild_deployment_after_stop() {
   generate_identity
+
+  # 先停止旧 sing-box，确保后续启动的一定是刚刚覆盖写入的新配置。
+  service_stop || true
+  service_reset_failed
+
   write_singbox_config
   write_singbox_service
   write_cloudflared_runner
   write_logrotate_config
+
   ensure_singbox_running
+  verify_warp_runtime
   start_tunnel
 }
 
@@ -4802,6 +5076,21 @@ show_status() {
   fi
   print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 22
 
+  if [[ "$WARP_ENABLED" == "1" && -f "$WARP_CHECK_FILE" ]]; then
+    local warp_checked=""
+    local warp_exit_ip=""
+    local warp_colo=""
+    local warp_state=""
+
+    warp_checked="$(jq -r '.checked_at // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_exit_ip="$(jq -r '.exit_ip // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_colo="$(jq -r '.colo // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_state="$(jq -r '.warp // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+
+    print_kv "WARP 自检：" "${warp_state} / ${warp_exit_ip} / ${warp_colo}" 22
+    print_kv "WARP 自检时间：" "$warp_checked" 22
+  fi
+
   print_aligned_label "sing-box：" 22
   if [[ -n "$SINGBOX_BIN" ]]; then
     "$SINGBOX_BIN" version \
@@ -4889,6 +5178,9 @@ show_status() {
 
   print_section_footer "$C_CYAN" 78
 
+  printf '\n%s\n' "最近 30 行 sing-box 日志："
+  service_print_logs 30
+
   if [[ -f "$LOG_FILE" ]]; then
     printf '\n%s\n' "最近 20 行 cloudflared 日志："
     tail -n 20 "$LOG_FILE" || true
@@ -4957,7 +5249,7 @@ command_update_wgcf() {
 
   install_or_update_wgcf
   resolve_wgcf_bin
-  ok "脚本专用 wgcf 已安装或更新；现有 WARP 账户与 WireGuard 配置保持不变。"
+  ok "脚本专用 wgcf 已安装或更新；下次启用 WARP 时会直接刷新并覆盖 WireGuard profile。"
 }
 
 command_update_components() {
@@ -5377,7 +5669,7 @@ interactive_menu() {
 
     cat <<'EOF'
 1. 无交互 生成 / 重建 Argo（直接出站）
-2. 无交互 生成 / 重建 Argo（启用 DoH + WARP）
+2. 无交互 生成 / 重建 Argo（DoH + WARP，部署前强制自检）
 3. 自定义 生成 / 重建 Argo（分别配置 DoH / WARP）
 4. 查看当前订阅
 5. 查看运行状态与最近日志
