@@ -37,9 +37,6 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 ```bash
 zargo
 ```
-
-选择选项 7
-
 完整卸载仅删除本脚本安装在 /usr/local/lib/zdd-argo/ 中的 sing-box、cloudflared，以及 zdd-argo 自己创建的服务和配置；不会删除或停止由 apt、其他脚本或手动安装的同名程序与服务，因此，机器上可能同时存在多个 sing-box 或 cloudflared 实例；只要它们使用不同的服务、配置和监听端口，即可相互独立运行。
 
 ### 其他
