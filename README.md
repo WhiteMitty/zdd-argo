@@ -8,7 +8,6 @@
 - 临时隧道由 `tmux` 保持，断开 SSH 后仍可运行
 - 默认优选域名：`saas.sin.fan`
 - 默认 ECH：`cloudflare-ech.com+https://doh.pub/dns-query`
-- Quick Tunnel 适合临时测试，不建议作为长期生产服务
 
 ### 要求
 
