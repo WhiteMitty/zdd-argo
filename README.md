@@ -29,25 +29,22 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
   && bash zdd-argo.sh
 ```
 
+### 使用
+- 菜单支持：
+- 自动生成 VMess / VLESS-ENC / 全部
+- 手动设置端口、名称、优选域名
+- 查看订阅
+- 查看状态与日志
+- 停止临时隧道
+- 更新核心与 cloudflared
+- 完整卸载
+
 ### 卸载
 运行：
 ```bash
 zargo
 ```
 选择完整卸载。
-完整卸载会删除：
-/etc/zdd-argo
-/usr/local/lib/zdd-argo
-zargo 快捷命令
-zdd-argo 专用服务
-zdd-argo 专用日志
-zdd-argo 专用低权限账户
-本脚本创建的 tmux 会话
-不会删除：
-apt / apk 安装的系统依赖
-其他脚本安装的 sing-box / xray / cloudflared
-手动安装的同名程序
-非本脚本创建的 tmux 会话，除非你手动选择删除
 
 ### 其他
 - 停止或重建隧道后，旧 trycloudflare.com 域名会失效
