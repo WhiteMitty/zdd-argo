@@ -30,7 +30,6 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 ```
 
 ### 使用
-- 菜单支持：
 - 自动生成 VMess / VLESS-ENC / 全部
 - 手动设置端口、名称、优选域名
 - 查看订阅
