@@ -4138,36 +4138,37 @@ deployment_transaction_cleanup_service_identity() {
   if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]] \
       && getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
 
-    if ! service_marker_is_recognized; then
-      warn "回滚时服务账户标记未通过校验，已保留同名服务账户、服务组和主目录：${SERVICE_USER}"
-      return 0
-    fi
-
-    passwd_line="$(getent passwd "$SERVICE_USER")"
-    IFS=':' read -r _ _ service_uid existing_gid _ existing_home existing_shell <<< "$passwd_line"
-    expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
-
-    if [[ "$service_uid" =~ ^[0-9]+$ \
-        && "$existing_home" == "$SERVICE_HOME" \
-        && -n "$expected_gid" \
-        && "$existing_gid" == "$expected_gid" \
-        && ( "$existing_shell" == "$SERVICE_SHELL" \
-          || "$existing_shell" == "/usr/sbin/nologin" \
-          || "$existing_shell" == "/sbin/nologin" \
-          || "$existing_shell" == "/bin/false" ) ]]; then
-
-      stop_service_account_processes "$service_uid" \
-        || warn "回滚时无法确认低权限服务账户残留进程已全部退出：${SERVICE_USER}"
-      userdel "$SERVICE_USER" >/dev/null 2>&1 \
-        || warn "回滚时无法删除新建低权限服务账户：${SERVICE_USER}"
+    if [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]] \
+        && ! service_marker_is_recognized; then
+      warn "回滚时服务账户标记未通过校验，已保留同名服务账户：${SERVICE_USER}"
     else
-      warn "回滚时检测到同名服务账户不满足安全校验，已保留：${SERVICE_USER}"
+      passwd_line="$(getent passwd "$SERVICE_USER")"
+      IFS=':' read -r _ _ service_uid existing_gid _ existing_home existing_shell <<< "$passwd_line"
+      expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
+
+      if [[ "$service_uid" =~ ^[0-9]+$ \
+          && "$existing_home" == "$SERVICE_HOME" \
+          && -n "$expected_gid" \
+          && "$existing_gid" == "$expected_gid" \
+          && ( "$existing_shell" == "$SERVICE_SHELL" \
+            || "$existing_shell" == "/usr/sbin/nologin" \
+            || "$existing_shell" == "/sbin/nologin" \
+            || "$existing_shell" == "/bin/false" ) ]]; then
+
+        stop_service_account_processes "$service_uid" \
+          || warn "回滚时无法确认低权限服务账户残留进程已全部退出：${SERVICE_USER}"
+        userdel "$SERVICE_USER" >/dev/null 2>&1 \
+          || warn "回滚时无法删除新建低权限服务账户：${SERVICE_USER}"
+      else
+        warn "回滚时检测到同名服务账户不满足安全校验，已保留：${SERVICE_USER}"
+      fi
     fi
   fi
 
   if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
       && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-    if service_marker_is_recognized; then
+    if [[ ! -e "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]] \
+        || service_marker_is_recognized; then
       groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
         || warn "回滚时无法删除新建低权限服务组：${SERVICE_GROUP}"
     else
@@ -4177,7 +4178,8 @@ deployment_transaction_cleanup_service_identity() {
 
   if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 ]] \
       && [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]]; then
-    if service_marker_is_recognized; then
+    if [[ ! -e "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]] \
+        || service_marker_is_recognized; then
       rm -rf -- "$SERVICE_HOME" \
         || warn "回滚时无法删除新建低权限服务主目录：${SERVICE_HOME}"
     else
