@@ -5129,7 +5129,7 @@ menu_header_status() {
     vless_state="运行中"
   fi
 
-  print_section_header "zargo 纯净临时隧道" "$C_YELLOW" 78
+  print_section_header "zargo 临时隧道" "$C_YELLOW" 78
   print_aligned_label "核心版本：" 14
   printf '%s\n' "$(xray_version_short)"
   status_protocol_line "VMess" "$vmess_state"
