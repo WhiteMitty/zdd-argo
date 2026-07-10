@@ -3,29 +3,31 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.1.0"
-BUILD_ID="XRAY-VLESSENC-WS-ARGO-XORPUB-20260702"
+SCRIPT_VERSION="0.2.0"
+BUILD_ID="SINGBOX-WARP-DOH-XRAY-DUAL-IPMODE-20260710"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_XRAY_NODE_NAME="$DEFAULT_NODE_NAME"
 DEFAULT_XRAY_LOCAL_PORT="10001"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
 DEFAULT_XRAY_PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
+DEFAULT_DOH_ENABLED="0"
+DEFAULT_WARP_ENABLED="0"
+DEFAULT_OUTBOUND_IP_MODE="prefer_ipv4"
 NODE_NAME="$DEFAULT_NODE_NAME"
 LOCAL_PORT="$DEFAULT_LOCAL_PORT"
 XRAY_NODE_NAME="$DEFAULT_XRAY_NODE_NAME"
 XRAY_LOCAL_PORT="$DEFAULT_XRAY_LOCAL_PORT"
 PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
 XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+WARP_ENABLED="$DEFAULT_WARP_ENABLED"
+OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
 ECH_CONFIG="cloudflare-ech.com+https://doh.pub/dns-query"
 SETTINGS_CONFIGURED=0
-VMESS_TMUX_SESSION="zdd-argo-vmess"
-LEGACY_VMESS_TMUX_SESSION="zdd-argo-singbox"
-TMUX_SESSION="$VMESS_TMUX_SESSION"
+TMUX_SESSION="zdd-argo-singbox"
 LEGACY_TMUX_SESSION="zdd-argo"
-VLESS_TMUX_SESSION="zdd-argo-vless"
-LEGACY_XRAY_TMUX_SESSION="zdd-argo-xr"
-XRAY_TMUX_SESSION="$VLESS_TMUX_SESSION"
+XRAY_TMUX_SESSION="zdd-argo-xr"
 SERVICE_NAME="zdd-argo-singbox"
 XRAY_SERVICE_NAME="zdd-argo-xray"
 SERVICE_USER="zdd-argo-svc"
@@ -66,6 +68,10 @@ XRAY_VLESS_JSON_FILE="${DATA_DIR}/vless-ws.json"
 XRAY_VLESS_LINK_FILE="${DATA_DIR}/vless-ws.txt"
 ECH_NOTE_FILE="${DATA_DIR}/ech.txt"
 SETTINGS_JSON="${DATA_DIR}/settings.json"
+WARP_DIR="${DATA_DIR}/warp"
+WARP_ACCOUNT_FILE="${WARP_DIR}/wgcf-account.toml"
+WARP_PROFILE_FILE="${WARP_DIR}/wgcf-profile.conf"
+WARP_CHECK_FILE="${WARP_DIR}/warp-check.json"
 LOCK_DIR="/run/lock/zdd-argo.lock.d"
 LOCK_OWNER_FILE="${LOCK_DIR}/owner"
 SHORTCUT_PATH="/usr/local/bin/zargo"
@@ -81,9 +87,11 @@ MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"
 MANAGED_SINGBOX_BIN="${BIN_DIR}/sing-box"
 MANAGED_XRAY_BIN="${BIN_DIR}/xray"
 MANAGED_CLOUDFLARED_BIN="${BIN_DIR}/cloudflared"
+MANAGED_WGCF_BIN="${BIN_DIR}/wgcf"
 SINGBOX_RELEASE_META="${BIN_DIR}/sing-box.release.json"
 XRAY_RELEASE_META="${BIN_DIR}/xray.release.json"
 CLOUDFLARED_RELEASE_META="${BIN_DIR}/cloudflared.release.json"
+WGCF_RELEASE_META="${BIN_DIR}/wgcf.release.json"
 GITHUB_API_BASE="https://api.github.com"
 
 SCRIPT_PATH=""
@@ -102,7 +110,19 @@ CREATED_AT=""
 SINGBOX_BIN=""
 XRAY_BIN=""
 CLOUDFLARED_BIN=""
+WGCF_BIN=""
+WARP_PRIVATE_KEY=""
+WARP_IPV4=""
+WARP_IPV6=""
+WARP_PEER_PUBLIC_KEY=""
+WARP_ENDPOINT_ADDRESS=""
+WARP_ENDPOINT_PORT=""
+WARP_PROFILE_ENDPOINT_PORT=""
+WARP_MTU="1280"
 MENU_MODE=0
+UI_WIDTH=78
+UI_LEFT_WIDTH=36
+MENU_DESC_COLUMN=44
 LOCK_HELD=0
 LOCK_OWNER_PID=""
 LOCK_OWNER_START=""
@@ -208,6 +228,33 @@ clear_screen() {
   fi
 }
 
+refresh_ui_width() {
+  local columns="${COLUMNS:-}"
+  local detected=""
+
+  if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
+    detected="$(tput cols 2>/dev/null || true)"
+    [[ "$detected" =~ ^[0-9]+$ ]] && columns="$detected"
+  fi
+
+  if [[ "$columns" =~ ^[0-9]+$ ]]; then
+    if ((columns < 60)); then
+      UI_WIDTH=58
+    elif ((columns < 80)); then
+      UI_WIDTH=$((columns - 2))
+    else
+      UI_WIDTH=78
+    fi
+  else
+    UI_WIDTH=78
+  fi
+
+  UI_LEFT_WIDTH=$(( (UI_WIDTH - 10) / 2 ))
+  ((UI_LEFT_WIDTH >= 22)) || UI_LEFT_WIDTH=22
+  MENU_DESC_COLUMN=$((UI_WIDTH * 56 / 78))
+  ((MENU_DESC_COLUMN >= 34)) || MENU_DESC_COLUMN=34
+}
+
 ensure_utf8_locale() {
   local current=""
   local candidate=""
@@ -287,10 +334,14 @@ print_kv() {
 print_section_header() {
   local title="$1"
   local color="${2:-}"
-  local total_width="${3:-78}"
+  local total_width="${3:-$UI_WIDTH}"
   local title_width=""
   local left=0
   local right=0
+
+  if [[ "$total_width" == "78" && "$UI_WIDTH" -lt 78 ]]; then
+    total_width="$UI_WIDTH"
+  fi
 
   title_width="$(text_display_width "$title")"
   [[ "$title_width" =~ ^[0-9]+$ ]] || title_width="${#title}"
@@ -312,7 +363,11 @@ print_section_header() {
 
 print_section_footer() {
   local color="${1:-}"
-  local total_width="${2:-78}"
+  local total_width="${2:-$UI_WIDTH}"
+
+  if [[ "$total_width" == "78" && "$UI_WIDTH" -lt 78 ]]; then
+    total_width="$UI_WIDTH"
+  fi
 
   printf '%s' "$C_CYAN"
   printf '%*s' "$total_width" '' | tr ' ' '='
@@ -528,6 +583,45 @@ service_reset_failed() {
   esac
 }
 
+service_print_logs() {
+  local lines="${1:-80}"
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      journalctl \
+        -u "$SERVICE_NAME" \
+        -n "$lines" \
+        --no-pager \
+        >&2 \
+        || true
+      ;;
+    openrc)
+      rc-service "$SERVICE_NAME" status >&2 || true
+      ss -ltnp 2>/dev/null | grep -E "(^|:)${LOCAL_PORT}[[:space:]]" >&2 || true
+
+      if [[ -f "$SINGBOX_LOG_FILE" ]]; then
+        tail -n "$lines" "$SINGBOX_LOG_FILE" >&2 || true
+      else
+        warn "OpenRC 模式未找到 sing-box 日志文件：${SINGBOX_LOG_FILE}"
+      fi
+      ;;
+  esac
+}
+
+runtime_label() {
+  case "$INIT_SYSTEM" in
+    systemd)
+      printf '%s' "Debian/Ubuntu + systemd"
+      ;;
+    openrc)
+      printf '%s' "Alpine + OpenRC"
+      ;;
+    *)
+      printf '%s' "未知"
+      ;;
+  esac
+}
+
 download_tool_available() {
   command -v curl >/dev/null 2>&1 \
     || wget_is_usable
@@ -657,12 +751,29 @@ print_binary_run_error() {
   rm -f "$err_file"
 }
 
+singbox_version_ok() {
+  local binary="$1"
+  local first_line=""
+
+  first_line="$("$binary" version 2>/dev/null | head -n 1 || true)"
+  [[ "$first_line" == sing-box\ version\ * ]]
+}
+
 cloudflared_version_ok() {
   local binary="$1"
   local first_line=""
 
   first_line="$("$binary" --version 2>/dev/null | head -n 1 || true)"
   [[ "${first_line,,}" == cloudflared\ version\ * ]]
+}
+
+wgcf_version_ok() {
+  local binary="$1"
+  local help_text=""
+
+  help_text="$("$binary" --help 2>&1 || true)"
+  [[ "$help_text" == *"WireGuard Cloudflare Warp utility"* \
+    || "$help_text" == *"wgcf is a utility for Cloudflare Warp"* ]]
 }
 
 xray_version_ok() {
@@ -1095,6 +1206,38 @@ wait_for_process_exit() {
   return 1
 }
 
+lock_operation_label() {
+  case "${1:-unknown}" in
+    command_generate_noninteractive)
+      printf '%s' "新建 sing-box VMess/WS（直出）"
+      ;;
+    command_generate_noninteractive_doh_warp)
+      printf '%s' "新建 sing-box VMess/WS（DoH + WARP）"
+      ;;
+    command_generate_custom)
+      printf '%s' "新建 sing-box VMess/WS（自定义）"
+      ;;
+    command_generate_xray_vlessenc_ws)
+      printf '%s' "新建 Xray VLESS-ENC/WS（直出）"
+      ;;
+    show_subscription|show_all_subscriptions|show_xray_subscription)
+      printf '%s' "查看当前订阅"
+      ;;
+    command_update_components)
+      printf '%s' "更新全部组件"
+      ;;
+    command_stop_clear_cache)
+      printf '%s' "停止全部隧道并清理缓存"
+      ;;
+    command_uninstall_all)
+      printf '%s' "完整卸载 zdd-argo（含 Xray）"
+      ;;
+    *)
+      printf '%s' "未知操作"
+      ;;
+  esac
+}
+
 confirm_force() {
   local prompt="$1"
   local answer=""
@@ -1203,21 +1346,11 @@ clear_unverifiable_lock() {
 
   if IFS=' ' read -r pid start operation \
       < <(read_lock_owner 2>/dev/null); then
-    if lock_owner_is_alive "$pid" "$start"; then
-      warn "$(printf '%s' "异常锁已重新变为可验证状态，且对应 zdd-argo 操作仍在运行；未清理该锁。")"
-      return 0
-    fi
-    if remove_lock_dir_if_owner_matches "$pid" "$start"; then
-      ok "$(printf '%s' "可验证的陈旧 zdd-argo 操作锁已清理。")"
-      return 0
-    fi
-    warn "$(printf '%s' "可验证陈旧锁清理失败，改用异常锁隔离流程。")"
+    return 0
   fi
 
   if quarantine_lock_dir "$inode_before"; then
     ok "$(printf '%s' "异常的 zdd-argo 操作锁已清理。")"
-  else
-    die "$(printf '%s' "异常的 zdd-argo 操作锁清理失败。")"
   fi
 }
 
@@ -1434,7 +1567,7 @@ script_file_is_ours() {
   local path="$1"
 
   [[ -f "$path" ]] \
-    && grep -Fqx 'SCRIPT_VERSION="0.1.0"' "$path" 2>/dev/null \
+    && grep -Fqx 'SCRIPT_VERSION="0.2.0"' "$path" 2>/dev/null \
     && grep -Fqx 'DEFAULT_NODE_NAME="zdd-argo"' "$path" 2>/dev/null \
     && grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null
 }
@@ -1706,6 +1839,18 @@ resolve_cloudflared_bin() {
   fi
 }
 
+resolve_wgcf_bin() {
+  WGCF_BIN=""
+
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    WGCF_BIN="$MANAGED_WGCF_BIN"
+  elif command -v wgcf >/dev/null 2>&1; then
+    WGCF_BIN="$(command -v wgcf)"
+  elif [[ -x /usr/local/bin/wgcf ]]; then
+    WGCF_BIN="/usr/local/bin/wgcf"
+  fi
+}
+
 safe_download() {
   local url="$1"
   local output="$2"
@@ -1904,6 +2049,353 @@ write_release_metadata() {
     rm -f "$tmp"
     return 1
   fi
+}
+
+install_or_update_singbox() {
+  local arch=""
+  local asset_regex=""
+  local info_line=""
+  local asset_name=""
+  local asset_url=""
+  local digest=""
+  local release_tag=""
+  local work=""
+  local archive=""
+  local extract_dir=""
+  local list_file=""
+  local candidate=""
+  local new_binary=""
+  local backup=""
+  local before=""
+  local after=""
+  local meta_backup=""
+  local had_managed=0
+  local had_unit=0
+  local was_active=0
+  local -a sb_candidates=()
+
+  arch="$(uname -m)"
+
+  case "$arch" in
+    x86_64|amd64)
+      asset_regex='^sing-box-.*-linux-amd64\.tar\.gz$'
+      ;;
+
+    aarch64|arm64)
+      asset_regex='^sing-box-.*-linux-arm64\.tar\.gz$'
+      ;;
+
+    *)
+      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；当前脚本支持 amd64 与 arm64。")"
+      ;;
+  esac
+
+  resolve_singbox_bin
+
+  before="$(printf '%s' "未安装")"
+
+  if [[ -n "$SINGBOX_BIN" ]]; then
+    before="$(
+      "$SINGBOX_BIN" version \
+        2>/dev/null \
+        | head -n 1 \
+        || true
+    )"
+  fi
+
+  info "$(printf '%s' "查询 sing-box 官方 GitHub 最新稳定版……")"
+
+  info_line="$(
+    github_latest_asset_info \
+      "SagerNet/sing-box" \
+      "$asset_regex"
+  )"
+
+  IFS=$'\t' read -r \
+    asset_name \
+    asset_url \
+    digest \
+    release_tag \
+    <<< "$info_line"
+
+  [[ -n "$asset_name" \
+    && -n "$asset_url" \
+    && -n "$release_tag" ]] \
+    || die "$(printf '%s' "sing-box Release 信息不完整。")"
+
+  work="$(mktemp -d)"
+  archive="${work}/${asset_name}"
+  extract_dir="${work}/extract"
+
+  mkdir -p "$extract_dir"
+
+  if ! safe_download \
+      "$asset_url" \
+      "$archive"; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "sing-box 安装包下载失败。")"
+  fi
+
+  verify_github_asset \
+    "SagerNet/sing-box" \
+    "$asset_name" \
+    "$asset_url" \
+    "$digest" \
+    "$archive"
+
+  list_file="${work}/archive.list"
+
+  if ! tar -tzf \
+      "$archive" \
+      > "$list_file"; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "无法读取 sing-box 压缩包目录。")"
+  fi
+
+  if grep -Eq \
+      '(^/|(^|/)\.\.(/|$))' \
+      "$list_file"; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "sing-box 压缩包包含不安全路径，已拒绝解压。")"
+  fi
+
+  if ! tar -xzf \
+      "$archive" \
+      -C "$extract_dir"; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "sing-box 压缩包解压失败。")"
+  fi
+
+  mapfile -t sb_candidates < <(
+    find \
+      "$extract_dir" \
+      -type f \
+      -name sing-box \
+      -print
+  )
+
+  if [[ ${#sb_candidates[@]} -ne 1 ]]; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "sing-box 压缩包内未找到唯一可执行文件。")"
+  fi
+
+  candidate="${sb_candidates[0]}"
+  chmod 0755 "$candidate"
+
+  if ! singbox_version_ok "$candidate"; then
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      ensure_alpine_binary_compat || true
+    fi
+  fi
+
+  if ! singbox_version_ok "$candidate"; then
+    print_binary_run_error "$candidate" version
+    rm -rf "$work"
+
+    die "$(printf '%s' "sing-box 新二进制无法通过版本自检。")"
+  fi
+
+  if [[ -f "$SINGBOX_CONFIG" ]] \
+      && ! "$candidate" check \
+        -c "$SINGBOX_CONFIG"; then
+    rm -rf "$work"
+
+    die "$(printf '%s' "新版 sing-box 无法通过现有 zdd-argo 配置校验，未执行更新。")"
+  fi
+
+  mkdir -p "$BIN_DIR"
+  chmod 0755 "$BIN_DIR"
+
+  new_binary="${MANAGED_SINGBOX_BIN}.new.$$"
+  backup="${MANAGED_SINGBOX_BIN}.backup.$$"
+
+  if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
+    cp -a \
+      "$MANAGED_SINGBOX_BIN" \
+      "$backup"
+
+    had_managed=1
+  fi
+
+  if [[ -f "$SINGBOX_RELEASE_META" ]]; then
+    meta_backup="${SINGBOX_RELEASE_META}.backup.$$"
+
+    cp -a \
+      "$SINGBOX_RELEASE_META" \
+      "$meta_backup"
+  fi
+
+  if [[ -f "$SINGBOX_UNIT" ]]; then
+    had_unit=1
+  fi
+
+  if service_is_active; then
+    was_active=1
+  fi
+
+  install -m 0755 \
+    "$candidate" \
+    "$new_binary"
+
+  mv -f \
+    "$new_binary" \
+    "$MANAGED_SINGBOX_BIN"
+
+  if ! write_release_metadata \
+      "$SINGBOX_RELEASE_META" \
+      "SagerNet/sing-box" \
+      "$release_tag" \
+      "$asset_name" \
+      "$digest"; then
+
+    warn "$(printf '%s' "sing-box 元数据写入失败，正在回滚……")"
+
+    if [[ $had_managed -eq 1 \
+        && -f "$backup" ]]; then
+      mv -f \
+        "$backup" \
+        "$MANAGED_SINGBOX_BIN"
+    else
+      rm -f "$MANAGED_SINGBOX_BIN"
+    fi
+
+    if [[ -n "$meta_backup" \
+        && -f "$meta_backup" ]]; then
+      mv -f \
+        "$meta_backup" \
+        "$SINGBOX_RELEASE_META"
+    else
+      rm -f "$SINGBOX_RELEASE_META"
+    fi
+
+    rm -rf "$work"
+    hash -r
+    resolve_singbox_bin
+
+    die "$(printf '%s' "sing-box 更新失败，已恢复更新前状态。")"
+  fi
+
+  rm -rf "$work"
+
+  hash -r
+  resolve_singbox_bin
+
+  if [[ "$SINGBOX_BIN" != "$MANAGED_SINGBOX_BIN" ]] \
+      || ! "$MANAGED_SINGBOX_BIN" version \
+        >/dev/null 2>&1; then
+
+    warn "$(printf '%s' "新版 sing-box 安装后校验失败，正在回滚……")"
+
+    if [[ $had_managed -eq 1 \
+        && -f "$backup" ]]; then
+      mv -f \
+        "$backup" \
+        "$MANAGED_SINGBOX_BIN"
+    else
+      rm -f "$MANAGED_SINGBOX_BIN"
+    fi
+
+    if [[ -n "$meta_backup" \
+        && -f "$meta_backup" ]]; then
+      mv -f \
+        "$meta_backup" \
+        "$SINGBOX_RELEASE_META"
+    else
+      rm -f "$SINGBOX_RELEASE_META"
+    fi
+
+    hash -r
+    resolve_singbox_bin
+
+    die "$(printf '%s' "sing-box 更新失败，已恢复更新前状态。")"
+  fi
+
+  if [[ $had_unit -eq 1 \
+      && -f "$SINGBOX_CONFIG" ]]; then
+    write_singbox_service
+
+    if [[ $was_active -eq 1 ]]; then
+      service_restart || true
+    fi
+
+    if [[ $was_active -eq 1 ]] \
+        && ! wait_for_singbox_ready; then
+
+      warn "$(printf '%s' "新版 sing-box 启动失败，正在回滚……")"
+
+      if [[ $had_managed -eq 1 \
+          && -f "$backup" ]]; then
+        mv -f \
+          "$backup" \
+          "$MANAGED_SINGBOX_BIN"
+      else
+        rm -f "$MANAGED_SINGBOX_BIN"
+      fi
+
+      if [[ -n "$meta_backup" \
+          && -f "$meta_backup" ]]; then
+        mv -f \
+          "$meta_backup" \
+          "$SINGBOX_RELEASE_META"
+      else
+        rm -f "$SINGBOX_RELEASE_META"
+      fi
+
+      hash -r
+      resolve_singbox_bin
+
+      if [[ -n "$SINGBOX_BIN" ]]; then
+        write_singbox_service
+
+        if [[ $was_active -eq 1 ]]; then
+          service_restart || true
+        fi
+      fi
+
+      if [[ $was_active -eq 1 ]] \
+          && ! wait_for_singbox_ready; then
+        service_print_logs 80
+
+        die "$(printf '%s' "新版启动失败，且旧版回滚后也未恢复，请检查日志。")"
+      fi
+
+      service_print_logs 40
+
+      die "$(printf '%s' "sing-box 更新后启动失败，已成功恢复旧版本。")"
+    fi
+  fi
+
+  rm -f \
+    "$backup" \
+    "$meta_backup"
+
+  after="$(
+    "$SINGBOX_BIN" version \
+      2>/dev/null \
+      | head -n 1 \
+      || true
+  )"
+
+  print_kv "更新前：" "$before" 14
+  print_kv "更新后：" "${after:-未知}" 14
+
+  ok "$(printf '%s' "sing-box 已通过 GitHub Release SHA-256 摘要校验。")"
+}
+
+install_singbox_if_needed() {
+  if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
+    resolve_singbox_bin
+    return 0
+  fi
+
+  info "$(printf '%s' "安装脚本专用 sing-box；不会覆盖系统包管理器维护的版本。")"
+
+  install_or_update_singbox
 }
 
 install_or_update_cloudflared() {
@@ -2122,6 +2614,184 @@ install_cloudflared_if_needed() {
 
   install_or_update_cloudflared
 }
+
+install_or_update_wgcf() {
+  local arch=""
+  local asset_regex=""
+  local info_line=""
+  local asset_name=""
+  local asset_url=""
+  local digest=""
+  local release_tag=""
+  local tmp_file=""
+  local new_binary=""
+  local backup=""
+  local meta_backup=""
+  local before="未安装"
+  local after=""
+  local had_managed=0
+
+  arch="$(uname -m)"
+
+  case "$arch" in
+    x86_64|amd64)
+      asset_regex='^wgcf_[0-9][0-9.]*_linux_amd64$'
+      ;;
+
+    aarch64|arm64)
+      asset_regex='^wgcf_[0-9][0-9.]*_linux_arm64$'
+      ;;
+
+    *)
+      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；wgcf 当前仅启用 amd64 与 arm64。")"
+      ;;
+  esac
+
+  resolve_wgcf_bin
+
+  if [[ -f "$WGCF_RELEASE_META" ]]; then
+    before="$(jq -r '.tag // "未知"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "未知")"
+  elif [[ -n "$WGCF_BIN" ]]; then
+    before="已安装（外部版本）"
+  fi
+
+  info "查询 wgcf GitHub 最新稳定版……"
+
+  info_line="$(
+    github_latest_asset_info \
+      "ViRb3/wgcf" \
+      "$asset_regex"
+  )"
+
+  IFS=$'\t' read -r \
+    asset_name \
+    asset_url \
+    digest \
+    release_tag \
+    <<< "$info_line"
+
+  [[ -n "$asset_name" \
+    && -n "$asset_url" \
+    && -n "$release_tag" ]] \
+    || die "wgcf Release 信息不完整。"
+
+  tmp_file="$(mktemp)"
+
+  if ! safe_download "$asset_url" "$tmp_file"; then
+    rm -f "$tmp_file"
+    die "wgcf 下载失败。"
+  fi
+
+  verify_github_asset \
+    "ViRb3/wgcf" \
+    "$asset_name" \
+    "$asset_url" \
+    "$digest" \
+    "$tmp_file"
+
+  chmod 0755 "$tmp_file"
+
+  if ! wgcf_version_ok "$tmp_file"; then
+    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
+      ensure_alpine_binary_compat || true
+    fi
+  fi
+
+  if ! wgcf_version_ok "$tmp_file"; then
+    print_binary_run_error "$tmp_file" --help
+    rm -f "$tmp_file"
+    die "wgcf 新二进制无法通过自检。"
+  fi
+
+  mkdir -p "$BIN_DIR"
+  chmod 0755 "$BIN_DIR"
+
+  new_binary="${MANAGED_WGCF_BIN}.new.$$"
+  backup="${MANAGED_WGCF_BIN}.backup.$$"
+  meta_backup="${WGCF_RELEASE_META}.backup.$$"
+
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    cp -a "$MANAGED_WGCF_BIN" "$backup"
+    had_managed=1
+  fi
+
+  if [[ -f "$WGCF_RELEASE_META" ]]; then
+    cp -a "$WGCF_RELEASE_META" "$meta_backup"
+  fi
+
+  install -m 0755 "$tmp_file" "$new_binary"
+  rm -f "$tmp_file"
+  mv -f "$new_binary" "$MANAGED_WGCF_BIN"
+
+  if ! write_release_metadata \
+      "$WGCF_RELEASE_META" \
+      "ViRb3/wgcf" \
+      "$release_tag" \
+      "$asset_name" \
+      "$digest"; then
+
+    warn "wgcf 元数据写入失败，正在回滚……"
+
+    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
+      mv -f "$backup" "$MANAGED_WGCF_BIN"
+    else
+      rm -f "$MANAGED_WGCF_BIN"
+    fi
+
+    if [[ -f "$meta_backup" ]]; then
+      mv -f "$meta_backup" "$WGCF_RELEASE_META"
+    else
+      rm -f "$WGCF_RELEASE_META"
+    fi
+
+    hash -r
+    resolve_wgcf_bin
+    die "wgcf 更新失败，已恢复旧版本。"
+  fi
+
+  hash -r
+  resolve_wgcf_bin
+
+  if [[ "$WGCF_BIN" != "$MANAGED_WGCF_BIN" ]] \
+      || ! wgcf_version_ok "$MANAGED_WGCF_BIN"; then
+
+    warn "wgcf 安装后校验失败，正在回滚……"
+
+    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
+      mv -f "$backup" "$MANAGED_WGCF_BIN"
+    else
+      rm -f "$MANAGED_WGCF_BIN"
+    fi
+
+    if [[ -f "$meta_backup" ]]; then
+      mv -f "$meta_backup" "$WGCF_RELEASE_META"
+    else
+      rm -f "$WGCF_RELEASE_META"
+    fi
+
+    hash -r
+    resolve_wgcf_bin
+    die "wgcf 更新失败，已恢复旧版本。"
+  fi
+
+  rm -f "$backup" "$meta_backup"
+  after="$release_tag"
+
+  print_kv "更新前：" "$before" 14
+  print_kv "更新后：" "$after" 14
+  ok "wgcf 已通过 GitHub Release SHA-256 摘要校验。"
+}
+
+install_wgcf_if_needed() {
+  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
+    resolve_wgcf_bin
+    return 0
+  fi
+
+  info "安装脚本专用 wgcf；不会覆盖系统中由其他方式安装的同名程序。"
+  install_or_update_wgcf
+}
+
 
 install_or_update_xray() {
   local arch=""
@@ -2555,6 +3225,14 @@ valid_feature_flag() {
   [[ "$1" == "0" || "$1" == "1" ]]
 }
 
+feature_label() {
+  if [[ "${1:-0}" == "1" ]]; then
+    printf '%s' "已启用"
+  else
+    printf '%s' "未启用"
+  fi
+}
+
 normalize_feature_flag() {
   case "${1,,}" in
     1|true|yes|y|on|enable|enabled)
@@ -2596,6 +3274,374 @@ read_feature_choice() {
   done
 }
 
+valid_outbound_ip_mode() {
+  [[ "$1" == "ipv4_only" || "$1" == "prefer_ipv4" ]]
+}
+
+normalize_outbound_ip_mode() {
+  case "${1,,}" in
+    ipv4_only|ipv4-only|only_ipv4|only-ipv4|1)
+      printf '%s' "ipv4_only"
+      ;;
+    prefer_ipv4|prefer-ipv4|ipv4_prefer|ipv4-prefer|2)
+      printf '%s' "prefer_ipv4"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+singbox_ip_strategy() {
+  case "$OUTBOUND_IP_MODE" in
+    ipv4_only)
+      printf '%s' "ipv4_only"
+      ;;
+    prefer_ipv4)
+      printf '%s' "prefer_ipv4"
+      ;;
+    *)
+      die "出站 IPv4 策略无效：${OUTBOUND_IP_MODE}"
+      ;;
+  esac
+}
+
+xray_domain_strategy() {
+  case "$OUTBOUND_IP_MODE" in
+    ipv4_only)
+      printf '%s' "UseIPv4"
+      ;;
+    prefer_ipv4)
+      printf '%s' "UseIPv4v6"
+      ;;
+    *)
+      die "出站 IPv4 策略无效：${OUTBOUND_IP_MODE}"
+      ;;
+  esac
+}
+
+outbound_ip_mode_label() {
+  case "$OUTBOUND_IP_MODE" in
+    ipv4_only)
+      printf '%s' "仅 IPv4"
+      ;;
+    prefer_ipv4)
+      printf '%s' "优先 IPv4"
+      ;;
+    *)
+      printf '%s' "未设置"
+      ;;
+  esac
+}
+
+read_outbound_ip_mode() {
+  local variable_name="$1"
+  local current="$2"
+  local input=""
+  local normalized=""
+  local current_label=""
+
+  valid_outbound_ip_mode "$current" || current="$DEFAULT_OUTBOUND_IP_MODE"
+  current_label="$(outbound_ip_mode_label)"
+
+  while true; do
+    read_interactive input \
+      "${3:-出站地址族} [当前：${current_label}；1=仅 IPv4（sing-box ipv4_only / Xray UseIPv4），2=优先 IPv4（sing-box prefer_ipv4 / Xray UseIPv4v6）]：" \
+      "" || input=""
+
+    if [[ -z "$input" ]]; then
+      printf -v "$variable_name" '%s' "$current"
+      return 0
+    fi
+
+    if normalized="$(normalize_outbound_ip_mode "$input" 2>/dev/null)"; then
+      printf -v "$variable_name" '%s' "$normalized"
+      return 0
+    fi
+
+    warn "请输入 1（仅 IPv4）或 2（优先 IPv4，可回退 IPv6）。"
+  done
+}
+
+infer_legacy_feature_settings() {
+  DOH_ENABLED="0"
+  WARP_ENABLED="0"
+
+  [[ -f "$SINGBOX_CONFIG" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  if jq -e '
+      .dns.servers? // []
+      | any(.tag == "cloudflare-doh" and .type == "https")
+    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+    DOH_ENABLED="1"
+  fi
+
+  if jq -e '
+      .endpoints? // []
+      | any(.tag == "warp" and .type == "wireguard")
+    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
+    WARP_ENABLED="1"
+  fi
+}
+
+load_settings() {
+  local endpoint=""
+  local xray_endpoint=""
+  local port=""
+  local node=""
+  local doh=""
+  local warp=""
+  local ip_mode=""
+  local invalid_file=""
+
+  PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
+  XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+  LOCAL_PORT="$DEFAULT_LOCAL_PORT"
+  NODE_NAME="$DEFAULT_NODE_NAME"
+  DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+  WARP_ENABLED="$DEFAULT_WARP_ENABLED"
+  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+  SETTINGS_CONFIGURED=0
+
+  [[ -e "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]] || return 0
+  command -v jq >/dev/null 2>&1 || return 0
+
+  if [[ ! -f "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]]; then
+    warn "设置文件不是普通文件或属于符号链接，已忽略并恢复默认设置：${SETTINGS_JSON}"
+    return 0
+  fi
+
+  if ! jq -e 'type == "object"' "$SETTINGS_JSON" >/dev/null 2>&1; then
+    invalid_file="${SETTINGS_JSON}.invalid.$(date -u +%Y%m%dT%H%M%SZ).$$"
+    if mv -- "$SETTINGS_JSON" "$invalid_file" 2>/dev/null; then
+      chmod 600 "$invalid_file" 2>/dev/null || true
+      warn "设置文件损坏，已隔离到 ${invalid_file}；当前恢复默认设置。"
+    else
+      warn "设置文件损坏且无法安全隔离；当前忽略该文件并恢复默认设置。"
+    fi
+    return 0
+  fi
+
+  endpoint="$(jq -r '.preferred_endpoint // ""' "$SETTINGS_JSON")"
+  xray_endpoint="$(jq -r '.xray_preferred_endpoint // .preferred_endpoint // ""' "$SETTINGS_JSON")"
+  port="$(jq -r '.local_port // ""' "$SETTINGS_JSON")"
+  node="$(jq -r '.node_name // ""' "$SETTINGS_JSON")"
+  doh="$(jq -r '.doh_enabled // ""' "$SETTINGS_JSON")"
+  warp="$(jq -r '.warp_enabled // ""' "$SETTINGS_JSON")"
+  ip_mode="$(jq -r '.outbound_ip_mode // ""' "$SETTINGS_JSON")"
+
+  [[ -n "$port" ]] || port="$DEFAULT_LOCAL_PORT"
+  [[ -n "$node" ]] || node="$DEFAULT_NODE_NAME"
+  endpoint="$(normalize_preferred_endpoint "$endpoint")"
+  xray_endpoint="$(normalize_preferred_endpoint "$xray_endpoint")"
+  [[ -n "$ip_mode" ]] || ip_mode="$DEFAULT_OUTBOUND_IP_MODE"
+  ip_mode="$(normalize_outbound_ip_mode "$ip_mode" 2>/dev/null || printf '%s' "invalid")"
+
+  if [[ -z "$doh" || -z "$warp" ]]; then
+    infer_legacy_feature_settings
+    doh="$DOH_ENABLED"
+    warp="$WARP_ENABLED"
+  else
+    doh="$(normalize_feature_flag "$doh" 2>/dev/null || printf '%s' "invalid")"
+    warp="$(normalize_feature_flag "$warp" 2>/dev/null || printf '%s' "invalid")"
+  fi
+
+  if valid_preferred_endpoint "$endpoint" \
+      && valid_preferred_endpoint "$xray_endpoint" \
+      && valid_local_port "$port" \
+      && valid_node_name "$node" \
+      && valid_feature_flag "$doh" \
+      && valid_feature_flag "$warp" \
+      && valid_outbound_ip_mode "$ip_mode"; then
+    PREFERRED_ENDPOINT="$endpoint"
+    XRAY_PREFERRED_ENDPOINT="$xray_endpoint"
+    LOCAL_PORT="$((10#$port))"
+    NODE_NAME="$node"
+    DOH_ENABLED="$doh"
+    WARP_ENABLED="$warp"
+    OUTBOUND_IP_MODE="$ip_mode"
+    SETTINGS_CONFIGURED=1
+  else
+    warn "设置文件内容无效，当前恢复默认设置。"
+  fi
+}
+save_settings() {
+  mkdir -p "$DATA_DIR"
+  chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
+  chmod 750 "$DATA_DIR"
+
+  valid_preferred_endpoint "$PREFERRED_ENDPOINT" \
+    || die "sing-box 优选域名/IP 格式无效。"
+  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
+    || die "Xray 优选域名/IP 格式无效。"
+  valid_local_port "$LOCAL_PORT" \
+    || die "sing-box 本地端口无效；只允许 1024–65535。"
+  valid_node_name "$NODE_NAME" \
+    || die "订阅节点名称无效；不能为空、不能包含控制字符，且最多 80 个字符。"
+  valid_feature_flag "$DOH_ENABLED" \
+    || die "DoH 功能开关无效。"
+  valid_feature_flag "$WARP_ENABLED" \
+    || die "WARP 功能开关无效。"
+  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" \
+    || die "出站 IPv4 策略无效。"
+
+  local tmp=""
+  tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
+
+  jq -n \
+    --argjson schema 5 \
+    --arg preferred_endpoint "$PREFERRED_ENDPOINT" \
+    --arg xray_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
+    --argjson local_port "$LOCAL_PORT" \
+    --arg node_name "$NODE_NAME" \
+    --argjson doh_enabled "$DOH_ENABLED" \
+    --argjson warp_enabled "$WARP_ENABLED" \
+    --arg outbound_ip_mode "$OUTBOUND_IP_MODE" \
+    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
+    '{
+      schema: $schema,
+      preferred_endpoint: $preferred_endpoint,
+      xray_preferred_endpoint: $xray_preferred_endpoint,
+      local_port: $local_port,
+      node_name: $node_name,
+      doh_enabled: $doh_enabled,
+      warp_enabled: $warp_enabled,
+      outbound_ip_mode: $outbound_ip_mode,
+      updated_at: $updated_at
+    }' > "$tmp"
+
+  chmod 600 "$tmp"
+  mv -f "$tmp" "$SETTINGS_JSON"
+  SETTINGS_CONFIGURED=1
+}
+configure_custom_settings() {
+  local input=""
+  local normalized=""
+
+  load_settings
+
+  printf '\n%s\n' "sing-box 自定义部署"
+  printf '%s\n' "直接回车会保留方括号中的当前值。"
+
+  while true; do
+    read_interactive input \
+      "sing-box 优选域名/IP [${PREFERRED_ENDPOINT}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$PREFERRED_ENDPOINT"
+    normalized="$(normalize_preferred_endpoint "$input")"
+
+    if valid_preferred_endpoint "$normalized"; then
+      PREFERRED_ENDPOINT="$normalized"
+      break
+    fi
+    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
+  done
+
+  while true; do
+    read_interactive input \
+      "sing-box 本地端口 [${LOCAL_PORT}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$LOCAL_PORT"
+
+    if valid_local_port "$input"; then
+      LOCAL_PORT="$((10#$input))"
+      break
+    fi
+    warn "端口无效，请输入 1024–65535 之间的整数。"
+  done
+
+  while true; do
+    read_interactive input \
+      "sing-box 节点名称 [${NODE_NAME}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$NODE_NAME"
+
+    if valid_node_name "$input"; then
+      NODE_NAME="$input"
+      break
+    fi
+    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
+  done
+
+  printf '\n%s\n' "sing-box 出站模块"
+  read_feature_choice DOH_ENABLED \
+    "启用 Cloudflare DoH（1.1.1.1）" \
+    "$DOH_ENABLED"
+  read_feature_choice WARP_ENABLED \
+    "启用 Cloudflare WARP 出站" \
+    "$WARP_ENABLED"
+
+  if [[ "$WARP_ENABLED" == "1" ]]; then
+    warn "首次启用 WARP 时，脚本会调用第三方 wgcf，并以 --accept-tos 非交互注册 Cloudflare WARP 设备。"
+  fi
+
+  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box / Xray 出站地址族"
+
+  save_settings
+  ok "sing-box 自定义设置已保存。"
+}
+
+configure_xray_custom_settings() {
+  local input=""
+  local normalized=""
+
+  load_settings
+  load_xray_state
+
+  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+  [[ -n "${XRAY_LOCAL_PORT:-}" ]] || XRAY_LOCAL_PORT="$DEFAULT_XRAY_LOCAL_PORT"
+  [[ -n "${XRAY_NODE_NAME:-}" ]] || XRAY_NODE_NAME="$DEFAULT_XRAY_NODE_NAME"
+
+  printf '\n%s\n' "Xray 自定义部署"
+  printf '%s\n' "Xray 当前仅配置 VLESS-ENC / WS / TLS 直出。"
+  printf '%s\n' "直接回车会保留方括号中的当前值。"
+
+  while true; do
+    read_interactive input \
+      "Xray 优选域名/IP [${XRAY_PREFERRED_ENDPOINT}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$XRAY_PREFERRED_ENDPOINT"
+    normalized="$(normalize_preferred_endpoint "$input")"
+
+    if valid_preferred_endpoint "$normalized"; then
+      XRAY_PREFERRED_ENDPOINT="$normalized"
+      break
+    fi
+    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
+  done
+
+  while true; do
+    read_interactive input \
+      "Xray 本地端口 [${XRAY_LOCAL_PORT}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$XRAY_LOCAL_PORT"
+
+    if valid_local_port "$input"; then
+      XRAY_LOCAL_PORT="$((10#$input))"
+      break
+    fi
+    warn "端口无效，请输入 1024–65535 之间的整数。"
+  done
+
+  while true; do
+    read_interactive input \
+      "Xray 节点名称 [${XRAY_NODE_NAME}]：" \
+      "" || input=""
+    [[ -n "$input" ]] || input="$XRAY_NODE_NAME"
+
+    if valid_node_name "$input"; then
+      XRAY_NODE_NAME="$input"
+      break
+    fi
+    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
+  done
+
+  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box / Xray 出站地址族"
+
+  save_settings
+  ok "Xray 自定义设置已保存。"
+}
 migrate_legacy_state() {
   [[ -f "$LEGACY_STATE_FILE" \
     && ! -f "$STATE_JSON" ]] \
@@ -2879,6 +3925,907 @@ ensure_service_account() {
     || die "低权限服务账户归属标记写入后校验失败。"
 }
 
+valid_warp_account_file() {
+  [[ -f "$WARP_ACCOUNT_FILE" \
+    && ! -L "$WARP_ACCOUNT_FILE" \
+    && -s "$WARP_ACCOUNT_FILE" ]]
+}
+
+valid_warp_profile_file() {
+  [[ -f "$WARP_PROFILE_FILE" \
+    && ! -L "$WARP_PROFILE_FILE" \
+    && -s "$WARP_PROFILE_FILE" ]] \
+    || return 1
+
+  grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
+    && grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$WARP_PROFILE_FILE"
+}
+
+ensure_warp_profile() {
+  [[ "$WARP_ENABLED" == "1" ]] || return 0
+
+  mkdir -p "$WARP_DIR"
+  chown root:root "$WARP_DIR"
+  chmod 700 "$WARP_DIR"
+
+  install_wgcf_if_needed
+  [[ -n "$WGCF_BIN" ]] || die "未找到 wgcf。"
+
+  if ! valid_warp_account_file; then
+    rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
+    warn "正在注册新的 Cloudflare WARP 设备；wgcf 是第三方非官方工具。"
+
+    if ! "$WGCF_BIN" \
+        --config "$WARP_ACCOUNT_FILE" \
+        register \
+        --accept-tos; then
+      rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
+      die "Cloudflare WARP 设备注册失败。"
+    fi
+  fi
+
+  local profile_tmp=""
+  profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
+
+  if ! "$WGCF_BIN" \
+      --config "$WARP_ACCOUNT_FILE" \
+      generate \
+      --profile "$profile_tmp"; then
+    rm -f "$profile_tmp"
+    die "Cloudflare WARP WireGuard 配置生成失败。"
+  fi
+
+  chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
+
+  if ! valid_warp_account_file; then
+    rm -f "$profile_tmp"
+    die "wgcf 未生成有效的 WARP 账户文件。"
+  fi
+
+  if ! grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$profile_tmp" \
+      || ! grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$profile_tmp"; then
+    rm -f "$profile_tmp"
+    die "wgcf 未生成有效的 WireGuard 配置。"
+  fi
+
+  mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
+  chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
+  ok "Cloudflare WARP 设备与 WireGuard 配置已重新生成并覆盖。"
+}
+
+strip_ini_value() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+warp_profile_value() {
+  local key="$1"
+  local value=""
+
+  value="$(
+    awk -F '=' -v wanted="$key" '
+      $1 ~ "^[[:space:]]*" wanted "[[:space:]]*$" {
+        sub(/^[^=]*=/, "")
+        print
+        exit
+      }
+    ' "$WARP_PROFILE_FILE"
+  )"
+
+  strip_ini_value "$value"
+}
+
+load_warp_profile_parameters() {
+  local address_line=""
+  local item=""
+  local endpoint=""
+  local endpoint_host=""
+  local mtu=""
+  local checked_endpoint=""
+  local checked_port=""
+
+  ensure_warp_profile
+  valid_warp_profile_file || die "WARP WireGuard 配置不存在或格式不完整。"
+
+  WARP_PRIVATE_KEY="$(warp_profile_value PrivateKey)"
+  WARP_PEER_PUBLIC_KEY="$(warp_profile_value PublicKey)"
+  address_line="$(warp_profile_value Address)"
+  endpoint="$(warp_profile_value Endpoint)"
+  mtu="$(warp_profile_value MTU)"
+
+  WARP_IPV4=""
+  WARP_IPV6=""
+  WARP_ENDPOINT_ADDRESS=""
+
+  while IFS= read -r item; do
+    item="$(strip_ini_value "$item")"
+    [[ -n "$item" ]] || continue
+
+    if [[ "$item" == *.*/* ]]; then
+      WARP_IPV4="$item"
+    elif [[ "$item" == *:*/* ]]; then
+      WARP_IPV6="$item"
+    fi
+  done < <(printf '%s\n' "$address_line" | tr ',' '\n')
+
+  [[ "$WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+    || die "WARP 私钥格式无效。"
+  [[ "$WARP_PEER_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
+    || die "WARP 对端公钥格式无效。"
+  valid_ipv4_cidr "$WARP_IPV4" \
+    || die "WARP IPv4 地址格式无效。"
+  valid_ipv6_cidr "$WARP_IPV6" \
+    || die "WARP IPv6 地址格式无效。"
+
+  if [[ "$endpoint" =~ ^\[([^]]+)\]:([0-9]{1,5})$ ]]; then
+    endpoint_host="${BASH_REMATCH[1]}"
+    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+  elif [[ "$endpoint" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
+    endpoint_host="${BASH_REMATCH[1]}"
+    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
+  else
+    die "WARP Endpoint 格式无效：${endpoint}"
+  fi
+
+  ((10#$WARP_PROFILE_ENDPOINT_PORT >= 1 && 10#$WARP_PROFILE_ENDPOINT_PORT <= 65535)) \
+    || die "WARP Endpoint 端口无效。"
+
+  WARP_PROFILE_ENDPOINT_PORT="$((10#$WARP_PROFILE_ENDPOINT_PORT))"
+  WARP_ENDPOINT_PORT="$WARP_PROFILE_ENDPOINT_PORT"
+
+  if ! valid_ipv4 "$endpoint_host" \
+      && ! valid_ipv6 "$endpoint_host" \
+      && ! valid_domain_name "$endpoint_host"; then
+    die "WARP Endpoint 地址无效：${endpoint_host}"
+  fi
+
+  WARP_ENDPOINT_ADDRESS="${endpoint_host%.}"
+  WARP_ENDPOINT_ADDRESS="${WARP_ENDPOINT_ADDRESS,,}"
+
+  if [[ -f "$WARP_CHECK_FILE" && ! -L "$WARP_CHECK_FILE" ]]; then
+    checked_endpoint="$(jq -r '.endpoint // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
+    checked_port="$(jq -r '.port // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
+
+    if [[ "${checked_endpoint,,}" == "$WARP_ENDPOINT_ADDRESS" \
+        && "$checked_port" =~ ^[0-9]{1,5}$ ]] \
+        && ((10#$checked_port >= 1 && 10#$checked_port <= 65535)); then
+      WARP_ENDPOINT_PORT="$((10#$checked_port))"
+    fi
+  fi
+
+  if [[ "$mtu" =~ ^[0-9]{3,5}$ ]] \
+      && ((10#$mtu >= 576 && 10#$mtu <= 9000)); then
+    WARP_MTU="$((10#$mtu))"
+  else
+    WARP_MTU="1280"
+  fi
+}
+
+singbox_template_base() {
+  jq -n \
+    --arg name "$NODE_NAME" \
+    --arg uuid "$UUID" \
+    --arg path "$WSPATH" \
+    --arg ip_strategy "$(singbox_ip_strategy)" \
+    --argjson port "$LOCAL_PORT" \
+    '{
+      log: {
+        level: "info",
+        timestamp: true
+      },
+      inbounds: [
+        {
+          type: "vmess",
+          tag: "vmess-ws-in",
+          listen: "127.0.0.1",
+          listen_port: $port,
+          users: [
+            {
+              name: $name,
+              uuid: $uuid,
+              alterId: 0
+            }
+          ],
+          transport: {
+            type: "ws",
+            path: $path
+          }
+        }
+      ],
+      outbounds: [
+        {
+          type: "direct",
+          tag: "direct",
+          domain_strategy: $ip_strategy
+        }
+      ],
+      route: {
+        rules: [
+          {
+            ip_is_private: true,
+            action: "reject",
+            method: "drop"
+          },
+          {
+            ip_cidr: [
+              "169.254.169.254/32",
+              "100.100.100.200/32"
+            ],
+            action: "reject",
+            method: "drop"
+          }
+        ],
+        final: "direct"
+      }
+    }'
+}
+
+singbox_template_direct() {
+  singbox_template_base
+}
+
+singbox_template_doh() {
+  singbox_template_base \
+    | jq --arg ip_strategy "$(singbox_ip_strategy)" '
+      .dns = {
+        servers: [
+          {
+            type: "https",
+            tag: "cloudflare-doh",
+            server: "1.1.1.1",
+            server_port: 443,
+            path: "/dns-query",
+            tls: {
+              enabled: true,
+              server_name: "cloudflare-dns.com"
+            }
+          }
+        ],
+        final: "cloudflare-doh",
+        strategy: $ip_strategy
+      }
+      | .route.default_domain_resolver = {
+          server: "cloudflare-doh",
+          strategy: $ip_strategy
+        }
+    '
+}
+
+singbox_template_warp() {
+  singbox_template_base \
+    | jq \
+      --arg ip_strategy "$(singbox_ip_strategy)" \
+      --arg private_key "$WARP_PRIVATE_KEY" \
+      --arg ipv4 "$WARP_IPV4" \
+      --arg ipv6 "$WARP_IPV6" \
+      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
+      --argjson peer_port "$WARP_ENDPOINT_PORT" \
+      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+      --argjson mtu "$WARP_MTU" \
+      '
+        .dns = {
+          servers: [
+            {
+              type: "local",
+              tag: "local-dns",
+              prefer_go: true
+            },
+            {
+              type: "https",
+              tag: "warp-bootstrap-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              }
+            }
+          ],
+          final: "local-dns",
+          strategy: $ip_strategy
+        }
+        | .endpoints = [
+            {
+              type: "wireguard",
+              tag: "warp",
+              system: false,
+              mtu: $mtu,
+              address: [$ipv4, $ipv6],
+              private_key: $private_key,
+              peers: [
+                {
+                  address: $peer_address,
+                  port: $peer_port,
+                  public_key: $public_key,
+                  allowed_ips: ["0.0.0.0/0", "::/0"],
+                  persistent_keepalive_interval: 30
+                }
+              ],
+              udp_timeout: "5m",
+              connect_timeout: "10s",
+              domain_resolver: {
+                server: "warp-bootstrap-doh",
+                strategy: $ip_strategy
+              }
+            }
+          ]
+        | .route.default_domain_resolver = {
+            server: "local-dns",
+            strategy: $ip_strategy
+          }
+        | .route.final = "warp"
+      '
+}
+
+singbox_template_doh_warp() {
+  singbox_template_base \
+    | jq \
+      --arg ip_strategy "$(singbox_ip_strategy)" \
+      --arg private_key "$WARP_PRIVATE_KEY" \
+      --arg ipv4 "$WARP_IPV4" \
+      --arg ipv6 "$WARP_IPV6" \
+      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
+      --argjson peer_port "$WARP_ENDPOINT_PORT" \
+      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+      --argjson mtu "$WARP_MTU" \
+      '
+        .dns = {
+          servers: [
+            {
+              type: "https",
+              tag: "warp-bootstrap-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              }
+            },
+            {
+              type: "https",
+              tag: "cloudflare-doh",
+              server: "1.1.1.1",
+              server_port: 443,
+              path: "/dns-query",
+              tls: {
+                enabled: true,
+                server_name: "cloudflare-dns.com"
+              },
+              detour: "warp"
+            }
+          ],
+          final: "cloudflare-doh",
+          strategy: $ip_strategy
+        }
+        | .endpoints = [
+            {
+              type: "wireguard",
+              tag: "warp",
+              system: false,
+              mtu: $mtu,
+              address: [$ipv4, $ipv6],
+              private_key: $private_key,
+              peers: [
+                {
+                  address: $peer_address,
+                  port: $peer_port,
+                  public_key: $public_key,
+                  allowed_ips: ["0.0.0.0/0", "::/0"],
+                  persistent_keepalive_interval: 30
+                }
+              ],
+              udp_timeout: "5m",
+              connect_timeout: "10s",
+              domain_resolver: {
+                server: "warp-bootstrap-doh",
+                strategy: $ip_strategy
+              }
+            }
+          ]
+        | .route.default_domain_resolver = {
+            server: "cloudflare-doh",
+            strategy: $ip_strategy
+          }
+        | .route.final = "warp"
+      '
+}
+
+write_singbox_config() {
+  [[ -n "$SINGBOX_BIN" ]] || resolve_singbox_bin
+  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box。"
+
+  valid_uuid "$UUID" || die "UUID 为空或格式错误。"
+  valid_ws_path "$WSPATH" || die "WS 路径为空或格式错误。"
+  valid_local_port "$LOCAL_PORT" || die "本地监听端口无效。"
+  valid_node_name "$NODE_NAME" || die "节点名称无效。"
+  valid_feature_flag "$DOH_ENABLED" || die "DoH 功能开关无效。"
+  valid_feature_flag "$WARP_ENABLED" || die "WARP 功能开关无效。"
+  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站 IPv4 策略无效。"
+
+  if [[ "$WARP_ENABLED" == "1" ]]; then
+    load_warp_profile_parameters
+  else
+    rm -f "$WARP_CHECK_FILE"
+  fi
+
+  local tmp=""
+  local expected_sha=""
+  local actual_sha=""
+  local expected_ip_strategy=""
+  tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
+  expected_ip_strategy="$(singbox_ip_strategy)"
+
+  case "${DOH_ENABLED}:${WARP_ENABLED}" in
+    0:0)
+      singbox_template_direct > "$tmp"
+      ;;
+    1:0)
+      singbox_template_doh > "$tmp"
+      ;;
+    0:1)
+      singbox_template_warp > "$tmp"
+      ;;
+    1:1)
+      singbox_template_doh_warp > "$tmp"
+      ;;
+    *)
+      rm -f "$tmp"
+      die "无法选择 sing-box 配置模板。"
+      ;;
+  esac
+
+  chmod 640 "$tmp"
+  chown root:"$SERVICE_GROUP" "$tmp"
+
+  if ! "$SINGBOX_BIN" check -c "$tmp"; then
+    rm -f "$tmp"
+
+    if [[ "$DOH_ENABLED" == "1" || "$WARP_ENABLED" == "1" ]]; then
+      die "新 sing-box 配置校验失败；请先通过菜单 6 更新组件，再重试 DoH/WARP 部署。"
+    fi
+
+    die "新 sing-box 配置校验失败。"
+  fi
+
+  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
+
+  mv -f "$tmp" "$SINGBOX_CONFIG"
+  chmod 640 "$SINGBOX_CONFIG"
+  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
+
+  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] \
+    || die "sing-box 配置覆盖后摘要不一致。"
+
+  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" \
+    || die "已覆盖的 sing-box 配置未通过二次校验。"
+
+  jq -e \
+    --arg ip_strategy "$expected_ip_strategy" \
+    '((.outbounds // []) | any(.tag == "direct" and .domain_strategy == $ip_strategy))
+      and ((.dns // null) == null or .dns.strategy == $ip_strategy)
+      and ((.route.default_domain_resolver // null) == null or .route.default_domain_resolver.strategy == $ip_strategy)' \
+    "$SINGBOX_CONFIG" >/dev/null \
+    || die "sing-box 配置中的 IPv4 出站策略与保存设置不一致。"
+
+  case "${DOH_ENABLED}:${WARP_ENABLED}" in
+    0:0)
+      jq -e '
+        (.route.final == "direct")
+        and ((.endpoints // []) | length == 0)
+        and ((.dns // null) == null)
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "直接出站模板写入结果不符合预期。"
+      ;;
+    1:0)
+      jq -e '
+        (.route.final == "direct")
+        and (.dns.final == "cloudflare-doh")
+        and ((.endpoints // []) | length == 0)
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "DoH 模板写入结果不符合预期。"
+      ;;
+    0:1)
+      jq -e '
+        (.route.final == "warp")
+        and (.dns.final == "local-dns")
+        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "WARP 模板写入结果不符合预期。"
+      ;;
+    1:1)
+      jq -e '
+        (.route.final == "warp")
+        and (.dns.final == "cloudflare-doh")
+        and ((.dns.servers // []) | any(.tag == "cloudflare-doh" and .detour == "warp"))
+        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
+      ' "$SINGBOX_CONFIG" >/dev/null \
+        || die "DoH + WARP 模板写入结果不符合预期。"
+      ;;
+  esac
+}
+
+find_free_loopback_port() {
+  local port=0
+
+  for ((port = 18080; port <= 18179; port++)); do
+    if ! ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${port}([[:space:]]|$)"; then
+      printf '%s\n' "$port"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+stop_checked_process() {
+  local pid="$1"
+  local recorded_start="$2"
+  local actual_start=""
+  local i=0
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
+  [[ "$recorded_start" =~ ^[0-9]+$ ]] || return 0
+
+  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+  [[ "$actual_start" == "$recorded_start" ]] || return 0
+
+  kill -TERM "$pid" 2>/dev/null || true
+
+  for ((i = 0; i < 5; i++)); do
+    actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+    if [[ "$actual_start" != "$recorded_start" ]]; then
+      wait "$pid" 2>/dev/null || true
+      return 0
+    fi
+    sleep 1
+  done
+
+  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
+  if [[ "$actual_start" == "$recorded_start" ]]; then
+    kill -KILL "$pid" 2>/dev/null || true
+  fi
+  wait "$pid" 2>/dev/null || true
+}
+
+valid_warp_port() {
+  local port="$1"
+  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
+  ((10#$port >= 1 && 10#$port <= 65535))
+}
+
+warp_candidate_ports() {
+  local port=""
+  local seen=""
+
+  for port in \
+    "$WARP_ENDPOINT_PORT" \
+    "$WARP_PROFILE_ENDPOINT_PORT" \
+    2408 \
+    500 \
+    1701 \
+    4500
+  do
+    valid_warp_port "$port" || continue
+    port="$((10#$port))"
+
+    case " ${seen} " in
+      *" ${port} "*)
+        continue
+        ;;
+    esac
+
+    printf '%s\n' "$((10#$port))"
+    seen="${seen} ${port}"
+  done
+}
+
+set_warp_peer_port() {
+  local port="$1"
+  local tmp=""
+  local expected_sha=""
+  local actual_sha=""
+
+  valid_warp_port "$port" || return 1
+  [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
+  [[ -n "$SINGBOX_BIN" ]] || return 1
+
+  tmp="$(mktemp "${DATA_DIR}/.sing-box-port.json.XXXXXX")"
+
+  if ! jq \
+      --argjson port "$((10#$port))" \
+      '
+        (.endpoints[] | select(.type == "wireguard" and .tag == "warp") | .peers[0].port) = $port
+      ' \
+      "$SINGBOX_CONFIG" \
+      > "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  chmod 640 "$tmp"
+  chown root:"$SERVICE_GROUP" "$tmp"
+
+  if ! "$SINGBOX_BIN" check -c "$tmp"; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  if ! jq -e \
+      --argjson port "$((10#$port))" \
+      '
+        (.endpoints // [])
+        | any(
+            .type == "wireguard"
+            and .tag == "warp"
+            and .peers[0].port == $port
+          )
+      ' \
+      "$tmp" \
+      >/dev/null; then
+    rm -f "$tmp"
+    return 1
+  fi
+
+  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
+
+  mv -f "$tmp" "$SINGBOX_CONFIG"
+  chmod 640 "$SINGBOX_CONFIG"
+  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
+
+  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
+  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || return 1
+
+  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" || return 1
+
+  WARP_ENDPOINT_PORT="$((10#$port))"
+  return 0
+}
+
+verify_warp_runtime() {
+  [[ "$WARP_ENABLED" == "1" ]] || return 0
+
+  local test_port=""
+  local test_config=""
+  local test_log=""
+  local test_pid=""
+  local test_start=""
+  local response=""
+  local warp_state=""
+  local exit_ip=""
+  local colo=""
+  local selected_port=""
+  local attempted_ports=""
+  local chain_label="VMess/WS → WARP"
+  local port=""
+  local i=0
+  local -a candidate_ports=()
+
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    chain_label="VMess/WS → DoH → WARP"
+  fi
+
+  service_is_active \
+    || die "WARP 自检前发现 sing-box 服务未运行。"
+  listener_exact_loopback \
+    || die "WARP 自检前发现 127.0.0.1:${LOCAL_PORT} 未监听。"
+
+  mapfile -t candidate_ports < <(warp_candidate_ports)
+  ((${#candidate_ports[@]} > 0)) \
+    || die "没有可用于 WARP 自检的 Endpoint UDP 端口。"
+
+  test_port="$(find_free_loopback_port)" \
+    || die "无法找到用于 WARP 本机自检的空闲回环端口。"
+
+  test_config="$(mktemp "${DATA_DIR}/.warp-client-check.json.XXXXXX")"
+  test_log="$(mktemp "${DATA_DIR}/.warp-client-check.log.XXXXXX")"
+
+  jq -n \
+    --arg uuid "$UUID" \
+    --arg path "$WSPATH" \
+    --argjson server_port "$LOCAL_PORT" \
+    --argjson listen_port "$test_port" \
+    '{
+      log: {
+        level: "debug",
+        timestamp: true
+      },
+      inbounds: [
+        {
+          type: "mixed",
+          tag: "warp-check-in",
+          listen: "127.0.0.1",
+          listen_port: $listen_port
+        }
+      ],
+      outbounds: [
+        {
+          type: "vmess",
+          tag: "local-vmess-check",
+          server: "127.0.0.1",
+          server_port: $server_port,
+          uuid: $uuid,
+          security: "auto",
+          alter_id: 0,
+          transport: {
+            type: "ws",
+            path: $path
+          }
+        }
+      ],
+      route: {
+        final: "local-vmess-check"
+      }
+    }' > "$test_config"
+
+  chmod 600 "$test_config"
+
+  "$SINGBOX_BIN" check -c "$test_config" \
+    || {
+      rm -f "$test_config" "$test_log"
+      die "WARP 自检客户端配置未通过 sing-box 校验。"
+    }
+
+  "$SINGBOX_BIN" run -c "$test_config" \
+    > "$test_log" 2>&1 &
+  test_pid=$!
+  test_start="$(process_start_time "$test_pid" 2>/dev/null || true)"
+
+  if [[ ! "$test_start" =~ ^[0-9]+$ ]]; then
+    kill -TERM "$test_pid" 2>/dev/null || true
+    wait "$test_pid" 2>/dev/null || true
+    rm -f "$test_config" "$test_log"
+    die "无法确认 WARP 自检客户端进程身份。"
+  fi
+
+  for ((i = 1; i <= 15; i++)); do
+    if ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
+      break
+    fi
+
+    if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]]; then
+      break
+    fi
+
+    sleep 1
+  done
+
+  if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]] \
+      || ! ss -ltn 2>/dev/null \
+        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
+    warn "WARP 自检客户端未能正常启动，日志如下："
+    tail -n 100 "$test_log" >&2 || true
+    stop_checked_process "$test_pid" "$test_start"
+    rm -f "$test_config" "$test_log"
+    die "WARP 运行时自检客户端启动失败。"
+  fi
+
+  for port in "${candidate_ports[@]}"; do
+    if [[ -n "$attempted_ports" ]]; then
+      attempted_ports="${attempted_ports},${port}"
+    else
+      attempted_ports="$port"
+    fi
+
+    printf '\n===== WARP Endpoint UDP %s =====\n' "$port" >> "$test_log"
+    info "正在测试 WARP Endpoint：${WARP_ENDPOINT_ADDRESS}:${port}/UDP"
+
+    if ! set_warp_peer_port "$port"; then
+      warn "无法将 WARP Endpoint 端口切换为 UDP ${port}，跳过该端口。"
+      continue
+    fi
+
+    if ! service_restart; then
+      warn "切换到 UDP ${port} 后 sing-box 重启失败，跳过该端口。"
+      service_print_logs 40
+      continue
+    fi
+
+    if ! wait_for_singbox_ready; then
+      warn "切换到 UDP ${port} 后 sing-box 未能正常监听，跳过该端口。"
+      service_print_logs 40
+      continue
+    fi
+
+    response=""
+    warp_state=""
+    exit_ip=""
+    colo=""
+
+    for ((i = 1; i <= 2; i++)); do
+      response="$(
+        curl \
+          --silent \
+          --show-error \
+          --max-time 15 \
+          --connect-timeout 5 \
+          --proxy "socks5h://127.0.0.1:${test_port}" \
+          https://www.cloudflare.com/cdn-cgi/trace \
+          2>> "$test_log" \
+          || true
+      )"
+
+      warp_state="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "warp" {print $2; exit}'
+      )"
+
+      if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
+        selected_port="$port"
+        break
+      fi
+
+      sleep 1
+    done
+
+    if [[ -n "$selected_port" ]]; then
+      exit_ip="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "ip" {print $2; exit}'
+      )"
+      colo="$(
+        printf '%s\n' "$response" \
+          | tr -d '\r' \
+          | awk -F= '$1 == "colo" {print $2; exit}'
+      )"
+      break
+    fi
+
+    warn "WARP Endpoint UDP ${port} 未通过实际链路自检。"
+  done
+
+  stop_checked_process "$test_pid" "$test_start"
+  rm -f "$test_config"
+
+  if [[ -z "$selected_port" ]]; then
+    warn "已依次测试 WARP WireGuard 的配置端口及 Cloudflare 官方回退端口，均未确认隧道可用。"
+    printf '\n%s\n' "WARP 自检客户端日志：" >&2
+    tail -n 200 "$test_log" >&2 || true
+    printf '\n%s\n' "当前 sing-box 服务日志：" >&2
+    service_print_logs 160
+    rm -f "$test_log" "$WARP_CHECK_FILE"
+    die "WARP 实际链路不可用；常见原因是 VPS 提供商阻断 UDP 2408/500/1701/4500、到 Cloudflare WARP 网段路由异常，或该网络限制 WireGuard。"
+  fi
+
+  rm -f "$test_log"
+
+  jq -n \
+    --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    --arg warp "$warp_state" \
+    --arg ip "$exit_ip" \
+    --arg colo "$colo" \
+    --arg endpoint "$WARP_ENDPOINT_ADDRESS" \
+    --arg attempted_ports "$attempted_ports" \
+    --argjson port "$selected_port" \
+    --argjson profile_port "$WARP_PROFILE_ENDPOINT_PORT" \
+    '{
+      checked_at: $checked_at,
+      warp: $warp,
+      exit_ip: $ip,
+      colo: $colo,
+      endpoint: $endpoint,
+      port: $port,
+      profile_port: $profile_port,
+      attempted_ports: $attempted_ports
+    }' > "$WARP_CHECK_FILE"
+
+  chmod 600 "$WARP_CHECK_FILE"
+  WARP_ENDPOINT_PORT="$selected_port"
+  ok "WARP 实际链路自检通过：${chain_label}，Endpoint=${WARP_ENDPOINT_ADDRESS}:${selected_port}/UDP，warp=${warp_state}，出口=${exit_ip:-未知}，机房=${colo:-未知}。"
+}
+
 singbox_unit_is_ours() {
   [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
 
@@ -2921,6 +4868,94 @@ singbox_unit_is_legacy_ours() {
       return 1
       ;;
   esac
+}
+
+write_singbox_service() {
+  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box 可执行文件。"
+  [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]] \
+    || die "当前 sing-box 不是脚本专用二进制，拒绝写入受管服务。"
+  ensure_service_account
+
+  if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
+    singbox_unit_is_ours || singbox_unit_is_legacy_ours \
+      || die "服务路径已被其他程序占用：${SINGBOX_UNIT}"
+  fi
+
+  local tmp=""
+  tmp="$(mktemp)"
+
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "$tmp" <<EOF
+[Unit]
+Description=zdd-argo dedicated sing-box service managed-v0.1.0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=1048576
+NoNewPrivileges=true
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    install -m 0644 "$tmp" "$SINGBOX_UNIT"
+  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
+    cat >> "$tmp" <<EOF
+zdd_argo_managed="0.1.0"
+name="zdd-argo 专用 sing-box 服务"
+description="zdd-argo dedicated sing-box service"
+command="${MANAGED_SINGBOX_BIN}"
+command_args="run -c ${SINGBOX_CONFIG}"
+command_user="${SERVICE_USER}:${SERVICE_GROUP}"
+pidfile="/run/${SERVICE_NAME}.pid"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+output_log="${SINGBOX_LOG_FILE}"
+error_log="${SINGBOX_LOG_FILE}"
+
+depend() {
+  use net
+}
+
+start_pre() {
+  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
+  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${SINGBOX_CONFIG}"
+  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${SINGBOX_LOG_FILE}"
+}
+EOF
+
+    install -m 0755 "$tmp" "$SINGBOX_UNIT"
+  else
+    rm -f "$tmp"
+    die "无法识别服务管理器，不能写入服务文件。"
+  fi
+
+  rm -f "$tmp"
+  service_daemon_reload
 }
 
 render_logrotate_config() {
@@ -3003,6 +5038,281 @@ ss_listen_tcp_lines() {
 ss_listen_tcp_process_lines() {
   ss -ltnp \
     2>/dev/null
+}
+
+listener_on_local_port() {
+  ss_listen_tcp_lines \
+    | grep -Eq "(^|[[:space:]])[^[:space:]]*:${LOCAL_PORT}([[:space:]]|$)"
+}
+
+listener_exact_loopback() {
+  ss_listen_tcp_lines \
+    | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)"
+}
+
+listener_exact_loopback_pid() {
+  local line=""
+  local pid=""
+
+  line="$(
+    ss_listen_tcp_process_lines \
+      | grep -E "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)" \
+      | head -n 1 \
+      || true
+  )"
+
+  [[ -n "$line" ]] || return 1
+
+  pid="$(
+    printf '%s\n' "$line" \
+      | grep -Eo 'pid=[0-9]+' \
+      | head -n 1 \
+      | cut -d= -f2 \
+      || true
+  )"
+
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  printf '%s\n' "$pid"
+}
+
+listener_process_matches_singbox() {
+  local pid=""
+  local cmdline=""
+
+  pid="$(listener_exact_loopback_pid 2>/dev/null || true)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+
+  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
+  [[ -n "$cmdline" ]] || return 1
+
+  [[ "$cmdline" == *"${SINGBOX_CONFIG}"* ]] || return 1
+
+  [[ "$cmdline" == *"sing-box"* \
+    || ( -n "$SINGBOX_BIN" && "$cmdline" == *"${SINGBOX_BIN}"* ) \
+    || "$cmdline" == *"${MANAGED_SINGBOX_BIN}"* ]]
+}
+
+wait_for_singbox_ready() {
+  local i=0
+
+  for ((i = 1; i <= 15; i++)); do
+    if service_is_active \
+        && listener_exact_loopback; then
+      return 0
+    fi
+
+    if [[ "$INIT_SYSTEM" == "openrc" ]] \
+        && listener_exact_loopback; then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  return 1
+}
+
+ensure_singbox_running() {
+  if listener_on_local_port \
+      && ! service_is_active; then
+
+    if [[ "$INIT_SYSTEM" == "openrc" ]] \
+        && listener_exact_loopback \
+        && listener_process_matches_singbox; then
+
+      service_enable \
+        || warn "$(printf '%s' "OpenRC 状态未同步，且暂时无法启用 ${SERVICE_NAME}；继续使用当前已监听的 sing-box。")"
+
+      warn "$(printf '%s' "检测到 sing-box 已监听 127.0.0.1:${LOCAL_PORT}，但 OpenRC 状态尚未同步；按已就绪处理。")"
+      return 0
+    fi
+
+    warn "$(printf '%s' "端口 ${LOCAL_PORT} 已被其他进程占用：")"
+
+    ss_listen_tcp_process_lines \
+      | grep -E \
+        "(^|:)${LOCAL_PORT}[[:space:]]" \
+      || true
+
+    die "$(printf '%s' "为避免覆盖其他服务，已停止部署。")"
+  fi
+
+  service_enable \
+    || die "$(printf '%s' "无法启用 ${SERVICE_NAME}。")"
+
+  service_restart \
+    || die "$(printf '%s' "无法重启 ${SERVICE_NAME}，拒绝继续使用可能仍在运行的旧配置。")"
+
+  if ! wait_for_singbox_ready; then
+    service_print_logs 80
+
+    die "$(printf '%s' "${SERVICE_NAME} 未能在 15 秒内进入正常状态，或本机未监听 127.0.0.1:${LOCAL_PORT}；这不是 NAT 外部端口占用问题。")"
+  fi
+}
+
+write_cloudflared_runner() {
+  [[ -n "$CLOUDFLARED_BIN" ]] || die "未找到 cloudflared。"
+  ensure_service_account
+
+  local service_uid=""
+  local service_gid=""
+  local tmp=""
+
+  service_uid="$(id -u "$SERVICE_USER")"
+  service_gid="$(id -g "$SERVICE_USER")"
+  [[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]] \
+    || die "无法读取低权限服务账户的 UID/GID。"
+
+  tmp="$(mktemp)"
+
+  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
+  cat >> "$tmp" <<EOF
+set -Eeuo pipefail
+IFS=\$'\\n\\t'
+umask 077
+
+export HOME="${CLOUDFLARED_HOME}"
+CF_PID=""
+CF_START=""
+
+process_start_time() {
+  local pid="\$1"
+  local stat_line=""
+  local remainder=""
+  local start_time=""
+  local -a fields=()
+
+  [[ "\$pid" =~ ^[0-9]+\$ ]] || return 1
+  [[ -r "/proc/\${pid}/stat" ]] || return 1
+  IFS= read -r stat_line < "/proc/\${pid}/stat" || return 1
+  [[ "\$stat_line" == *") "* ]] || return 1
+  remainder="\${stat_line##*) }"
+  IFS=' ' read -r -a fields <<< "\$remainder"
+  [[ \${#fields[@]} -ge 20 ]] || return 1
+  start_time="\${fields[19]}"
+  [[ "\$start_time" =~ ^[0-9]+\$ ]] || return 1
+  printf '%s\\n' "\$start_time"
+}
+
+identity_matches() {
+  local pid="\$1"
+  local recorded_start="\$2"
+  local actual_start=""
+
+  actual_start="\$(process_start_time "\$pid" 2>/dev/null || true)"
+  [[ -n "\$actual_start" && "\$actual_start" == "\$recorded_start" ]]
+}
+
+signal_verified() {
+  local signal_name="\$1"
+  local pid="\$2"
+  local recorded_start="\$3"
+
+  identity_matches "\$pid" "\$recorded_start" || return 0
+  kill "-\${signal_name}" "\$pid" 2>/dev/null || true
+}
+
+cleanup() {
+  local rc=\$?
+  local i=0
+
+  trap - EXIT HUP INT TERM
+
+  if [[ -n "\${CF_PID}" && -n "\${CF_START}" ]]; then
+    signal_verified TERM "\${CF_PID}" "\${CF_START}"
+
+    for ((i = 0; i < 8; i++)); do
+      identity_matches "\${CF_PID}" "\${CF_START}" || break
+      sleep 1
+    done
+
+    signal_verified KILL "\${CF_PID}" "\${CF_START}"
+    wait "\${CF_PID}" 2>/dev/null || true
+  fi
+
+  rm -f "${CLOUDFLARED_PID_FILE}"
+  exit "\$rc"
+}
+
+trap cleanup EXIT HUP INT TERM
+
+if [[ "${INIT_SYSTEM}" == "openrc" ]]; then
+  su-exec ${service_uid}:${service_gid} \
+    "${CLOUDFLARED_BIN}" tunnel \
+      --url "http://127.0.0.1:${LOCAL_PORT}" \
+      --protocol http2 \
+      > >(tee -a "${LOG_FILE}") 2>&1 &
+else
+  setpriv \
+    --reuid=${service_uid} \
+    --regid=${service_gid} \
+    --clear-groups \
+    --no-new-privs \
+    -- \
+    "${CLOUDFLARED_BIN}" tunnel \
+      --url "http://127.0.0.1:${LOCAL_PORT}" \
+      --protocol http2 \
+      > >(tee -a "${LOG_FILE}") 2>&1 &
+fi
+
+CF_PID=\$!
+CF_START="\$(process_start_time "\${CF_PID}" 2>/dev/null || true)"
+
+if [[ ! "\${CF_START}" =~ ^[0-9]+\$ ]]; then
+  wait "\${CF_PID}" 2>/dev/null || true
+  exit 1
+fi
+
+printf '%s %s\\n' "\${CF_PID}" "\${CF_START}" > "${CLOUDFLARED_PID_FILE}"
+chmod 600 "${CLOUDFLARED_PID_FILE}"
+wait "\${CF_PID}"
+EOF
+
+  install -m 0700 "$tmp" "$CLOUDFLARED_RUNNER"
+  rm -f "$tmp"
+}
+
+tmux_session_exists() {
+  tmux has-session \
+    -t "$TMUX_SESSION" \
+    2>/dev/null
+}
+
+legacy_tmux_session_exists() {
+  [[ "$LEGACY_TMUX_SESSION" != "$TMUX_SESSION" ]] || return 1
+  tmux has-session \
+    -t "$LEGACY_TMUX_SESSION" \
+    2>/dev/null
+}
+
+tmux_session_has_runner() {
+  local session="$1"
+  local runner="$2"
+
+  tmux has-session -t "$session" 2>/dev/null || return 1
+  tmux list-panes \
+    -t "$session" \
+    -F '#{pane_start_command}' \
+    2>/dev/null \
+    | grep -Fq "$runner"
+}
+
+active_tunnel_session() {
+  if tmux_session_has_runner "$TMUX_SESSION" "$CLOUDFLARED_RUNNER"; then
+    printf '%s\n' "$TMUX_SESSION"
+    return 0
+  fi
+
+  if tmux_session_has_runner "$LEGACY_TMUX_SESSION" "$CLOUDFLARED_RUNNER"; then
+    printf '%s\n' "$LEGACY_TMUX_SESSION"
+    return 0
+  fi
+
+  return 1
+}
+
+tunnel_is_running() {
+  active_tunnel_session >/dev/null
 }
 
 read_cloudflared_pid() {
@@ -3093,6 +5403,306 @@ wait_for_argo_host() {
   done
 
   return 1
+}
+
+generate_vmess_link() {
+  valid_uuid "$UUID" || die "UUID 无效，无法生成分享链接。"
+  valid_ws_path "$WSPATH" || die "WS 路径无效，无法生成分享链接。"
+  valid_argo_host "$ARGO_HOST" || die "临时 Argo 域名无效。"
+  [[ -n "$ARGO_HOST" ]] || die "临时 Argo 域名为空。"
+  valid_preferred_endpoint "$PREFERRED_ENDPOINT" || die "优选域名/IP 无效。"
+  valid_node_name "$NODE_NAME" || die "订阅节点名称无效。"
+
+  local tmp_json=""
+  local tmp_link=""
+  local encoded=""
+
+  tmp_json="$(mktemp "${DATA_DIR}/.vmess.json.XXXXXX")"
+  tmp_link="$(mktemp "${DATA_DIR}/.vmess.txt.XXXXXX")"
+
+  jq -c -n \
+    --arg ps "$NODE_NAME" \
+    --arg add "$PREFERRED_ENDPOINT" \
+    --arg id "$UUID" \
+    --arg host "$ARGO_HOST" \
+    --arg path "$WSPATH" \
+    --arg ech "$ECH_CONFIG" \
+    '{
+      v: "2",
+      ps: $ps,
+      add: $add,
+      port: "443",
+      id: $id,
+      aid: "0",
+      scy: "auto",
+      net: "ws",
+      type: "none",
+      host: $host,
+      path: $path,
+      tls: "tls",
+      sni: $host,
+      alpn: "http/1.1",
+      fp: "firefox",
+      insecure: "0",
+      vcn: $host,
+      pcs: "",
+      ech: $ech,
+      echConfigList: $ech
+    }' > "$tmp_json"
+
+  encoded="$(base64 < "$tmp_json" | tr -d '\r\n')"
+  printf 'vmess://%s\n' "$encoded" > "$tmp_link"
+
+  if ! base64 -d < <(sed 's#^vmess://##' "$tmp_link") 2>/dev/null \
+      | jq -e \
+        --arg ps "$NODE_NAME" \
+        --arg add "$PREFERRED_ENDPOINT" \
+        --arg host "$ARGO_HOST" \
+        --arg ech "$ECH_CONFIG" \
+        '
+          .ps == $ps
+          and .add == $add
+          and .host == $host
+          and .sni == $host
+          and .vcn == $host
+          and .pcs == ""
+          and .ech == $ech
+          and .echConfigList == $ech
+        ' >/dev/null; then
+    rm -f "$tmp_json" "$tmp_link"
+    die "生成的 VMess 链接自检失败，未写入磁盘。"
+  fi
+
+  chmod 600 "$tmp_json" "$tmp_link"
+  mv -f "$tmp_json" "$VMESS_JSON_FILE"
+  mv -f "$tmp_link" "$VMESS_LINK_FILE"
+  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
+  chmod 600 "$ECH_NOTE_FILE"
+}
+
+stop_tunnel() {
+  local stopped=0
+  local pid=""
+  local recorded_start=""
+  local i=0
+
+  resolve_cloudflared_bin
+
+  local session=""
+
+  if session="$(active_tunnel_session 2>/dev/null)"; then
+    tmux kill-session -t "$session" 2>/dev/null || true
+    stopped=1
+  elif tmux_session_exists; then
+    warn "发现同名 sing-box tmux 会话，但它不是本脚本创建的；不会将其删除。"
+  fi
+
+  sleep 1
+
+  if IFS=' ' read -r pid recorded_start < <(read_cloudflared_pid 2>/dev/null); then
+    if cloudflared_identity_matches "$pid" "$recorded_start"; then
+      signal_cloudflared_verified TERM "$pid" "$recorded_start" || true
+
+      for ((i = 0; i < 8; i++)); do
+        cloudflared_identity_matches "$pid" "$recorded_start" || break
+        sleep 1
+      done
+
+      if cloudflared_identity_matches "$pid" "$recorded_start"; then
+        signal_cloudflared_verified KILL "$pid" "$recorded_start" || true
+        sleep 1
+      fi
+
+      if cloudflared_identity_matches "$pid" "$recorded_start"; then
+        warn "cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
+        return 1
+      fi
+
+      stopped=1
+    fi
+  fi
+
+  rm -f "$CLOUDFLARED_PID_FILE"
+
+  if [[ $stopped -eq 1 ]]; then
+    ok "临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
+  else
+    info "没有发现正在运行的 zdd-argo 临时隧道。"
+  fi
+}
+
+command_stop_singbox_tunnel() {
+  warn "$(printf '%s' "此操作仅断开 sing-box 临时 Argo 隧道，并清理旧域名、订阅、日志与 cloudflared 临时缓存。")"
+  warn "$(printf '%s' "sing-box 服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留；Xray 不受影响。")"
+
+  if ! confirm_yes "$(printf '%s' "确认断开 sing-box 临时 Argo 请输入 yes：")"; then
+    info "$(printf '%s' "已取消。")"
+    return 0
+  fi
+
+  stop_tunnel || die "无法安全停止 sing-box 临时 Argo。"
+  clear_singbox_tunnel_artifacts
+
+  ok "$(printf '%s' "sing-box 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
+  info "$(printf '%s' "以后选择自动生成或自定义生成里的 sing-box 可重新创建隧道。")"
+}
+
+command_stop_xray_tunnel() {
+  warn "$(printf '%s' "此操作仅断开 Xray 临时 Argo 隧道，并清理旧域名、订阅、日志与 cloudflared 临时缓存。")"
+  warn "$(printf '%s' "Xray 服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留；sing-box 不受影响。")"
+
+  if ! confirm_yes "$(printf '%s' "确认断开 Xray 临时 Argo 请输入 yes：")"; then
+    info "$(printf '%s' "已取消。")"
+    return 0
+  fi
+
+  stop_xray_tunnel || die "无法安全停止 Xray 临时 Argo。"
+  clear_xray_tunnel_artifacts
+
+  ok "$(printf '%s' "Xray 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
+  info "$(printf '%s' "以后选择自动生成或自定义生成里的 Xray 可重新创建隧道。")"
+}
+
+clear_singbox_tunnel_artifacts() {
+  if [[ -f "$STATE_JSON" ]]; then
+    load_state
+    ARGO_HOST=""
+    save_state
+  fi
+
+  rm -f     "$CLOUDFLARED_PID_FILE"     "$LOG_FILE"     "$VMESS_JSON_FILE"     "$VMESS_LINK_FILE"     "$ECH_NOTE_FILE"
+
+  rm -rf "$CLOUDFLARED_HOME"
+}
+
+clear_xray_tunnel_artifacts() {
+  if [[ -f "$XRAY_STATE_JSON" ]]; then
+    load_xray_state
+    XRAY_ARGO_HOST=""
+    save_xray_state
+  fi
+
+  rm -f     "$XRAY_CLOUDFLARED_PID_FILE"     "$XRAY_LOG_FILE"     "$XRAY_VLESS_JSON_FILE"     "$XRAY_VLESS_LINK_FILE"
+
+  rm -rf "$XRAY_CLOUDFLARED_HOME"
+}
+
+command_stop_clear_cache() {
+  warn "$(printf '%s' "此操作会断开 sing-box 与 Xray 两个临时 Argo 隧道，并清理旧域名、订阅、日志及 cloudflared 临时缓存。")"
+  warn "$(printf '%s' "两个核心服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留。")"
+
+  if ! confirm_yes "$(printf '%s' "确认全部断开并清理请输入 yes：")"; then
+    info "$(printf '%s' "已取消。")"
+    return 0
+  fi
+
+  stop_tunnel || die "无法安全停止 sing-box 临时 Argo。"
+  stop_xray_tunnel || die "无法安全停止 Xray 临时 Argo。"
+  clear_singbox_tunnel_artifacts
+  clear_xray_tunnel_artifacts
+
+  ok "$(printf '%s' "sing-box 与 Xray 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
+  info "$(printf '%s' "以后选择自动生成或自定义生成可重新创建隧道；当前设置会保留。")"
+}
+
+start_tunnel() {
+  local parsed_host=""
+  local attempt=0
+  local max_attempts=3
+  local retry_delay=5
+
+  if tmux_session_exists \
+      && ! tunnel_is_running; then
+
+    die "$(printf '%s' "已存在同名 tmux 会话 ${TMUX_SESSION}，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。")"
+  fi
+
+  if tunnel_is_running; then
+    parsed_host="$(
+      extract_argo_host \
+        || true
+    )"
+
+    if [[ -n "$parsed_host" ]] \
+        && valid_argo_host "$parsed_host"; then
+      ARGO_HOST="$parsed_host"
+      save_state
+      generate_vmess_link
+
+      info "$(printf '%s' "现有临时隧道运行正常，未重复创建。")"
+
+      return 0
+    fi
+
+    warn "$(printf '%s' "检测到 tmux 会话，但尚未取得有效临时域名，继续等待……")"
+
+    if wait_for_argo_host; then
+      generate_vmess_link
+      return 0
+    fi
+
+    warn "$(printf '%s' "现有临时隧道未返回有效域名，将停止异常会话并重新创建。")"
+
+    stop_tunnel || true
+  fi
+
+  : > "$LOG_FILE"
+  chmod 600 "$LOG_FILE"
+
+  rm -f \
+    "$CLOUDFLARED_PID_FILE" \
+    "$VMESS_JSON_FILE" \
+    "$VMESS_LINK_FILE" \
+    "$ECH_NOTE_FILE"
+
+  ARGO_HOST=""
+  save_state
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    if ((attempt > 1)); then
+      printf '\n===== Argo 重试 %d/%d =====\n' \
+        "$attempt" \
+        "$max_attempts" \
+        >> "$LOG_FILE"
+    fi
+
+    info "$(printf '%s' "正在创建临时 Argo（第 ${attempt}/${max_attempts} 次）……")"
+
+    if tmux new-session \
+        -d \
+        -s "$TMUX_SESSION" \
+        "$CLOUDFLARED_RUNNER"; then
+
+      if wait_for_argo_host; then
+        generate_vmess_link
+
+        ok "$(printf '%s' "第 ${attempt}/${max_attempts} 次尝试成功取得临时域名。")"
+
+        return 0
+      fi
+    else
+      warn "$(printf '%s' "第 ${attempt}/${max_attempts} 次无法创建 tmux 会话。")"
+    fi
+
+    warn "$(printf '%s' "第 ${attempt}/${max_attempts} 次未取得 trycloudflare.com 域名。")"
+
+    stop_tunnel || true
+
+    if ((attempt < max_attempts)); then
+      warn "$(printf '%s' "${retry_delay} 秒后自动重试……")"
+
+      sleep "$retry_delay"
+    fi
+  done
+
+  warn "$(printf '%s' "连续 ${max_attempts} 次创建临时 Argo 均失败，最近日志如下：")"
+
+  tail -n 80 \
+    "$LOG_FILE" \
+    >&2 \
+    || true
+
+  die "$(printf '%s' "临时隧道创建失败，请稍后重试。")"
 }
 
 deployment_transaction_exit_handler() {
@@ -3251,6 +5861,28 @@ xray_service_print_logs() {
   esac
 }
 
+xray_unit_is_ours() {
+  [[ -f "$XRAY_UNIT" && ! -L "$XRAY_UNIT" ]] || return 1
+
+  case "$INIT_SYSTEM" in
+    systemd)
+      grep -Fqx "Description=zdd-argo dedicated Xray VLESS-ENC WS service managed-v0.1.0" "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "User=${SERVICE_USER}" "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "Group=${SERVICE_GROUP}" "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}" "$XRAY_UNIT" 2>/dev/null
+      ;;
+    openrc)
+      grep -Fqx 'zdd_argo_xray_managed="0.1.0"' "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "command=\"${MANAGED_XRAY_BIN}\"" "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "command_args=\"run -config ${XRAY_CONFIG}\"" "$XRAY_UNIT" 2>/dev/null \
+        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$XRAY_UNIT" 2>/dev/null
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
 xray_unit_is_legacy_ours() {
   [[ -f "$XRAY_UNIT" && ! -L "$XRAY_UNIT" ]] || return 1
 
@@ -3271,6 +5903,92 @@ xray_unit_is_legacy_ours() {
       return 1
       ;;
   esac
+}
+
+write_xray_service() {
+  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray 可执行文件。"
+  [[ "$XRAY_BIN" == "$MANAGED_XRAY_BIN" ]] \
+    || die "当前 Xray 不是脚本专用二进制，拒绝写入受管服务。"
+  ensure_service_account
+
+  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
+    xray_unit_is_ours || xray_unit_is_legacy_ours \
+      || die "Xray 服务路径已被其他程序占用：${XRAY_UNIT}"
+  fi
+
+  local tmp=""
+  tmp="$(mktemp)"
+
+  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
+    cat > "$tmp" <<EOF
+[Unit]
+Description=zdd-argo dedicated Xray VLESS-ENC WS service managed-v0.1.0
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=${SERVICE_USER}
+Group=${SERVICE_GROUP}
+ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}
+Restart=on-failure
+RestartSec=3s
+LimitNOFILE=1048576
+NoNewPrivileges=true
+UMask=0077
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+PrivateDevices=true
+ProtectHome=true
+ProtectSystem=strict
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+LockPersonality=true
+RestrictSUIDSGID=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target
+EOF
+    install -m 0644 "$tmp" "$XRAY_UNIT"
+  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
+    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
+    cat >> "$tmp" <<EOF
+zdd_argo_xray_managed="0.1.0"
+name="zdd-argo 专用 Xray VLESS-ENC WS 服务"
+description="zdd-argo dedicated Xray VLESS-ENC WS service"
+command="${MANAGED_XRAY_BIN}"
+command_args="run -config ${XRAY_CONFIG}"
+command_user="${SERVICE_USER}:${SERVICE_GROUP}"
+pidfile="/run/${XRAY_SERVICE_NAME}.pid"
+supervisor="supervise-daemon"
+respawn_delay=3
+respawn_max=0
+output_log="${XRAY_CORE_LOG_FILE}"
+error_log="${XRAY_CORE_LOG_FILE}"
+
+depend() {
+  use net
+}
+
+start_pre() {
+  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
+  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${XRAY_CONFIG}"
+  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${XRAY_CORE_LOG_FILE}"
+}
+EOF
+    install -m 0755 "$tmp" "$XRAY_UNIT"
+  else
+    rm -f "$tmp"
+    die "无法识别服务管理器，不能写入 Xray 服务文件。"
+  fi
+
+  rm -f "$tmp"
+  service_daemon_reload
 }
 
 valid_xray_ws_path() {
@@ -3368,9 +6086,23 @@ save_xray_state() {
   mv -f "$tmp" "$XRAY_STATE_JSON"
 }
 
+parse_xray_key_line() {
+  local label="$1"
+  awk -v label="$label" '''
+    index(tolower($0), tolower(label)) {
+      for (i = NF; i >= 1; i--) {
+        if ($i ~ /^[A-Za-z0-9_-]+$/) {
+          print $i
+          exit
+        }
+      }
+    }
+  '''
+}
+
 extract_xray_vlessenc_values() {
   local key="$1"
-  awk -v key="$key" '
+  awk -v key="$key" '''
     {
       marker = "\"" key "\""
       pos = index($0, marker)
@@ -3385,7 +6117,7 @@ extract_xray_vlessenc_values() {
         print value
       }
     }
-  '
+  '''
 }
 
 normalize_xray_vlessenc_xorpub() {
@@ -3467,6 +6199,177 @@ generate_xray_identity() {
   rm -f "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
   save_xray_state
 }
+xray_template_direct() {
+  jq -n \
+    --argjson port "$XRAY_LOCAL_PORT" \
+    --arg uuid "$XRAY_UUID" \
+    --arg node "$XRAY_NODE_NAME" \
+    --arg path "$XRAY_WS_PATH" \
+    --arg decryption "$XRAY_VLESS_DECRYPTION" \
+    --arg domain_strategy "$(xray_domain_strategy)" \
+    '{
+      log: {
+        loglevel: "warning"
+      },
+      inbounds: [
+        {
+          tag: "vless-enc-ws-in",
+          listen: "127.0.0.1",
+          port: $port,
+          protocol: "vless",
+          settings: {
+            clients: [
+              {
+                id: $uuid,
+                level: 0,
+                email: $node,
+                flow: "xtls-rprx-vision"
+              }
+            ],
+            decryption: $decryption
+          },
+          streamSettings: {
+            network: "ws",
+            security: "none",
+            wsSettings: {
+              path: $path
+            }
+          },
+          sniffing: {
+            enabled: true,
+            destOverride: ["http", "tls", "quic"],
+            metadataOnly: false
+          }
+        }
+      ],
+      outbounds: [
+        {
+          tag: "direct",
+          protocol: "freedom",
+          settings: {
+            domainStrategy: $domain_strategy
+          }
+        },
+        {
+          tag: "block",
+          protocol: "blackhole"
+        }
+      ],
+      routing: {
+        domainStrategy: $domain_strategy,
+        rules: [
+          {
+            type: "field",
+            ip: [
+              "0.0.0.0/8",
+              "10.0.0.0/8",
+              "100.64.0.0/10",
+              "127.0.0.0/8",
+              "169.254.0.0/16",
+              "172.16.0.0/12",
+              "192.0.0.0/24",
+              "192.0.2.0/24",
+              "192.168.0.0/16",
+              "198.18.0.0/15",
+              "198.51.100.0/24",
+              "203.0.113.0/24",
+              "224.0.0.0/4",
+              "240.0.0.0/4",
+              "::1/128",
+              "fc00::/7",
+              "fe80::/10",
+              "169.254.169.254/32",
+              "100.100.100.200/32"
+            ],
+            outboundTag: "block"
+          }
+        ]
+      }
+    }'
+}
+write_xray_config() {
+  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray。"
+  valid_uuid "$XRAY_UUID" || die "Xray UUID 无效。"
+  valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效。"
+  valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "VLESS-ENC decryption 无效。"
+  valid_local_port "$XRAY_LOCAL_PORT" || die "Xray 本地端口无效。"
+  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站 IPv4 策略无效。"
+
+  local tmp=""
+  tmp="$(mktemp "${DATA_DIR}/.xray-config.XXXXXX.json")"
+
+  xray_template_direct > "$tmp"
+
+  jq -e \
+    --argjson port "$XRAY_LOCAL_PORT" \
+    --arg uuid "$XRAY_UUID" \
+    --arg path "$XRAY_WS_PATH" \
+    --arg decryption "$XRAY_VLESS_DECRYPTION" \
+    --arg domain_strategy "$(xray_domain_strategy)" \
+    '.inbounds[0].port == $port
+      and .inbounds[0].settings.clients[0].id == $uuid
+      and .inbounds[0].settings.decryption == $decryption
+      and .inbounds[0].settings.clients[0].flow == "xtls-rprx-vision"
+       and .inbounds[0].streamSettings.network == "ws"
+       and .inbounds[0].streamSettings.wsSettings.path == $path
+       and (.inbounds[0].streamSettings.wsSettings | has("mode") | not)
+       and (.inbounds[0].streamSettings.wsSettings | has("host") | not)
+       and ((.outbounds // []) | any(.tag == "direct" and .settings.domainStrategy == $domain_strategy))
+       and .routing.domainStrategy == $domain_strategy' \
+    "$tmp" >/dev/null \
+    || { rm -f "$tmp"; die "生成的 Xray 配置未通过结构自检。"; }
+
+  "$XRAY_BIN" run -test -config "$tmp" \
+    || { rm -f "$tmp"; die "Xray 配置校验失败。"; }
+
+  chown root:"$SERVICE_GROUP" "$tmp" 2>/dev/null || true
+  chmod 640 "$tmp"
+  mv -f "$tmp" "$XRAY_CONFIG"
+
+  "$XRAY_BIN" run -test -config "$XRAY_CONFIG" \
+    || die "写入后的 Xray 配置校验失败。"
+}
+
+xray_listener_exact_loopback() {
+  ss_listen_tcp_lines \
+    | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${XRAY_LOCAL_PORT}([[:space:]]|$)"
+}
+
+wait_for_xray_ready() {
+  local i=0
+
+  for ((i = 1; i <= 15; i++)); do
+    if xray_service_is_active && xray_listener_exact_loopback; then
+      return 0
+    fi
+
+    if [[ "$INIT_SYSTEM" == "openrc" ]] && xray_listener_exact_loopback; then
+      return 0
+    fi
+
+    sleep 1
+  done
+
+  return 1
+}
+
+ensure_xray_running() {
+  if ss_listen_tcp_lines | grep -Eq "(^|[[:space:]])[^[:space:]]*:${XRAY_LOCAL_PORT}([[:space:]]|$)" \
+      && ! xray_service_is_active; then
+    warn "端口 ${XRAY_LOCAL_PORT} 已被其他进程占用："
+    ss_listen_tcp_process_lines | grep -E "(^|:)${XRAY_LOCAL_PORT}[[:space:]]" || true
+    die "为避免覆盖其他服务，已停止 Xray 部署。"
+  fi
+
+  xray_service_enable || die "无法启用 ${XRAY_SERVICE_NAME}。"
+  xray_service_restart || die "无法重启 ${XRAY_SERVICE_NAME}。"
+
+  if ! wait_for_xray_ready; then
+    xray_service_print_logs 80
+    die "${XRAY_SERVICE_NAME} 未能在 15 秒内进入正常状态，或本机未监听 127.0.0.1:${XRAY_LOCAL_PORT}。"
+  fi
+}
+
 write_xray_cloudflared_runner() {
   [[ -n "$CLOUDFLARED_BIN" ]] || die "未找到 cloudflared。"
   ensure_service_account
@@ -3583,6 +6486,16 @@ EOF
   rm -f "$tmp"
 }
 
+xray_tmux_session_exists() {
+  tmux has-session -t "$XRAY_TMUX_SESSION" 2>/dev/null
+}
+
+xray_tunnel_is_running() {
+  xray_tmux_session_exists || return 1
+  tmux list-panes -t "$XRAY_TMUX_SESSION" -F '#{pane_start_command}' 2>/dev/null \
+    | grep -Fq "$XRAY_CLOUDFLARED_RUNNER"
+}
+
 read_xray_cloudflared_pid() {
   local pid=""
   local recorded_start=""
@@ -3662,8 +6575,334 @@ wait_for_xray_argo_host() {
   return 1
 }
 
+stop_xray_tunnel() {
+  local stopped=0
+  local pid=""
+  local recorded_start=""
+  local i=0
+
+  resolve_cloudflared_bin
+
+  if xray_tunnel_is_running; then
+    tmux kill-session -t "$XRAY_TMUX_SESSION" 2>/dev/null || true
+    stopped=1
+  elif xray_tmux_session_exists; then
+    warn "发现同名 Xray tmux 会话，但它不是本脚本创建的；不会将其删除。"
+  fi
+
+  sleep 1
+
+  if IFS=' ' read -r pid recorded_start < <(read_xray_cloudflared_pid 2>/dev/null); then
+    if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
+      signal_xray_cloudflared_verified TERM "$pid" "$recorded_start" || true
+      for ((i = 0; i < 8; i++)); do
+        xray_cloudflared_identity_matches "$pid" "$recorded_start" || break
+        sleep 1
+      done
+      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
+        signal_xray_cloudflared_verified KILL "$pid" "$recorded_start" || true
+        sleep 1
+      fi
+      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
+        warn "Xray cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
+        return 1
+      fi
+      stopped=1
+    fi
+  fi
+
+  rm -f "$XRAY_CLOUDFLARED_PID_FILE"
+  if [[ $stopped -eq 1 ]]; then
+    ok "Xray 临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
+  else
+    info "没有发现正在运行的 Xray 临时隧道。"
+  fi
+}
+
+start_xray_tunnel() {
+  local parsed_host=""
+  local attempt=0
+  local max_attempts=3
+  local retry_delay=5
+
+  if xray_tmux_session_exists && ! xray_tunnel_is_running; then
+    die "已存在同名 tmux 会话 ${XRAY_TMUX_SESSION}，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。"
+  fi
+
+  if xray_tunnel_is_running; then
+    parsed_host="$(extract_xray_argo_host || true)"
+    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
+      XRAY_ARGO_HOST="$parsed_host"
+      save_xray_state
+      generate_xray_vless_link
+      ok "Xray 临时 Argo 已在运行：${XRAY_ARGO_HOST}"
+      return 0
+    fi
+  fi
+
+  : > "$XRAY_LOG_FILE"
+  chmod 600 "$XRAY_LOG_FILE"
+  rm -f "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
+  XRAY_ARGO_HOST=""
+  save_xray_state
+  mkdir -p "$XRAY_CLOUDFLARED_HOME"
+  chown "$SERVICE_USER:$SERVICE_GROUP" "$XRAY_CLOUDFLARED_HOME" 2>/dev/null || true
+  chmod 700 "$XRAY_CLOUDFLARED_HOME"
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    tmux new-session -d -s "$XRAY_TMUX_SESSION" "$XRAY_CLOUDFLARED_RUNNER" \
+      || die "无法启动 Xray cloudflared tmux 会话。"
+
+    if wait_for_xray_argo_host; then
+      generate_xray_vless_link
+      ok "Xray 临时 Argo 已启动：${XRAY_ARGO_HOST}"
+      return 0
+    fi
+
+    stop_xray_tunnel || true
+    if ((attempt < max_attempts)); then
+      warn "未能获取 Xray 临时域名，${retry_delay} 秒后重试（${attempt}/${max_attempts}）。"
+      sleep "$retry_delay"
+    fi
+  done
+
+  if [[ -f "$XRAY_LOG_FILE" ]]; then
+    warn "Xray cloudflared 最近日志："
+    tail -n 80 "$XRAY_LOG_FILE" >&2 || true
+  fi
+  die "Xray cloudflared 未能在 90 秒内输出临时 trycloudflare.com 域名。"
+}
+
 url_encode() {
   jq -rn --arg value "$1" '$value | @uri'
+}
+
+generate_xray_vless_link() {
+  valid_uuid "$XRAY_UUID" || die "Xray UUID 无效，无法生成 VLESS 链接。"
+  valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效，无法生成 VLESS 链接。"
+  valid_argo_host "$XRAY_ARGO_HOST" || die "Xray 临时 Argo 域名无效。"
+  [[ -n "$XRAY_ARGO_HOST" ]] || die "Xray 临时 Argo 域名为空。"
+  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" || die "Xray 优选域名/IP 无效。"
+  valid_node_name "$XRAY_NODE_NAME" || die "Xray 节点名称无效。"
+  valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "Xray VLESS-ENC encryption 无效。"
+
+  local tmp_json=""
+  local tmp_link=""
+  local enc_encryption=""
+  local enc_sni=""
+  local enc_path=""
+  local enc_node=""
+  local enc_ech=""
+  local node_name=""
+
+  tmp_json="$(mktemp "${DATA_DIR}/.vless-ws.json.XXXXXX")"
+  tmp_link="$(mktemp "${DATA_DIR}/.vless-ws.txt.XXXXXX")"
+
+  node_name="${XRAY_NODE_NAME}"
+
+  enc_encryption="$(url_encode "$XRAY_VLESS_ENCRYPTION")"
+  enc_sni="$(url_encode "$XRAY_ARGO_HOST")"
+  enc_path="$(url_encode "$XRAY_WS_PATH")"
+  enc_node="$(url_encode "$node_name")"
+  enc_ech="$(url_encode "$ECH_CONFIG")"
+
+  jq -n \
+    --arg protocol "vless" \
+    --arg ps "$node_name" \
+    --arg add "$XRAY_PREFERRED_ENDPOINT" \
+    --arg port "443" \
+    --arg id "$XRAY_UUID" \
+    --arg encryption "$XRAY_VLESS_ENCRYPTION" \
+    --arg security "tls" \
+    --arg sni "$XRAY_ARGO_HOST" \
+    --arg host "$XRAY_ARGO_HOST" \
+    --arg path "$XRAY_WS_PATH" \
+    --arg type "ws" \
+    --arg flow "xtls-rprx-vision" \
+    --arg ech "$ECH_CONFIG" \
+    '{
+      protocol: $protocol,
+      ps: $ps,
+      add: $add,
+      port: ($port | tonumber),
+      id: $id,
+      encryption: $encryption,
+      security: $security,
+      sni: $sni,
+      host: $host,
+      path: $path,
+      type: $type,
+      flow: $flow,
+      alpn: "http/1.1",
+      fp: "firefox",
+      ech: $ech,
+      echConfigList: $ech
+    }' > "$tmp_json"
+
+  printf 'vless://%s@%s:443?encryption=%s&flow=xtls-rprx-vision&security=tls&sni=%s&fp=firefox&type=ws&host=%s&path=%s&alpn=http%%2F1.1&ech=%s&echConfigList=%s#%s\n' \
+    "$XRAY_UUID" \
+    "$XRAY_PREFERRED_ENDPOINT" \
+    "$enc_encryption" \
+    "$enc_sni" \
+    "$enc_sni" \
+    "$enc_path" \
+    "$enc_ech" \
+    "$enc_ech" \
+    "$enc_node" \
+    > "$tmp_link"
+
+  if ! jq -e \
+      --arg ps "$node_name" \
+      --arg add "$XRAY_PREFERRED_ENDPOINT" \
+      --arg host "$XRAY_ARGO_HOST" \
+      --arg path "$XRAY_WS_PATH" \
+      --arg encryption "$XRAY_VLESS_ENCRYPTION" \
+      --arg ech "$ECH_CONFIG" \
+      '.ps == $ps
+        and .add == $add
+        and .host == $host
+        and .sni == $host
+        and .path == $path
+        and .type == "ws"
+        and .flow == "xtls-rprx-vision"
+        and .alpn == "http/1.1"
+        and .encryption == $encryption
+        and .ech == $ech
+        and .echConfigList == $ech' \
+      "$tmp_json" >/dev/null; then
+    rm -f "$tmp_json" "$tmp_link"
+    die "生成的 VLESS-ENC + WS 链接自检失败，未写入磁盘。"
+  fi
+
+  chmod 600 "$tmp_json" "$tmp_link"
+  mv -f "$tmp_json" "$XRAY_VLESS_JSON_FILE"
+  mv -f "$tmp_link" "$XRAY_VLESS_LINK_FILE"
+  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
+  chmod 600 "$ECH_NOTE_FILE"
+}
+prepare_xray_deployment() {
+  load_settings
+  install_xray_if_needed
+  install_cloudflared_if_needed
+  ensure_service_account
+
+  mkdir -p "$DATA_DIR"
+  chown root:"$SERVICE_GROUP" "$DATA_DIR"
+  chmod 750 "$DATA_DIR"
+
+  if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
+    PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
+    XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+    LOCAL_PORT="$DEFAULT_LOCAL_PORT"
+    NODE_NAME="$DEFAULT_NODE_NAME"
+    DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+    WARP_ENABLED="$DEFAULT_WARP_ENABLED"
+    OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+    save_settings
+  fi
+
+  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+  load_xray_state
+  if [[ -z "${XRAY_NODE_NAME:-}" || "$XRAY_NODE_NAME" == "zdd-argo-xray" ]]; then
+    XRAY_NODE_NAME="$NODE_NAME"
+  fi
+}
+
+rebuild_xray_deployment_after_stop() {
+  generate_xray_identity
+
+  xray_service_stop || true
+  xray_service_reset_failed
+
+  write_xray_config
+  write_xray_service
+  write_xray_cloudflared_runner
+  write_logrotate_config
+
+  ensure_xray_running
+  start_xray_tunnel
+}
+
+command_generate_xray_vlessenc_ws() {
+  deployment_transaction_begin xray
+  prepare_xray_deployment
+
+  stop_xray_tunnel || die "无法安全停止现有 Xray 临时隧道。"
+  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+  rebuild_xray_deployment_after_stop
+  save_settings
+
+  deployment_transaction_commit
+  ok "Xray VLESS-ENC + WS 临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
+  show_xray_subscription
+}
+
+command_generate_xray_custom() {
+  deployment_transaction_begin xray
+  prepare_xray_deployment
+
+  stop_xray_tunnel || die "无法安全停止现有 Xray 临时隧道。"
+  configure_xray_custom_settings
+  rebuild_xray_deployment_after_stop
+
+  deployment_transaction_commit
+  ok "Xray 自定义临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
+  show_xray_subscription
+}
+
+show_xray_subscription() {
+  load_settings
+  load_xray_state
+
+  local running="否"
+  local parsed_host=""
+
+  if xray_tunnel_is_running; then
+    running="是"
+    parsed_host="$(extract_xray_argo_host || true)"
+    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
+      if [[ "$XRAY_ARGO_HOST" != "$parsed_host" ]]; then
+        XRAY_ARGO_HOST="$parsed_host"
+        save_xray_state
+      fi
+    fi
+    if [[ -n "$XRAY_ARGO_HOST" ]] && valid_argo_host "$XRAY_ARGO_HOST"; then
+      generate_xray_vless_link
+    fi
+  fi
+
+  print_section_header "zdd-argo Xray VLESS-ENC + WS" "$C_GREEN" 78
+  print_kv "节点名称：" "${XRAY_NODE_NAME:-$NODE_NAME}" 18
+  print_kv "优选域名/IP：" "${XRAY_PREFERRED_ENDPOINT:-未设置}" 18
+  print_kv "传输方式：" "VLESS-ENC / WS / TLS" 18
+  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 18
+  print_kv "后台运行：" "$running" 18
+  print_kv "加密参数：" "0rtt + xorpub，已隐藏" 18
+  print_section_footer "$C_GREEN" 78
+
+  if [[ -f "$XRAY_VLESS_LINK_FILE" ]]; then
+    printf '\n%sXray 分享链接：%s\n' "$C_CYAN" "$C_RESET"
+    cat "$XRAY_VLESS_LINK_FILE"
+    printf '\n保存位置： %s\n' "$XRAY_VLESS_LINK_FILE"
+    printf '\n%s\n' "导入后应显示 type=ws，alpn=http/1.1，SNI/Host 为临时 Argo 域名。"
+  else
+    warn "尚未生成临时 argo 隧道"
+  fi
+}
+show_all_subscriptions() {
+  if [[ -f "$STATE_JSON" ]]; then
+    show_subscription
+  else
+    warn "sing-box：尚未生成临时 argo 隧道"
+  fi
+
+  printf '\n'
+
+  if [[ -f "$XRAY_STATE_JSON" ]]; then
+    show_xray_subscription
+  else
+    warn "Xray：尚未生成临时 argo 隧道"
+  fi
 }
 
 deployment_transaction_begin() {
@@ -3727,7 +6966,7 @@ deployment_transaction_begin() {
     if ! cp -a "$SINGBOX_UNIT" "${TRANSACTION_DIR}/sing-box.service"; then
       cleanup_transaction_dir "$TRANSACTION_DIR" || true
       TRANSACTION_DIR=""
-      die "无法备份旧兼容服务文件，部署尚未修改系统。"
+      die "无法备份现有 sing-box 服务文件，部署尚未修改系统。"
     fi
     : > "${TRANSACTION_DIR}/had-unit"
   fi
@@ -3765,6 +7004,560 @@ deployment_transaction_commit() {
   TRANSACTION_DIR=""
 }
 
+deployment_transaction_rollback() {
+  local reason="${1:-部署失败}"
+
+  [[ $TRANSACTION_ACTIVE -eq 1 ]] || return 0
+  TRANSACTION_ACTIVE=0
+
+  warn "${reason}。"
+
+  if ! managed_paths_are_safe; then
+    warn "受管路径安全校验失败，未执行破坏性回滚；事务备份保留在：${TRANSACTION_DIR}"
+    TRANSACTION_DIR=""
+    return 0
+  fi
+
+  if [[ "${TRANSACTION_SCOPE:-all}" == "xray" ]]; then
+    (stop_xray_tunnel) >/dev/null 2>&1 || true
+
+    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
+      xray_service_disable_now || true
+    fi
+
+    mkdir -p "$DATA_DIR"
+    if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
+      for rel in \
+        "$(basename "$XRAY_CONFIG")" \
+        "$(basename "$XRAY_STATE_JSON")" \
+        "$(basename "$XRAY_CLOUDFLARED_RUNNER")" \
+        "$(basename "$XRAY_CLOUDFLARED_PID_FILE")" \
+        "$(basename "$XRAY_VLESS_JSON_FILE")" \
+        "$(basename "$XRAY_VLESS_LINK_FILE")"
+      do
+        if [[ -e "${TRANSACTION_DIR}/data/${rel}" || -L "${TRANSACTION_DIR}/data/${rel}" ]]; then
+          cp -a "${TRANSACTION_DIR}/data/${rel}" "${DATA_DIR}/${rel}" \
+            || warn "回滚 Xray 数据文件失败：${DATA_DIR}/${rel}"
+        else
+          rm -f "${DATA_DIR}/${rel}"
+        fi
+      done
+    else
+      rm -f "$XRAY_CONFIG" "$XRAY_STATE_JSON" "$XRAY_CLOUDFLARED_RUNNER" "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
+    fi
+
+    rm -f -- "$XRAY_UNIT"
+    if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
+      cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
+        || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
+    fi
+
+    service_daemon_reload
+    load_settings
+    resolve_xray_bin
+    resolve_cloudflared_bin
+
+    if [[ $TRANSACTION_OLD_XRAY_SERVICE_ACTIVE -eq 1 ]] \
+        && (xray_unit_is_ours || xray_unit_is_legacy_ours); then
+      xray_service_enable_now || true
+    fi
+
+    if [[ $TRANSACTION_OLD_XRAY_TUNNEL_RUNNING -eq 1 \
+        && -x "$XRAY_CLOUDFLARED_RUNNER" \
+        && -f "$XRAY_STATE_JSON" ]]; then
+      (
+        load_xray_state
+        if xray_service_is_active; then
+          start_xray_tunnel
+        fi
+      ) >/dev/null 2>&1 || true
+    fi
+
+    if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
+      warn "Xray 回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
+    fi
+    TRANSACTION_SCOPE="all"
+    TRANSACTION_DIR=""
+    warn "已执行 Xray 专项回滚；sing-box 服务和隧道未被回滚流程改动。"
+    return 0
+  fi
+
+  (stop_tunnel) >/dev/null 2>&1 || true
+  (stop_xray_tunnel) >/dev/null 2>&1 || true
+
+  if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
+    service_disable_now || true
+  fi
+  if xray_unit_is_ours || xray_unit_is_legacy_ours; then
+    xray_service_disable_now || true
+  fi
+
+  rm -rf -- "$DATA_DIR"
+  rm -rf -- "$BIN_DIR"
+  rm -f -- "$SINGBOX_UNIT" "$XRAY_UNIT" "$LOGROTATE_CONFIG"
+
+  if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
+    cp -a "${TRANSACTION_DIR}/data" "$DATA_DIR" \
+      || warn "回滚数据目录失败：${DATA_DIR}"
+  fi
+  if [[ -f "${TRANSACTION_DIR}/had-bin" ]]; then
+    cp -a "${TRANSACTION_DIR}/bin" "$BIN_DIR" \
+      || warn "回滚程序目录失败：${BIN_DIR}"
+  fi
+  if [[ -f "${TRANSACTION_DIR}/had-unit" ]]; then
+    cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT" \
+      || warn "回滚服务文件失败：${SINGBOX_UNIT}"
+  fi
+  if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
+    cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
+      || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
+  fi
+
+  service_daemon_reload
+  load_settings
+  resolve_singbox_bin
+  resolve_xray_bin
+  resolve_cloudflared_bin
+
+  if [[ $TRANSACTION_OLD_SERVICE_ACTIVE -eq 1 ]] \
+      && (singbox_unit_is_ours || singbox_unit_is_legacy_ours); then
+    service_enable_now || true
+  fi
+
+  if [[ $TRANSACTION_OLD_TUNNEL_RUNNING -eq 1 \
+      && -x "$CLOUDFLARED_RUNNER" \
+      && -f "$STATE_JSON" ]]; then
+    (
+      load_state
+      if service_is_active; then
+        start_tunnel
+      fi
+    ) >/dev/null 2>&1 || true
+  fi
+
+  if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]]; then
+    (remove_service_account) >/dev/null 2>&1 || true
+
+    if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+      if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
+          && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
+      fi
+
+      if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 \
+          && -d "$SERVICE_HOME" \
+          && ! -L "$SERVICE_HOME" ]]; then
+        rm -rf -- "$SERVICE_HOME"
+      fi
+    fi
+  fi
+
+  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
+    warn "事务回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
+  fi
+  TRANSACTION_SCOPE="all"
+  TRANSACTION_DIR=""
+
+  warn "已执行回滚；Quick Tunnel 域名无法原样恢复，若旧隧道曾运行，脚本已尽力重新创建。"
+}
+
+prepare_deployment() {
+  load_settings
+  install_singbox_if_needed
+  install_cloudflared_if_needed
+  ensure_service_account
+
+  mkdir -p "$DATA_DIR"
+  chown root:"$SERVICE_GROUP" "$DATA_DIR"
+  chmod 750 "$DATA_DIR"
+
+  if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
+    PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
+    XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
+    LOCAL_PORT="$DEFAULT_LOCAL_PORT"
+    NODE_NAME="$DEFAULT_NODE_NAME"
+    DOH_ENABLED="$DEFAULT_DOH_ENABLED"
+    WARP_ENABLED="$DEFAULT_WARP_ENABLED"
+    OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+    save_settings
+  fi
+
+  load_state
+}
+
+rebuild_deployment_after_stop() {
+  generate_identity
+
+  service_stop || true
+  service_reset_failed
+
+  write_singbox_config
+  write_singbox_service
+  write_cloudflared_runner
+  write_logrotate_config
+
+  ensure_singbox_running
+  verify_warp_runtime
+  start_tunnel
+}
+
+command_generate_noninteractive() {
+  deployment_transaction_begin
+  prepare_deployment
+
+  stop_tunnel || die "无法安全停止现有临时隧道。"
+
+  DOH_ENABLED="0"
+  WARP_ENABLED="0"
+  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+  save_settings
+
+  rebuild_deployment_after_stop
+
+  deployment_transaction_commit
+  ok "临时 Argo 已完成全新生成，当前使用直接出站；现在可以直接断开 SSH。"
+  show_subscription
+}
+
+command_generate_noninteractive_doh_warp() {
+  deployment_transaction_begin
+  prepare_deployment
+
+  stop_tunnel || die "无法安全停止现有临时隧道。"
+
+  DOH_ENABLED="1"
+  WARP_ENABLED="1"
+  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
+  save_settings
+  warn "本次无交互部署将启用 Cloudflare DoH（1.1.1.1）和 WARP；首次注册会调用第三方 wgcf 并使用 --accept-tos。"
+
+  rebuild_deployment_after_stop
+
+  deployment_transaction_commit
+  ok "临时 Argo 已完成全新生成，并已启用 DoH 与 WARP 出站；现在可以直接断开 SSH。"
+  show_subscription
+}
+
+command_generate_custom() {
+  deployment_transaction_begin
+  prepare_deployment
+
+  stop_tunnel || die "无法安全停止现有临时隧道。"
+  configure_custom_settings
+  rebuild_deployment_after_stop
+
+  deployment_transaction_commit
+  ok "自定义临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
+  show_subscription
+}
+
+show_subscription() {
+  load_settings
+  load_state
+
+  local running="否"
+  local parsed_host=""
+
+  if tunnel_is_running; then
+    running="是"
+    parsed_host="$(extract_argo_host || true)"
+
+    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
+      if [[ "$ARGO_HOST" != "$parsed_host" ]]; then
+        ARGO_HOST="$parsed_host"
+        save_state
+      fi
+    fi
+
+    if [[ -n "$ARGO_HOST" ]] && valid_argo_host "$ARGO_HOST"; then
+      generate_vmess_link
+    fi
+  fi
+
+  print_section_header "zdd-argo sing-box VMess/WS" "$C_GREEN" 78
+  print_kv "节点名称：" "$NODE_NAME" 20
+  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 20
+  print_kv "临时 Argo 域名：" "${ARGO_HOST:-尚未生成}" 20
+  print_kv "UUID：" "${UUID:-尚未生成}" 20
+  print_kv "WS 路径：" "${WSPATH:-尚未生成}" 20
+  print_kv "本地监听：" "127.0.0.1:${LOCAL_PORT}" 20
+  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 20
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 20
+  else
+    print_kv "Cloudflare DoH：" "未启用" 20
+  fi
+  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 20
+  print_kv "后台隧道运行：" "$running" 20
+  print_kv "ECHConfigList：" "$ECH_CONFIG" 20
+  print_section_footer "$C_GREEN" 78
+  printf '\n'
+
+  if [[ -f "$VMESS_LINK_FILE" ]]; then
+    if ! tunnel_is_running; then
+      warn "后台隧道当前未运行；下面是保存的旧链接，目前不可用。"
+    fi
+
+    printf '%ssing-box 分享链接：%s\n' "$C_CYAN" "$C_RESET"
+    cat "$VMESS_LINK_FILE"
+    printf '\n保存位置： %s\n' "$VMESS_LINK_FILE"
+    printf '\n%sECH 兼容提示：%s\n' "$C_YELLOW" "$C_RESET"
+    printf '%s\n' "脚本已同时写入 JSON 字段 ech 与 echConfigList。"
+    printf '%s导入 Xray 客户端后，请检查 EchConfigList 是否为：%s\n' "$C_YELLOW" "$C_RESET"
+    printf '%s%s%s\n' "$C_YELLOW" "$ECH_CONFIG" "$C_RESET"
+    printf '%s\n' "若客户端忽略旧式 VMess JSON 的扩展字段，请手动粘贴这一行。"
+  else
+    warn "尚未生成临时 argo 隧道"
+  fi
+}
+
+show_status() {
+  load_settings
+
+  if command -v jq >/dev/null 2>&1; then
+    load_state
+    load_xray_state
+  else
+    UUID=""
+    WSPATH=""
+    ARGO_HOST=""
+    CREATED_AT=""
+    XRAY_UUID=""
+    XRAY_WS_PATH=""
+    XRAY_ARGO_HOST=""
+  fi
+
+  resolve_singbox_bin
+  resolve_xray_bin
+  resolve_cloudflared_bin
+  resolve_wgcf_bin
+
+  print_section_header "zdd-argo 运行状态" "$C_CYAN" 78
+
+  print_kv "脚本版本：" "v ${SCRIPT_VERSION}" 22
+  print_kv "运行平台：" "$(runtime_label)" 22
+  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
+  print_kv "节点名称：" "$NODE_NAME" 22
+  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 22
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 22
+  else
+    print_kv "Cloudflare DoH：" "未启用" 22
+  fi
+  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 22
+
+  if [[ "$WARP_ENABLED" == "1" && -f "$WARP_CHECK_FILE" ]]; then
+    local warp_checked=""
+    local warp_exit_ip=""
+    local warp_colo=""
+    local warp_state=""
+
+    warp_checked="$(jq -r '.checked_at // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_exit_ip="$(jq -r '.exit_ip // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_colo="$(jq -r '.colo // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+    warp_state="$(jq -r '.warp // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
+
+    print_kv "WARP 自检：" "${warp_state} / ${warp_exit_ip} / ${warp_colo}" 22
+    print_kv "WARP 自检时间：" "$warp_checked" 22
+  fi
+
+  print_aligned_label "sing-box：" 22
+  if [[ -n "$SINGBOX_BIN" ]]; then
+    "$SINGBOX_BIN" version \
+      2>/dev/null \
+      | head -n 1 \
+      || printf '%s\n' "已安装"
+
+    print_aligned_label "sing-box 路径：" 22
+    printf '%s' "$SINGBOX_BIN"
+
+    if [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]]; then
+      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
+    else
+      printf ' %s\n' "（外部安装）"
+    fi
+  else
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
+  fi
+
+  print_aligned_label "Xray：" 22
+  if [[ -n "$XRAY_BIN" ]]; then
+    "$XRAY_BIN" version \
+      2>/dev/null \
+      | head -n 1 \
+      || printf '%s\n' "已安装"
+
+    print_aligned_label "Xray 路径：" 22
+    printf '%s' "$XRAY_BIN"
+
+    if [[ "$XRAY_BIN" == "$MANAGED_XRAY_BIN" ]]; then
+      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
+    else
+      printf ' %s\n' "（外部安装）"
+    fi
+  else
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
+  fi
+
+  print_aligned_label "cloudflared：" 22
+  if [[ -n "$CLOUDFLARED_BIN" ]]; then
+    "$CLOUDFLARED_BIN" --version \
+      2>/dev/null \
+      || printf '%s\n' "已安装"
+
+    print_aligned_label "cloudflared 路径：" 22
+    printf '%s' "$CLOUDFLARED_BIN"
+
+    if [[ "$CLOUDFLARED_BIN" == "$MANAGED_CLOUDFLARED_BIN" ]]; then
+      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
+    else
+      printf ' %s\n' "（外部安装）"
+    fi
+  else
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
+  fi
+
+  print_aligned_label "wgcf：" 22
+  if [[ -n "$WGCF_BIN" ]]; then
+    if [[ -f "$WGCF_RELEASE_META" ]]; then
+      printf '%s\n' "$(jq -r '.tag // \"已安装\"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "已安装")"
+    else
+      printf '%s\n' "已安装（外部版本）"
+    fi
+
+    print_kv "WARP 配置：" "$([[ -f "$WARP_PROFILE_FILE" ]] && printf '%s' "已生成" || printf '%s' "未生成")" 22
+  else
+    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
+  fi
+
+  print_aligned_label "sing-box 服务：" 22
+  if service_is_active; then
+    printf '%s%s%s\n' "$C_GREEN" "运行中" "$C_RESET"
+  else
+    printf '%s%s%s\n' "$C_RED" "未运行" "$C_RESET"
+  fi
+
+  print_aligned_label "本地端口：" 22
+  if listener_exact_loopback; then
+    printf '%s127.0.0.1:%s 正常%s\n' "$C_GREEN" "$LOCAL_PORT" "$C_RESET"
+  else
+    printf '%s%s%s\n' "$C_RED" "未检测到正确监听" "$C_RESET"
+  fi
+
+  print_aligned_label "Argo / tmux：" 22
+  if tunnel_is_running; then
+    printf '%s运行中%s（会话：%s）\n' "$C_GREEN" "$C_RESET" "$(active_tunnel_session 2>/dev/null || printf '%s' "$TMUX_SESSION")"
+  else
+    printf '%s未运行%s\n' "$C_RED" "$C_RESET"
+  fi
+
+  print_kv "临时域名：" "${ARGO_HOST:-尚未生成}" 22
+
+  if [[ -f "$XRAY_STATE_JSON" ]]; then
+    printf '
+'
+    print_kv "Xray 节点名称：" "${XRAY_NODE_NAME:-未设置}" 22
+    print_kv "Xray 本地监听：" "127.0.0.1:${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}" 22
+    if xray_service_is_active; then
+      print_kv "Xray 服务：" "运行中" 22
+    else
+      print_kv "Xray 服务：" "未运行" 22
+    fi
+    if xray_tunnel_is_running; then
+      print_kv "Xray Argo：" "运行中" 22
+    else
+      print_kv "Xray Argo：" "未运行" 22
+    fi
+    print_kv "Xray 当前域名：" "${XRAY_ARGO_HOST:-—}" 22
+  fi
+
+  local resolved_zargo=""
+  resolved_zargo="$(type -P zargo 2>/dev/null || true)"
+
+  print_aligned_label "管理命令：" 22
+  if resolved_zdd_is_ours "$resolved_zargo"; then
+    printf '%szargo%s（%s）\n' "$C_GREEN" "$C_RESET" "$resolved_zargo"
+  elif [[ -n "$resolved_zargo" ]]; then
+    printf '%s被其他程序占用%s（%s）\n' "$C_RED" "$C_RESET" "$resolved_zargo"
+  else
+    printf '%s未找到%s\n' "$C_RED" "$C_RESET"
+  fi
+
+  print_section_footer "$C_CYAN" 78
+
+  printf '\n%s\n' "最近 30 行 sing-box 日志："
+  service_print_logs 30
+
+  if [[ -f "$LOG_FILE" ]]; then
+    printf '\n%s\n' "最近 20 行 cloudflared 日志："
+    tail -n 20 "$LOG_FILE" || true
+  fi
+}
+
+command_update_singbox() {
+  local had_deployment=0
+
+  load_settings
+
+  if [[ -f "$SINGBOX_CONFIG" \
+      || -f "$SINGBOX_UNIT" ]]; then
+    had_deployment=1
+  fi
+
+  install_or_update_singbox
+  resolve_singbox_bin
+
+  if [[ $had_deployment -eq 1 \
+      && -f "$SINGBOX_CONFIG" ]]; then
+    load_state
+
+    "$SINGBOX_BIN" check \
+      -c "$SINGBOX_CONFIG" \
+      || die "$(printf '%s' "更新后的 sing-box 无法通过现有 zdd-argo 配置校验。")"
+
+    write_singbox_service
+
+    if ! wait_for_singbox_ready; then
+      ensure_singbox_running
+    fi
+
+    ok "$(printf '%s' "脚本专用 sing-box 已更新，zdd-argo 服务运行正常。")"
+  else
+    ok "$(printf '%s' "脚本专用 sing-box 已安装或更新；当前未发现 zdd-argo 部署。")"
+  fi
+}
+
+
+command_update_xray() {
+  local had_deployment=0
+
+  load_settings
+
+  if [[ -f "$XRAY_CONFIG" || -f "$XRAY_UNIT" ]]; then
+    had_deployment=1
+  fi
+
+  install_or_update_xray
+  resolve_xray_bin
+
+  if [[ $had_deployment -eq 1 && -f "$XRAY_CONFIG" ]]; then
+    load_xray_state
+    write_xray_config
+    "$XRAY_BIN" run -test -config "$XRAY_CONFIG" \
+      || die "更新后的 Xray 无法通过现有 VLESS-ENC + WS 配置校验。"
+
+    write_xray_service
+
+    if ! wait_for_xray_ready; then
+      ensure_xray_running
+    fi
+
+    ok "脚本专用 Xray 已更新，Xray VLESS-ENC + WS 服务运行正常。"
+  else
+    ok "脚本专用 Xray 已安装或更新；当前未发现 Xray 部署。"
+  fi
+}
+
 command_update_cloudflared() {
   local had_deployment=0
 
@@ -3791,6 +7584,84 @@ command_update_cloudflared() {
   else
     ok "$(printf '%s' "脚本专用 cloudflared 已安装或更新；当前未发现 zdd-argo 部署。")"
   fi
+}
+
+command_update_wgcf() {
+  load_settings
+
+  if [[ "$WARP_ENABLED" != "1" \
+      && ! -x "$MANAGED_WGCF_BIN" ]]; then
+    info "WARP 未启用且脚本专用 wgcf 未安装，跳过 wgcf 更新。"
+    return 0
+  fi
+
+  install_or_update_wgcf
+  resolve_wgcf_bin
+  ok "脚本专用 wgcf 已安装或更新；下次启用 WARP 时会直接刷新并覆盖 WireGuard profile。"
+}
+
+command_update_components() {
+  info "开始更新 sing-box、Xray、cloudflared 和已启用的 WARP 工具……"
+  deployment_transaction_begin
+
+  command_update_singbox
+  command_update_xray
+  command_update_cloudflared
+  command_update_wgcf
+
+  deployment_transaction_commit
+  ok "sing-box、Xray、cloudflared 与 WARP 工具已完成更新检查。"
+}
+
+remove_zdd_components() {
+  assert_safe_managed_paths
+  load_settings
+  resolve_singbox_bin
+  resolve_xray_bin
+  resolve_cloudflared_bin
+  stop_tunnel || true
+  stop_xray_tunnel || true
+
+  if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
+    if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
+      service_disable_now || true
+      rm -f "$SINGBOX_UNIT"
+    else
+      die "服务文件不是本项目创建的，拒绝继续卸载：${SINGBOX_UNIT}"
+    fi
+  fi
+
+  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
+    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
+      xray_service_disable_now || true
+      rm -f "$XRAY_UNIT"
+    else
+      die "Xray 服务文件不是本项目创建的，拒绝继续卸载：${XRAY_UNIT}"
+    fi
+  fi
+
+  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
+    if logrotate_config_is_ours || logrotate_config_is_legacy_ours; then
+      rm -f "$LOGROTATE_CONFIG"
+    else
+      warn "日志轮转配置不是本项目创建的，未删除：${LOGROTATE_CONFIG}"
+    fi
+  fi
+
+  service_daemon_reload
+  service_reset_failed
+  xray_service_reset_failed
+
+  rm -rf -- "$DATA_DIR"
+  rm -f -- \
+    "$LOG_FILE" \
+    "$LOG_FILE".* \
+    "$XRAY_LOG_FILE" \
+    "$XRAY_LOG_FILE".* \
+    "$SINGBOX_LOG_FILE" \
+    "$SINGBOX_LOG_FILE".* \
+    "$XRAY_CORE_LOG_FILE" \
+    "$XRAY_CORE_LOG_FILE".*
 }
 
 confirm_yes() {
@@ -3873,6 +7744,19 @@ remove_downloaded_source_if_confirmed() {
     || die "无法删除安装源文件：${source}"
 
   ok "安装源文件已删除：${source}"
+}
+
+remove_current_script_if_ours() {
+  local path="${SCRIPT_PATH:-}"
+
+  [[ -n "$path" && "$path" != "$MANAGED_SCRIPT_PATH" ]] || return 0
+  [[ -f "$path" && ! -L "$path" ]] || return 0
+  script_file_is_ours "$path" || return 0
+
+  rm -f -- "$path" \
+    || die "无法删除当前执行的安装脚本：${path}"
+
+  ok "当前执行的安装脚本已删除：${path}"
 }
 
 remove_shortcuts() {
@@ -4127,66 +8011,47 @@ remove_service_account() {
   rm -rf -- "$SERVICE_HOME"
 }
 
-deployment_transaction_cleanup_service_identity() {
-  local passwd_line=""
-  local service_uid=""
-  local existing_gid=""
-  local existing_home=""
-  local existing_shell=""
-  local expected_gid=""
+command_uninstall_all() {
+  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户、脚本副本及当前安装源 .sh 文件。"
+  warn "不会删除 apt、apk 或其他脚本安装的共享程序和系统依赖。"
 
-  if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]] \
-      && getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-
-    if [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]] \
-        && ! service_marker_is_recognized; then
-      warn "回滚时服务账户标记未通过校验，已保留同名服务账户：${SERVICE_USER}"
-    else
-      passwd_line="$(getent passwd "$SERVICE_USER")"
-      IFS=':' read -r _ _ service_uid existing_gid _ existing_home existing_shell <<< "$passwd_line"
-      expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
-
-      if [[ "$service_uid" =~ ^[0-9]+$ \
-          && "$existing_home" == "$SERVICE_HOME" \
-          && -n "$expected_gid" \
-          && "$existing_gid" == "$expected_gid" \
-          && ( "$existing_shell" == "$SERVICE_SHELL" \
-            || "$existing_shell" == "/usr/sbin/nologin" \
-            || "$existing_shell" == "/sbin/nologin" \
-            || "$existing_shell" == "/bin/false" ) ]]; then
-
-        stop_service_account_processes "$service_uid" \
-          || warn "回滚时无法确认低权限服务账户残留进程已全部退出：${SERVICE_USER}"
-        userdel "$SERVICE_USER" >/dev/null 2>&1 \
-          || warn "回滚时无法删除新建低权限服务账户：${SERVICE_USER}"
-      else
-        warn "回滚时检测到同名服务账户不满足安全校验，已保留：${SERVICE_USER}"
-      fi
-    fi
+  if ! confirm_yes "确认完整卸载请输入 yes："; then
+    info "已取消。"
+    return 0
   fi
 
-  if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
-      && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-    if [[ ! -e "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]] \
-        || service_marker_is_recognized; then
-      groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
-        || warn "回滚时无法删除新建低权限服务组：${SERVICE_GROUP}"
-    else
-      warn "回滚时服务账户标记未通过校验，已保留同名服务组：${SERVICE_GROUP}"
-    fi
-  fi
+  validate_service_account_removal
+  remove_zdd_components
+  remove_service_account
+  remove_singbox_program
+  remove_xray_program
+  remove_cloudflared_program
+  remove_wgcf_program
+  remove_shortcuts
+  remove_managed_script
+  service_daemon_reload
+  remove_downloaded_source_if_confirmed
+  remove_current_script_if_ours
+  cleanup_bin_dir
 
-  if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 ]] \
-      && [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]]; then
-    if [[ ! -e "$SERVICE_MARKER" && ! -L "$SERVICE_MARKER" ]] \
-        || service_marker_is_recognized; then
-      rm -rf -- "$SERVICE_HOME" \
-        || warn "回滚时无法删除新建低权限服务主目录：${SERVICE_HOME}"
-    else
-      warn "回滚时服务账户标记未通过校验，已保留同名主目录：${SERVICE_HOME}"
-    fi
+  ok "zdd-argo 及脚本专用 sing-box、Xray、cloudflared、wgcf 已完整卸载。"
+
+  if [[ $MENU_MODE -eq 1 ]]; then
+    return 10
   fi
 }
+
+remove_singbox_program() {
+  rm -f \
+    "$MANAGED_SINGBOX_BIN" \
+    "$SINGBOX_RELEASE_META" \
+    "${MANAGED_SINGBOX_BIN}.new."* \
+    "${MANAGED_SINGBOX_BIN}.backup."* \
+    "${SINGBOX_RELEASE_META}.backup."*
+
+  hash -r
+}
+
 remove_xray_program() {
   rm -f \
     "$MANAGED_XRAY_BIN" \
@@ -4209,6 +8074,17 @@ remove_cloudflared_program() {
   hash -r
 }
 
+remove_wgcf_program() {
+  rm -f \
+    "$MANAGED_WGCF_BIN" \
+    "$WGCF_RELEASE_META" \
+    "${MANAGED_WGCF_BIN}.new."* \
+    "${MANAGED_WGCF_BIN}.backup."* \
+    "${WGCF_RELEASE_META}.backup."*
+
+  hash -r
+}
+
 cleanup_bin_dir() {
   rm -f -- "$SOURCE_RECORD_FILE" "${SOURCE_RECORD_FILE}.new."*
   rmdir "$BIN_DIR" \
@@ -4216,11 +8092,98 @@ cleanup_bin_dir() {
     || true
 }
 
+status_gap_line() {
+  printf '\n'
+}
+
+status_full_line() {
+  local label="$1"
+  local value="$2"
+  local label_width="${3:-8}"
+
+  print_aligned_label "$label" "$label_width"
+  printf '%s
+' "$value"
+}
+
+status_colored_value() {
+  local value="$1"
+  local width="$2"
+  local color="${3:-}"
+  local actual_width=""
+  local padding=1
+
+  actual_width="$(text_display_width "$value")"
+  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#value}"
+  padding=$((width - actual_width))
+  ((padding >= 1)) || padding=1
+
+  printf '%s%s%s' "$color" "$value" "$C_RESET"
+  printf '%*s' "$padding" ''
+}
+
+status_pair_line() {
+  local label="$1"
+  local left="$2"
+  local right="$3"
+  local label_width="${4:-8}"
+  local left_width="${5:-$UI_LEFT_WIDTH}"
+
+  print_aligned_label "$label" "$label_width"
+  print_aligned_label "$left" "$left_width"
+  printf '%s
+' "$right"
+}
+
+status_pair_line_parts() {
+  local label="$1"
+  local left_prefix="$2"
+  local left_value="$3"
+  local right_prefix="$4"
+  local right_value="$5"
+  local left_color="${6:-}"
+  local right_color="${7:-}"
+  local label_width="${8:-8}"
+  local left_width="${9:-$UI_LEFT_WIDTH}"
+  local left_plain="${left_prefix}${left_value}"
+  local actual_width=""
+  local padding=1
+
+  actual_width="$(text_display_width "$left_plain")"
+  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#left_plain}"
+  padding=$((left_width - actual_width))
+  ((padding >= 1)) || padding=1
+
+  print_aligned_label "$label" "$label_width"
+  printf '%s' "$left_prefix"
+  printf '%s%s%s' "$left_color" "$left_value" "$C_RESET"
+  printf '%*s' "$padding" ''
+  printf '%s' "$right_prefix"
+  printf '%s%s%s
+' "$right_color" "$right_value" "$C_RESET"
+}
+
+status_domain_block() {
+  local host="$1"
+  local xhost="$2"
+  local label_width="${3:-8}"
+  local name_width="${4:-10}"
+
+  print_aligned_label "域名：" "$label_width"
+  print_aligned_label "sing-box" "$name_width"
+  printf '%s
+' "$host"
+  print_aligned_label "" "$label_width"
+  print_aligned_label "Xray" "$name_width"
+  printf '%s
+' "$xhost"
+}
+
 print_menu_row() {
   local index="$1"
   local title="$2"
   local desc="$3"
-  local desc_column=44
+  local desc_column="$MENU_DESC_COLUMN"
   local prefix="${index}. "
   local prefix_width=""
   local title_width=""
@@ -4232,9 +8195,83 @@ print_menu_row() {
 
   printf '%s' "$prefix"
   print_aligned_label "$title" "$title_width"
-  printf '%s\n' "$desc"
+  printf '%s
+' "$desc"
 }
 
+menu_header_status() {
+  local sb="未安装"
+  local xr="未安装"
+  local argo="未运行"
+  local xargo="未运行"
+  local argo_color=""
+  local xargo_color=""
+  local host="—"
+  local xhost="—"
+  local xray_state_port=""
+  local xray_state_endpoint=""
+  local doh_flag="关"
+  local warp_flag="关"
+
+  load_settings
+  resolve_singbox_bin
+  resolve_xray_bin
+
+  if [[ -n "$SINGBOX_BIN" ]]; then
+    sb="$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR == 1 { if ($1 == "sing-box" && $2 == "version" && $3 != "") { print "v" $3 } else { print $0 } }' || true)"
+    [[ -n "$sb" ]] || sb="已安装"
+  fi
+
+  if [[ -n "$XRAY_BIN" ]]; then
+    xr="$("$XRAY_BIN" version 2>/dev/null | awk 'NR == 1 { if ($1 == "Xray" && $2 != "") { print "v" $2 } else { print $1 } }' || true)"
+    [[ -n "$xr" ]] || xr="已安装"
+  fi
+
+  if tunnel_is_running; then
+    argo="运行中"
+    argo_color="$C_YELLOW"
+  fi
+  if xray_tunnel_is_running; then
+    xargo="运行中"
+    xargo_color="$C_YELLOW"
+  fi
+
+  if [[ -f "$STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
+    host="$(jq -r '.argo_host // "—"' "$STATE_JSON" 2>/dev/null || printf '%s' "状态异常")"
+    [[ -n "$host" ]] || host="—"
+  fi
+  if [[ -f "$XRAY_STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
+    xhost="$(jq -r '.argo_host // "—"' "$XRAY_STATE_JSON" 2>/dev/null || printf '%s' "状态异常")"
+    [[ -n "$xhost" ]] || xhost="—"
+    xray_state_port="$(jq -r '.local_port // ""' "$XRAY_STATE_JSON" 2>/dev/null || true)"
+    xray_state_endpoint="$(jq -r '.preferred_endpoint // ""' "$XRAY_STATE_JSON" 2>/dev/null || true)"
+    xray_state_endpoint="$(normalize_preferred_endpoint "$xray_state_endpoint")"
+    if valid_local_port "$xray_state_port"; then
+      XRAY_LOCAL_PORT="$((10#$xray_state_port))"
+    fi
+    if valid_preferred_endpoint "$xray_state_endpoint"; then
+      XRAY_PREFERRED_ENDPOINT="$xray_state_endpoint"
+    fi
+  fi
+
+  if [[ "$DOH_ENABLED" == "1" ]]; then
+    doh_flag="开"
+  fi
+  if [[ "$WARP_ENABLED" == "1" ]]; then
+    warp_flag="开"
+  fi
+
+  print_section_header "zargo 临时隧道" "$C_YELLOW" 78
+  status_pair_line "平台：" "$(runtime_label)" "脚本 v${SCRIPT_VERSION}"
+  status_pair_line "内核：" "sing-box ${sb}" "Xray ${xr}"
+  status_pair_line_parts "隧道：" "sing-box " "$argo" "Xray " "$xargo" "$argo_color" "$xargo_color"
+  status_pair_line_parts "入口：" "sing-box " "${LOCAL_PORT}" "Xray " "${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}" "$C_YELLOW" "$C_YELLOW"
+  status_pair_line_parts "优选：" "sing-box " "${PREFERRED_ENDPOINT:-未设置}" "Xray " "${XRAY_PREFERRED_ENDPOINT:-未设置}" "$C_YELLOW" "$C_YELLOW"
+  status_pair_line "出站：" "sing-box DoH ${doh_flag} / WARP ${warp_flag}" "Xray $(outbound_ip_mode_label)"
+  status_pair_line "语法：" "sing-box $(singbox_ip_strategy)" "Xray $(xray_domain_strategy)"
+  status_domain_block "$host" "$xhost"
+  print_section_footer "$C_CYAN" 78
+}
 run_menu_action() {
   local fn="$1"
   local rc=0
@@ -4263,474 +8300,20 @@ run_menu_action() {
   pause_screen
 }
 
-vmess_state_is_ready() {
-  valid_uuid "${UUID:-}" \
-    && valid_ws_path "${WSPATH:-}" \
-    && valid_local_port "${LOCAL_PORT:-}" \
-    && valid_node_name "${NODE_NAME:-}"
-}
-
-vless_state_is_ready() {
-  valid_uuid "${XRAY_UUID:-}" \
-    && valid_xray_ws_path "${XRAY_WS_PATH:-}" \
-    && valid_local_port "${XRAY_LOCAL_PORT:-}" \
-    && valid_node_name "${XRAY_NODE_NAME:-}" \
-    && valid_xray_vlessenc_value "${XRAY_VLESS_DECRYPTION:-}" \
-    && valid_xray_vlessenc_value "${XRAY_VLESS_ENCRYPTION:-}"
-}
-
-xray_unit_is_ours() {
-  [[ -f "$XRAY_UNIT" && ! -L "$XRAY_UNIT" ]] || return 1
-  case "$INIT_SYSTEM" in
-    systemd)
-      grep -Fq "zdd-argo dedicated Xray" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "User=${SERVICE_USER}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "Group=${SERVICE_GROUP}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    openrc)
-      grep -Fqx 'zdd_argo_xray_managed="0.1.0"' "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command=\"${MANAGED_XRAY_BIN}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_args=\"run -config ${XRAY_CONFIG}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-write_xray_service() {
-  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray 可执行文件。"
-  [[ "$XRAY_BIN" == "$MANAGED_XRAY_BIN" ]] || die "当前 Xray 不是脚本专用二进制，拒绝写入受管服务。"
-  ensure_service_account
-
-  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    xray_unit_is_ours || xray_unit_is_legacy_ours || die "服务路径已被其他程序占用：${XRAY_UNIT}"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp)"
-
-  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    cat > "$tmp" <<EOF2
-[Unit]
-Description=zdd-argo dedicated Xray WS service managed-v0.1.0
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_GROUP}
-ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}
-Restart=on-failure
-RestartSec=3s
-LimitNOFILE=1048576
-NoNewPrivileges=true
-UMask=0077
-CapabilityBoundingSet=
-AmbientCapabilities=
-PrivateTmp=true
-PrivateDevices=true
-ProtectHome=true
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-LockPersonality=true
-RestrictSUIDSGID=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-SystemCallArchitectures=native
-
-[Install]
-WantedBy=multi-user.target
-EOF2
-    install -m 0644 "$tmp" "$XRAY_UNIT"
-  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
-    cat >> "$tmp" <<EOF2
-zdd_argo_xray_managed="0.1.0"
-name="zdd-argo 专用 Xray WS 服务"
-description="zdd-argo dedicated Xray WS service"
-command="${MANAGED_XRAY_BIN}"
-command_args="run -config ${XRAY_CONFIG}"
-command_user="${SERVICE_USER}:${SERVICE_GROUP}"
-command_background="yes"
-pidfile="/run/${XRAY_SERVICE_NAME}.pid"
-supervisor="supervise-daemon"
-respawn_delay=3
-respawn_max=0
-output_log="${XRAY_CORE_LOG_FILE}"
-error_log="${XRAY_CORE_LOG_FILE}"
-
-depend() {
-  use net
-}
-
-start_pre() {
-  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
-  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${XRAY_CONFIG}"
-  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${XRAY_CORE_LOG_FILE}"
-}
-EOF2
-    install -m 0755 "$tmp" "$XRAY_UNIT"
-  else
-    rm -f "$tmp"
-    die "无法识别服务管理器，不能写入服务文件。"
-  fi
-
-  rm -f "$tmp"
-  service_daemon_reload
-}
-
-xray_required_ports() {
-  if vmess_state_is_ready; then
-    printf '%s\n' "$LOCAL_PORT"
-  fi
-  if vless_state_is_ready; then
-    printf '%s\n' "$XRAY_LOCAL_PORT"
-  fi
-}
-
-xray_port_listens_loopback() {
-  local port="$1"
-  ss_listen_tcp_lines | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${port}([[:space:]]|$)"
-}
-
-xray_all_required_ports_ready() {
-  local port=""
-  local found=0
-  while IFS= read -r port; do
-    [[ -n "$port" ]] || continue
-    found=1
-    xray_port_listens_loopback "$port" || return 1
-  done < <(xray_required_ports)
-  [[ $found -eq 1 ]]
-}
-
-wait_for_xray_ready() {
-  local i=0
-  for ((i = 1; i <= 15; i++)); do
-    if xray_service_is_active && xray_all_required_ports_ready; then
-      return 0
-    fi
-    if [[ "$INIT_SYSTEM" == "openrc" ]] && xray_all_required_ports_ready; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
-ensure_xray_running() {
-  local port=""
-  while IFS= read -r port; do
-    [[ -n "$port" ]] || continue
-    if ss_listen_tcp_lines | grep -Eq "(^|[[:space:]])[^[:space:]]*:${port}([[:space:]]|$)" && ! xray_service_is_active; then
-      warn "端口 ${port} 已被其他进程占用："
-      ss_listen_tcp_process_lines | grep -E "(^|:)${port}[[:space:]]" || true
-      die "为避免覆盖其他服务，已停止部署。"
-    fi
-  done < <(xray_required_ports)
-
-  xray_service_enable || die "无法启用 ${XRAY_SERVICE_NAME}。"
-  xray_service_restart || die "无法重启 ${XRAY_SERVICE_NAME}。"
-
-  if ! wait_for_xray_ready; then
-    xray_service_print_logs 80
-    die "服务未能在 15 秒内进入正常状态，或本机端口未正确监听。"
-  fi
-
-  if xray_features_need_warp; then
-    verify_xray_warp_runtime
-  fi
-}
-
-generate_vmess_link() {
-  valid_uuid "$UUID" || die "UUID 无效，无法生成 VMess 链接。"
-  valid_ws_path "$WSPATH" || die "WS 路径无效，无法生成 VMess 链接。"
-  valid_argo_host "$ARGO_HOST" || die "VMess 临时域名无效。"
-  [[ -n "$ARGO_HOST" ]] || die "VMess 临时域名为空。"
-  valid_preferred_endpoint "$PREFERRED_ENDPOINT" || die "VMess 优选域名/IP 无效。"
-  valid_node_name "$NODE_NAME" || die "VMess 节点名称无效。"
-
-  local tmp_json=""
-  local tmp_link=""
-  local encoded=""
-  local node_name="${NODE_NAME} VMess/WS"
-
-  tmp_json="$(mktemp "${DATA_DIR}/.vmess.json.XXXXXX")"
-  tmp_link="$(mktemp "${DATA_DIR}/.vmess.txt.XXXXXX")"
-
-  jq -c -n \
-    --arg ps "$node_name" \
-    --arg add "$PREFERRED_ENDPOINT" \
-    --arg id "$UUID" \
-    --arg host "$ARGO_HOST" \
-    --arg path "$WSPATH" \
-    --arg ech "$ECH_CONFIG" \
-    '{
-      v: "2",
-      ps: $ps,
-      add: $add,
-      port: "443",
-      id: $id,
-      aid: "0",
-      scy: "auto",
-      net: "ws",
-      type: "none",
-      host: $host,
-      path: $path,
-      tls: "tls",
-      sni: $host,
-      alpn: "http/1.1",
-      fp: "firefox",
-      insecure: "0",
-      vcn: $host,
-      pcs: "",
-      ech: $ech,
-      echConfigList: $ech
-    }' > "$tmp_json"
-
-  encoded="$(base64 < "$tmp_json" | tr -d '\r\n')"
-  printf 'vmess://%s\n' "$encoded" > "$tmp_link"
-
-  if ! base64 -d < <(sed 's#^vmess://##' "$tmp_link") 2>/dev/null \
-      | jq -e \
-        --arg ps "$node_name" \
-        --arg add "$PREFERRED_ENDPOINT" \
-        --arg host "$ARGO_HOST" \
-        --arg ech "$ECH_CONFIG" \
-        '.ps == $ps and .add == $add and .host == $host and .sni == $host and .vcn == $host and .pcs == "" and .ech == $ech and .echConfigList == $ech' >/dev/null; then
-    rm -f "$tmp_json" "$tmp_link"
-    die "生成的 VMess 链接自检失败，未写入磁盘。"
-  fi
-
-  chmod 600 "$tmp_json" "$tmp_link"
-  mv -f "$tmp_json" "$VMESS_JSON_FILE"
-  mv -f "$tmp_link" "$VMESS_LINK_FILE"
-  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
-  chmod 600 "$ECH_NOTE_FILE"
-}
-
-generate_xray_vless_link() {
-  valid_uuid "$XRAY_UUID" || die "UUID 无效，无法生成 VLESS-ENC 链接。"
-  valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效，无法生成 VLESS-ENC 链接。"
-  valid_argo_host "$XRAY_ARGO_HOST" || die "VLESS-ENC 临时域名无效。"
-  [[ -n "$XRAY_ARGO_HOST" ]] || die "VLESS-ENC 临时域名为空。"
-  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" || die "VLESS-ENC 优选域名/IP 无效。"
-  valid_node_name "$XRAY_NODE_NAME" || die "VLESS-ENC 节点名称无效。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "VLESS-ENC encryption 无效。"
-
-  local tmp_json=""
-  local tmp_link=""
-  local enc_encryption=""
-  local enc_sni=""
-  local enc_path=""
-  local enc_node=""
-  local enc_ech=""
-  local node_name="${XRAY_NODE_NAME} VLESS-ENC/WS"
-
-  tmp_json="$(mktemp "${DATA_DIR}/.vless-ws.json.XXXXXX")"
-  tmp_link="$(mktemp "${DATA_DIR}/.vless-ws.txt.XXXXXX")"
-
-  enc_encryption="$(url_encode "$XRAY_VLESS_ENCRYPTION")"
-  enc_sni="$(url_encode "$XRAY_ARGO_HOST")"
-  enc_path="$(url_encode "$XRAY_WS_PATH")"
-  enc_node="$(url_encode "$node_name")"
-  enc_ech="$(url_encode "$ECH_CONFIG")"
-
-  jq -n \
-    --arg protocol "vless" \
-    --arg ps "$node_name" \
-    --arg add "$XRAY_PREFERRED_ENDPOINT" \
-    --arg port "443" \
-    --arg id "$XRAY_UUID" \
-    --arg encryption "$XRAY_VLESS_ENCRYPTION" \
-    --arg security "tls" \
-    --arg sni "$XRAY_ARGO_HOST" \
-    --arg host "$XRAY_ARGO_HOST" \
-    --arg path "$XRAY_WS_PATH" \
-    --arg type "ws" \
-    --arg flow "xtls-rprx-vision" \
-    --arg ech "$ECH_CONFIG" \
-    '{
-      protocol: $protocol,
-      ps: $ps,
-      add: $add,
-      port: ($port | tonumber),
-      id: $id,
-      encryption: $encryption,
-      security: $security,
-      sni: $sni,
-      host: $host,
-      path: $path,
-      type: $type,
-      flow: $flow,
-      alpn: "http/1.1",
-      fp: "firefox",
-      ech: $ech,
-      echConfigList: $ech
-    }' > "$tmp_json"
-
-  printf 'vless://%s@%s:443?encryption=%s&flow=xtls-rprx-vision&security=tls&sni=%s&fp=firefox&type=ws&host=%s&path=%s&alpn=http%%2F1.1&ech=%s&echConfigList=%s#%s\n' \
-    "$XRAY_UUID" \
-    "$XRAY_PREFERRED_ENDPOINT" \
-    "$enc_encryption" \
-    "$enc_sni" \
-    "$enc_sni" \
-    "$enc_path" \
-    "$enc_ech" \
-    "$enc_ech" \
-    "$enc_node" \
-    > "$tmp_link"
-
-  if ! jq -e \
-      --arg ps "$node_name" \
-      --arg add "$XRAY_PREFERRED_ENDPOINT" \
-      --arg host "$XRAY_ARGO_HOST" \
-      --arg path "$XRAY_WS_PATH" \
-      --arg encryption "$XRAY_VLESS_ENCRYPTION" \
-      --arg ech "$ECH_CONFIG" \
-      '.ps == $ps and .add == $add and .host == $host and .sni == $host and .path == $path and .type == "ws" and .flow == "xtls-rprx-vision" and .alpn == "http/1.1" and .encryption == $encryption and .ech == $ech and .echConfigList == $ech' \
-      "$tmp_json" >/dev/null; then
-    rm -f "$tmp_json" "$tmp_link"
-    die "生成的 VLESS-ENC 链接自检失败，未写入磁盘。"
-  fi
-
-  chmod 600 "$tmp_json" "$tmp_link"
-  mv -f "$tmp_json" "$XRAY_VLESS_JSON_FILE"
-  mv -f "$tmp_link" "$XRAY_VLESS_LINK_FILE"
-  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
-  chmod 600 "$ECH_NOTE_FILE"
-}
-
-show_subscription() {
-  load_settings
-  load_state
-  local running="否"
-  local parsed_host=""
-
-  if tunnel_is_running; then
-    running="是"
-    parsed_host="$(extract_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      if [[ "$ARGO_HOST" != "$parsed_host" ]]; then
-        ARGO_HOST="$parsed_host"
-        save_state
-      fi
-    fi
-    if [[ -n "$ARGO_HOST" ]] && valid_argo_host "$ARGO_HOST"; then
-      generate_vmess_link
-    fi
-  fi
-
-  print_section_header "zdd-argo VMess/WS" "$C_GREEN" 78
-  print_kv "节点名称：" "${NODE_NAME:-未设置} VMess/WS" 18
-  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 18
-  print_kv "传输方式：" "VMess / WS / TLS" 18
-  print_kv "后台运行：" "$running" 18
-  print_section_footer "$C_CYAN" 78
-
-  if [[ -f "$VMESS_LINK_FILE" ]]; then
-    printf '\n%s\n' "VMess 分享链接："
-    cat "$VMESS_LINK_FILE"
-    printf '\n保存位置： %s\n' "$VMESS_LINK_FILE"
-    printf '\n%s\n' "提示：链接已写入 ech 与 echConfigList；少数客户端导入 VMess 后可能不会显示。"
-    printf '%s\n' "需要时可手动填写：${ECH_CONFIG}"
-  else
-    warn "尚未生成临时 argo 隧道"
-  fi
-}
-
-show_xray_subscription() {
-  load_settings
-  load_xray_state
-  local running="否"
-  local parsed_host=""
-
-  if xray_tunnel_is_running; then
-    running="是"
-    parsed_host="$(extract_xray_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      if [[ "$XRAY_ARGO_HOST" != "$parsed_host" ]]; then
-        XRAY_ARGO_HOST="$parsed_host"
-        save_xray_state
-      fi
-    fi
-    if [[ -n "$XRAY_ARGO_HOST" ]] && valid_argo_host "$XRAY_ARGO_HOST"; then
-      generate_xray_vless_link
-    fi
-  fi
-
-  print_section_header "zdd-argo VLESS-ENC/WS" "$C_GREEN" 78
-  print_kv "节点名称：" "${XRAY_NODE_NAME:-$NODE_NAME} VLESS-ENC/WS" 18
-  print_kv "优选域名/IP：" "${XRAY_PREFERRED_ENDPOINT:-未设置}" 18
-  print_kv "传输方式：" "VLESS-ENC / WS / TLS" 18
-  print_kv "后台运行：" "$running" 18
-  print_kv "加密参数：" "0rtt + xorpub，已隐藏" 18
-  print_section_footer "$C_CYAN" 78
-
-  if [[ -f "$XRAY_VLESS_LINK_FILE" ]]; then
-    printf '\n%s\n' "VLESS-ENC 分享链接："
-    cat "$XRAY_VLESS_LINK_FILE"
-    printf '\n保存位置： %s\n' "$XRAY_VLESS_LINK_FILE"
-    printf '\n%s\n' "导入后应显示 type=ws，alpn=http/1.1，SNI/Host 为临时 Argo 域名。"
-  else
-    warn "尚未生成临时 argo 隧道"
-  fi
-}
-
-show_all_subscriptions() {
-  if [[ -f "$STATE_JSON" ]]; then
-    show_subscription
-  else
-    warn "VMess：尚未生成临时 argo 隧道"
-  fi
-  printf '\n'
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    show_xray_subscription
-  else
-    warn "VLESS-ENC：尚未生成临时 argo 隧道"
-  fi
-}
-
-command_update_xray() {
-  local had_deployment=0
-  load_settings
-  if [[ -f "$XRAY_CONFIG" || -f "$XRAY_UNIT" ]]; then
-    had_deployment=1
-  fi
-  install_or_update_xray
-  resolve_xray_bin
-  if [[ $had_deployment -eq 1 && -f "$XRAY_CONFIG" ]]; then
-    load_state
-    load_xray_state
-    write_xray_config
-    write_xray_service
-    if ! wait_for_xray_ready; then
-      ensure_xray_running
-    fi
-    ok "脚本专用核心已更新，现有配置校验通过。"
-  else
-    ok "脚本专用核心已安装或更新；当前未发现部署。"
-  fi
-}
-
 select_runtime_auto() {
   local choice=""
+
   while true; do
     clear_screen
     print_section_header "自动生成" "$C_YELLOW" 78
-    print_menu_row "1" "VMess / WS" "直出"
-    print_menu_row "2" "VLESS-ENC / WS" "直出"
-    print_menu_row "3" "全部生成" "VMess + VLESS-ENC"
+    print_menu_row "1" "sing-box · VMess/WS" "直出"
+    print_menu_row "2" "Xray · VLESS-ENC/WS" "直出"
     print_menu_row "0" "返回" "主菜单"
     print_section_footer "$C_CYAN" 78
-    read_interactive choice "选择类型 [0-3]：" "0" || choice="0"
+
+    read_interactive choice "选择内核 [0-2]：" "0" || choice="0"
     clear_screen
+
     case "$choice" in
       1)
         run_menu_action run_with_lock command_generate_noninteractive
@@ -4740,8 +8323,38 @@ select_runtime_auto() {
         run_menu_action run_with_lock command_generate_xray_vlessenc_ws
         return 0
         ;;
-      3)
-        run_menu_action run_with_lock command_generate_all_auto
+      0)
+        return 0
+        ;;
+      *)
+        warn "无效选择：${choice}"
+        pause_screen
+        ;;
+    esac
+  done
+}
+
+select_runtime_custom() {
+  local choice=""
+
+  while true; do
+    clear_screen
+    print_section_header "自定义生成" "$C_YELLOW" 78
+    print_menu_row "1" "sing-box · VMess/WS" "端口 / 名称 / DoH / WARP"
+    print_menu_row "2" "Xray · VLESS-ENC/WS" "端口 / 名称 / 优选"
+    print_menu_row "0" "返回" "主菜单"
+    print_section_footer "$C_CYAN" 78
+
+    read_interactive choice "选择内核 [0-2]：" "0" || choice="0"
+    clear_screen
+
+    case "$choice" in
+      1)
+        run_menu_action run_with_lock command_generate_custom
+        return 0
+        ;;
+      2)
+        run_menu_action run_with_lock command_generate_xray_custom
         return 0
         ;;
       0)
@@ -4757,19 +8370,22 @@ select_runtime_auto() {
 
 select_stop_scope() {
   local choice=""
+
   while true; do
     clear_screen
     print_section_header "停止隧道" "$C_YELLOW" 78
-    print_menu_row "1" "VMess" "仅断开 VMess 临时 Argo"
-    print_menu_row "2" "VLESS-ENC" "仅断开 VLESS-ENC 临时 Argo"
-    print_menu_row "3" "全部" "断开两个临时 Argo"
+    print_menu_row "1" "sing-box" "仅断开 sing-box 临时 Argo"
+    print_menu_row "2" "Xray" "仅断开 Xray 临时 Argo"
+    print_menu_row "3" "全部" "断开 sing-box / Xray"
     print_menu_row "0" "返回" "主菜单"
     print_section_footer "$C_CYAN" 78
+
     read_interactive choice "选择范围 [0-3]：" "0" || choice="0"
     clear_screen
+
     case "$choice" in
       1)
-        run_menu_action run_with_lock command_stop_vmess_tunnel
+        run_menu_action run_with_lock command_stop_singbox_tunnel
         return 0
         ;;
       2)
@@ -4791,407 +8407,31 @@ select_stop_scope() {
   done
 }
 
-load_settings() {
-  PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-  XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-  NODE_NAME="$DEFAULT_NODE_NAME"
-  SETTINGS_CONFIGURED=0
-
-  if [[ ! -f "$SETTINGS_JSON" ]]; then
-    return 0
-  fi
-
-  if ! command -v jq >/dev/null 2>&1; then
-    return 0
-  fi
-
-  local value=""
-
-  value="$(jq -r '.preferred_endpoint // empty' "$SETTINGS_JSON" 2>/dev/null || true)"
-  if valid_preferred_endpoint "$value"; then
-    PREFERRED_ENDPOINT="$value"
-  fi
-
-  value="$(jq -r '.xray_preferred_endpoint // empty' "$SETTINGS_JSON" 2>/dev/null || true)"
-  if valid_preferred_endpoint "$value"; then
-    XRAY_PREFERRED_ENDPOINT="$value"
-  fi
-
-  value="$(jq -r '.local_port // empty' "$SETTINGS_JSON" 2>/dev/null || true)"
-  if valid_local_port "$value"; then
-    LOCAL_PORT="$((10#$value))"
-  fi
-
-  value="$(jq -r '.node_name // empty' "$SETTINGS_JSON" 2>/dev/null || true)"
-  if valid_node_name "$value"; then
-    NODE_NAME="$value"
-  fi
-
-  SETTINGS_CONFIGURED=1
-}
-
-save_settings() {
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
-  chmod 750 "$DATA_DIR"
-
-  valid_preferred_endpoint "$PREFERRED_ENDPOINT" || die "VMess 优选域名/IP 格式无效。"
-  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" || die "VLESS-ENC 优选域名/IP 格式无效。"
-  valid_local_port "$LOCAL_PORT" || die "VMess 本地端口无效；只允许 1024–65535。"
-  valid_node_name "$NODE_NAME" || die "VMess 节点名称无效。"
-
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
-
-  jq -n \
-    --argjson schema 7 \
-    --arg preferred_endpoint "$PREFERRED_ENDPOINT" \
-    --arg xray_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
-    --argjson local_port "$LOCAL_PORT" \
-    --arg node_name "$NODE_NAME" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    '{
-      schema: $schema,
-      preferred_endpoint: $preferred_endpoint,
-      xray_preferred_endpoint: $xray_preferred_endpoint,
-      local_port: $local_port,
-      node_name: $node_name,
-      updated_at: $updated_at
-    }' > "$tmp"
-
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$SETTINGS_JSON"
-  SETTINGS_CONFIGURED=1
-}
-
-configure_custom_settings() {
-  local input=""
-  local normalized=""
-
-  load_settings
-
-  printf '\n%s\n' "VMess/WS 手动生成"
-  printf '%s\n' "直接回车保留方括号中的当前值。"
-
-  while true; do
-    read_interactive input "优选域名/IP [${PREFERRED_ENDPOINT}]：" "" || input=""
-    [[ -n "$input" ]] || input="$PREFERRED_ENDPOINT"
-    normalized="$(normalize_preferred_endpoint "$input")"
-    if valid_preferred_endpoint "$normalized"; then
-      PREFERRED_ENDPOINT="$normalized"
-      break
-    fi
-    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
-  done
-
-  while true; do
-    read_interactive input "本地端口 [${LOCAL_PORT}]：" "" || input=""
-    [[ -n "$input" ]] || input="$LOCAL_PORT"
-    if valid_local_port "$input"; then
-      LOCAL_PORT="$((10#$input))"
-      break
-    fi
-    warn "端口无效，请输入 1024–65535 之间的整数。"
-  done
-
-  while true; do
-    read_interactive input "节点名称 [${NODE_NAME}]：" "" || input=""
-    [[ -n "$input" ]] || input="$NODE_NAME"
-    if valid_node_name "$input"; then
-      NODE_NAME="$input"
-      break
-    fi
-    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
-  done
-
-  save_settings
-  ok "VMess/WS 设置已保存。"
-}
-
-configure_xray_custom_settings() {
-  local input=""
-  local normalized=""
-
-  load_settings
-  load_xray_state
-
-  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  [[ -n "${XRAY_LOCAL_PORT:-}" ]] || XRAY_LOCAL_PORT="$DEFAULT_XRAY_LOCAL_PORT"
-  [[ -n "${XRAY_NODE_NAME:-}" ]] || XRAY_NODE_NAME="$DEFAULT_XRAY_NODE_NAME"
-
-  printf '\n%s\n' "VLESS-ENC/WS 手动生成"
-  printf '%s\n' "直接回车保留方括号中的当前值。"
-
-  while true; do
-    read_interactive input "优选域名/IP [${XRAY_PREFERRED_ENDPOINT}]：" "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_PREFERRED_ENDPOINT"
-    normalized="$(normalize_preferred_endpoint "$input")"
-    if valid_preferred_endpoint "$normalized"; then
-      XRAY_PREFERRED_ENDPOINT="$normalized"
-      break
-    fi
-    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
-  done
-
-  while true; do
-    read_interactive input "本地端口 [${XRAY_LOCAL_PORT}]：" "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_LOCAL_PORT"
-    if valid_local_port "$input"; then
-      XRAY_LOCAL_PORT="$((10#$input))"
-      break
-    fi
-    warn "端口无效，请输入 1024–65535 之间的整数。"
-  done
-
-  while true; do
-    read_interactive input "节点名称 [${XRAY_NODE_NAME}]：" "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_NODE_NAME"
-    if valid_node_name "$input"; then
-      XRAY_NODE_NAME="$input"
-      break
-    fi
-    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
-  done
-
-  save_settings
-  ok "VLESS-ENC/WS 设置已保存。"
-}
-
-xray_features_need_warp() {
-  return 1
-}
-
-xray_features_need_doh() {
-  return 1
-}
-
-prepare_xray_feature_material() {
-  return 0
-}
-
-write_xray_config() {
-  [[ -n "$XRAY_BIN" ]] || resolve_xray_bin
-  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray。"
-
-  load_settings
-  if [[ -f "$STATE_JSON" ]]; then
-    load_state
-  fi
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    load_xray_state
-  fi
-  prepare_xray_feature_material
-
-  local vmess_enabled=0
-  local vless_enabled=0
-  local tmp=""
-
-  if vmess_state_is_ready; then
-    vmess_enabled=1
-  fi
-  if vless_state_is_ready; then
-    vless_enabled=1
-  fi
-
-  ((vmess_enabled == 1 || vless_enabled == 1)) || die "没有可写入的 VMess 或 VLESS-ENC 入站。"
-
-  if ((vmess_enabled == 1 && vless_enabled == 1)) && [[ "$LOCAL_PORT" == "$XRAY_LOCAL_PORT" ]]; then
-    die "VMess 与 VLESS-ENC 不能使用同一个本地端口。"
-  fi
-
-  tmp="$(mktemp "${DATA_DIR}/.xray-config.XXXXXX.json")"
-  xray_template_unified > "$tmp"
-
-  jq -e \
-    --argjson expected_count "$((vmess_enabled + vless_enabled))" \
-    '.inbounds | length == $expected_count' \
-    "$tmp" >/dev/null \
-    || { rm -f "$tmp"; die "生成的配置未通过入站数量自检。"; }
-
-  if ((vmess_enabled == 1)); then
-    jq -e \
-      --argjson port "$LOCAL_PORT" \
-      --arg uuid "$UUID" \
-      --arg path "$WSPATH" \
-      'any(.inbounds[]; .tag == "vmess-ws-in" and .port == $port and .protocol == "vmess" and .settings.clients[0].id == $uuid and .streamSettings.network == "ws" and .streamSettings.wsSettings.path == $path)' \
-      "$tmp" >/dev/null \
-      || { rm -f "$tmp"; die "VMess 入站自检失败。"; }
-  fi
-
-  if ((vless_enabled == 1)); then
-    jq -e \
-      --argjson port "$XRAY_LOCAL_PORT" \
-      --arg uuid "$XRAY_UUID" \
-      --arg path "$XRAY_WS_PATH" \
-      --arg decryption "$XRAY_VLESS_DECRYPTION" \
-      'any(.inbounds[]; .tag == "vless-enc-ws-in" and .port == $port and .protocol == "vless" and .settings.clients[0].id == $uuid and .settings.clients[0].flow == "xtls-rprx-vision" and .settings.decryption == $decryption and .streamSettings.network == "ws" and .streamSettings.wsSettings.path == $path)' \
-      "$tmp" >/dev/null \
-      || { rm -f "$tmp"; die "VLESS-ENC 入站自检失败。"; }
-  fi
-
-
-  "$XRAY_BIN" run -test -config "$tmp" \
-    || { rm -f "$tmp"; die "Xray 配置校验失败。"; }
-
-  chown root:"$SERVICE_GROUP" "$tmp" 2>/dev/null || true
-  chmod 640 "$tmp"
-  mv -f "$tmp" "$XRAY_CONFIG"
-
-  "$XRAY_BIN" run -test -config "$XRAY_CONFIG" \
-    || die "写入后的 Xray 配置校验失败。"
-}
-
-prepare_deployment() {
-  load_settings
-  install_xray_if_needed
-  install_cloudflared_if_needed
-  ensure_service_account
-
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
-
-  if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
-    PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-    XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-    LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-    NODE_NAME="$DEFAULT_NODE_NAME"
-    save_settings
-  fi
-
-  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  load_state
-  load_xray_state
-}
-
-feature_state_word() {
-  if [[ "${1:-0}" == "1" ]]; then
-    printf '%s%s%s' "$C_YELLOW" "开" "$C_RESET"
-  else
-    printf '%s' "关"
-  fi
-}
-
-runtime_state_word() {
-  if [[ "${1:-未运行}" == "运行中" ]]; then
-    printf '%s%s%s' "$C_YELLOW" "运行中" "$C_RESET"
-  else
-    printf '%s' "未运行"
-  fi
-}
-
-xray_version_short() {
-  local line=""
-  local version=""
-
-  resolve_xray_bin
-  if [[ -z "$XRAY_BIN" ]]; then
-    printf '%s' "未安装"
-    return 0
-  fi
-
-  line="$($XRAY_BIN version 2>/dev/null | head -n 1 || true)"
-  version="$(printf '%s\n' "$line" | awk '{for (i=1; i<=NF; i++) if ($i ~ /^[0-9]+([.][0-9A-Za-z-]+)+$/) {print $i; exit}}')"
-  if [[ -n "$version" ]]; then
-    printf 'v%s' "$version"
-  else
-    printf '%s' "已安装"
-  fi
-}
-
-status_protocol_line() {
-  local label="$1"
-  local running="$2"
-  local label_width=14
-
-  print_aligned_label "${label}：" "$label_width"
-  runtime_state_word "$running"
-  printf '\n'
-}
-
-menu_header_status() {
-  local vmess_state="未运行"
-  local vless_state="未运行"
-
-  load_settings
-  if [[ -f "$STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
-    load_state
-  fi
-  if [[ -f "$XRAY_STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
-    load_xray_state
-  fi
-
-  if tunnel_is_running; then
-    vmess_state="运行中"
-  fi
-  if xray_tunnel_is_running; then
-    vless_state="运行中"
-  fi
-
-  print_section_header "zargo 临时隧道" "$C_YELLOW" 78
-  print_aligned_label "核心版本：" 14
-  printf '%s\n' "$(xray_version_short)"
-  status_protocol_line "VMess" "$vmess_state"
-  status_protocol_line "VLESS-ENC" "$vless_state"
-  print_section_footer "$C_CYAN" 78
-}
-
-select_runtime_custom() {
-  local choice=""
-  while true; do
-    clear_screen
-    print_section_header "手动生成" "$C_YELLOW" 78
-    print_menu_row "1" "VMess / WS" "端口 / 名称 / 优选"
-    print_menu_row "2" "VLESS-ENC / WS" "端口 / 名称 / 优选"
-    print_menu_row "3" "全部生成" "分别设置"
-    print_menu_row "0" "返回" "主菜单"
-    print_section_footer "$C_CYAN" 78
-    read_interactive choice "选择类型 [0-3]：" "0" || choice="0"
-    clear_screen
-    case "$choice" in
-      1)
-        run_menu_action run_with_lock command_generate_custom
-        return 0
-        ;;
-      2)
-        run_menu_action run_with_lock command_generate_xray_custom
-        return 0
-        ;;
-      3)
-        run_menu_action run_with_lock command_generate_all_custom
-        return 0
-        ;;
-      0)
-        return 0
-        ;;
-      *)
-        warn "无效选择：${choice}"
-        pause_screen
-        ;;
-    esac
-  done
-}
-
 interactive_menu() {
   MENU_MODE=1
+  refresh_ui_width
   trap 'clear_screen; exit 130' INT TERM
+
   while true; do
     clear_screen
     menu_header_status
-    print_menu_row "1" "自动生成" "选择 VMess / VLESS-ENC"
-    print_menu_row "2" "手动生成" "自定义端口 / 名称 / 优选"
-    print_menu_row "3" "查看订阅" "VMess / VLESS-ENC"
-    print_menu_row "4" "状态日志" "核心 / 隧道"
-    print_menu_row "5" "停止隧道" "VMess / VLESS-ENC"
-    print_menu_row "6" "更新组件" "核心 / cloudflared"
-    print_menu_row "7" "完整卸载" "清理受管文件"
+
+    print_menu_row "1" "自动生成" "选择 sing-box / Xray"
+    print_menu_row "2" "自定义生成" "分别配置 sing-box / Xray"
+    print_menu_row "3" "查看订阅" "sing-box / Xray"
+    print_menu_row "4" "状态日志" "服务 / 端口 / 隧道"
+    print_menu_row "5" "停止隧道" "sing-box / Xray"
+    print_menu_row "6" "更新组件" "sing-box / Xray / cloudflared"
+    print_menu_row "7" "完整卸载" "含 sing-box / Xray"
     print_menu_row "0" "退出" ""
-    printf '%s\n' '──────────────────────────────────────────────────────────────'
+
+    printf '%*s\n' "$UI_WIDTH" '' | tr ' ' '─'
     printf '%s%s%s\n' "$C_YELLOW" "提示：退出后输入 zargo 可重新打开菜单。" "$C_RESET"
+
     local choice=""
     read_interactive choice "选择操作 [0-7]：" "0" || choice="0"
     clear_screen
+
     case "$choice" in
       1)
         select_runtime_auto
@@ -5225,865 +8465,6 @@ interactive_menu() {
     esac
   done
 }
-
-deployment_transaction_rollback() {
-  local reason="${1:-部署失败}"
-
-  [[ $TRANSACTION_ACTIVE -eq 1 ]] || return 0
-  TRANSACTION_ACTIVE=0
-
-  warn "${reason}。"
-
-  if ! managed_paths_are_safe; then
-    warn "受管路径安全校验失败，未执行回滚；事务备份保留在：${TRANSACTION_DIR}"
-    TRANSACTION_DIR=""
-    return 0
-  fi
-
-  if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
-    rm -rf -- "$DATA_DIR"
-    cp -a "${TRANSACTION_DIR}/data" "$DATA_DIR" \
-      || warn "回滚数据目录失败：${DATA_DIR}"
-  else
-    rm -rf -- "$DATA_DIR"
-  fi
-
-  if [[ -f "${TRANSACTION_DIR}/had-bin" ]]; then
-    rm -rf -- "$BIN_DIR"
-    cp -a "${TRANSACTION_DIR}/bin" "$BIN_DIR" \
-      || warn "回滚程序目录失败：${BIN_DIR}"
-  else
-    rm -rf -- "$BIN_DIR"
-  fi
-
-  rm -f -- "$SINGBOX_UNIT" "$XRAY_UNIT" "$LOGROTATE_CONFIG"
-  if [[ -f "${TRANSACTION_DIR}/had-unit" ]]; then
-    cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT" \
-      || warn "回滚旧兼容服务文件失败：${SINGBOX_UNIT}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
-    cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
-      || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
-    cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
-      || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
-  fi
-
-  service_daemon_reload
-  load_settings || true
-  resolve_singbox_bin || true
-  resolve_xray_bin || true
-  resolve_cloudflared_bin || true
-
-  if [[ $TRANSACTION_OLD_XRAY_SERVICE_ACTIVE -eq 1 ]]; then
-    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-      xray_service_enable_now || xray_service_restart || true
-    fi
-  else
-    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-      xray_service_disable_now || true
-    fi
-  fi
-
-  if [[ $TRANSACTION_OLD_SERVICE_ACTIVE -eq 1 ]]; then
-    if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-      service_enable_now || service_restart || true
-    fi
-  else
-    if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-      service_disable_now || true
-    fi
-  fi
-
-  deployment_transaction_cleanup_service_identity
-
-  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
-    warn "回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
-  fi
-
-  TRANSACTION_SCOPE="all"
-  TRANSACTION_DIR=""
-  warn "已恢复修改前的配置和服务文件；临时隧道未被回滚流程主动关闭。"
-}
-
-lock_operation_label() {
-  case "${1:-unknown}" in
-    command_generate_noninteractive)
-      printf '%s' "新建 VMess/WS（直连）"
-      ;;
-    command_generate_custom)
-      printf '%s' "新建 VMess/WS（手动）"
-      ;;
-    command_generate_xray_vlessenc_ws)
-      printf '%s' "新建 VLESS-ENC/WS（直连）"
-      ;;
-    command_generate_xray_custom)
-      printf '%s' "新建 VLESS-ENC/WS（手动）"
-      ;;
-    command_generate_all_auto)
-      printf '%s' "新建 VMess 与 VLESS-ENC（直连）"
-      ;;
-    command_generate_all_custom)
-      printf '%s' "新建 VMess 与 VLESS-ENC（手动）"
-      ;;
-    show_subscription|show_all_subscriptions|show_xray_subscription)
-      printf '%s' "查看当前订阅"
-      ;;
-    command_update_components)
-      printf '%s' "更新组件"
-      ;;
-    command_stop_clear_cache|command_stop_vmess_tunnel|command_stop_xray_tunnel)
-      printf '%s' "停止临时 Argo 隧道"
-      ;;
-    command_uninstall_all)
-      printf '%s' "完整卸载 zdd-argo"
-      ;;
-    *)
-      printf '%s' "未知操作"
-      ;;
-  esac
-}
-
-clear_vmess_tunnel_artifacts() {
-  if [[ -f "$STATE_JSON" ]]; then
-    load_state
-    ARGO_HOST=""
-    save_state
-  fi
-  rm -f "$CLOUDFLARED_PID_FILE" "$LOG_FILE" "$VMESS_JSON_FILE" "$VMESS_LINK_FILE" "$ECH_NOTE_FILE"
-  rm -rf "$CLOUDFLARED_HOME"
-}
-
-clear_xray_tunnel_artifacts() {
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    load_xray_state
-    XRAY_ARGO_HOST=""
-    save_xray_state
-  fi
-  rm -f "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_LOG_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
-  rm -rf "$XRAY_CLOUDFLARED_HOME"
-}
-
-restart_vmess_tunnel_after_success() {
-  stop_tunnel || die "无法安全停止旧 VMess 临时隧道。"
-  clear_vmess_tunnel_artifacts
-  start_tunnel
-}
-
-restart_vless_tunnel_after_success() {
-  stop_xray_tunnel || die "无法安全停止旧 VLESS-ENC 临时隧道。"
-  clear_xray_tunnel_artifacts
-  start_xray_tunnel
-}
-
-rebuild_vmess_deployment_replace() {
-  load_xray_state
-  generate_identity
-  xray_service_reset_failed
-  write_xray_config
-  write_xray_service
-  write_cloudflared_runner
-  if vless_state_is_ready; then
-    write_xray_cloudflared_runner
-  fi
-  write_logrotate_config
-  ensure_xray_running
-  restart_vmess_tunnel_after_success
-}
-
-rebuild_xray_deployment_replace() {
-  load_state
-  generate_xray_identity
-  xray_service_reset_failed
-  write_xray_config
-  write_xray_service
-  if vmess_state_is_ready; then
-    write_cloudflared_runner
-  fi
-  write_xray_cloudflared_runner
-  write_logrotate_config
-  ensure_xray_running
-  restart_vless_tunnel_after_success
-}
-
-rebuild_all_deployments_replace() {
-  generate_identity
-  generate_xray_identity
-  xray_service_reset_failed
-  write_xray_config
-  write_xray_service
-  write_cloudflared_runner
-  write_xray_cloudflared_runner
-  write_logrotate_config
-  ensure_xray_running
-  restart_vmess_tunnel_after_success
-  restart_vless_tunnel_after_success
-}
-
-command_generate_noninteractive() {
-  deployment_transaction_begin
-  prepare_deployment
-  save_settings
-  rebuild_vmess_deployment_replace
-  deployment_transaction_commit
-  ok "VMess/WS 临时 Argo 已重新生成，出站为直连。"
-  show_subscription
-}
-
-command_generate_xray_vlessenc_ws() {
-  deployment_transaction_begin
-  prepare_deployment
-  save_settings
-  rebuild_xray_deployment_replace
-  deployment_transaction_commit
-  ok "VLESS-ENC/WS 临时 Argo 已重新生成，出站为直连。"
-  show_xray_subscription
-}
-
-command_generate_all_auto() {
-  deployment_transaction_begin
-  prepare_deployment
-  save_settings
-  rebuild_all_deployments_replace
-  deployment_transaction_commit
-  ok "两个临时 Argo 隧道已重新生成，出站均为直连。"
-  show_all_subscriptions
-}
-
-command_generate_custom() {
-  deployment_transaction_begin
-  prepare_deployment
-  configure_custom_settings
-  rebuild_vmess_deployment_replace
-  deployment_transaction_commit
-  ok "VMess/WS 临时 Argo 已重新生成。"
-  show_subscription
-}
-
-command_generate_xray_custom() {
-  deployment_transaction_begin
-  prepare_deployment
-  configure_xray_custom_settings
-  rebuild_xray_deployment_replace
-  deployment_transaction_commit
-  ok "VLESS-ENC/WS 临时 Argo 已重新生成。"
-  show_xray_subscription
-}
-
-command_generate_all_custom() {
-  deployment_transaction_begin
-  prepare_deployment
-  configure_custom_settings
-  configure_xray_custom_settings
-  rebuild_all_deployments_replace
-  deployment_transaction_commit
-  ok "两个临时 Argo 隧道已重新生成。"
-  show_all_subscriptions
-}
-
-command_stop_vmess_tunnel() {
-  warn "此操作仅断开 VMess 临时 Argo，并清理对应旧域名、订阅、日志与 cloudflared 缓存。"
-  warn "Xray 核心、VLESS-ENC 隧道、配置、UUID、WS 路径和已安装程序都会保留。"
-  if ! confirm_yes "确认断开 VMess 临时 Argo 请输入 yes："; then
-    info "已取消。"
-    return 0
-  fi
-  stop_tunnel || die "无法安全停止 VMess 临时 Argo。"
-  clear_vmess_tunnel_artifacts
-  ok "VMess 临时 Argo 已断开，旧订阅和临时缓存已清理。"
-}
-
-command_stop_xray_tunnel() {
-  warn "此操作仅断开 VLESS-ENC 临时 Argo，并清理对应旧域名、订阅、日志与 cloudflared 缓存。"
-  warn "Xray 核心、VMess 隧道、配置、UUID、WS 路径和已安装程序都会保留。"
-  if ! confirm_yes "确认断开 VLESS-ENC 临时 Argo 请输入 yes："; then
-    info "已取消。"
-    return 0
-  fi
-  stop_xray_tunnel || die "无法安全停止 VLESS-ENC 临时 Argo。"
-  clear_xray_tunnel_artifacts
-  ok "VLESS-ENC 临时 Argo 已断开，旧订阅和临时缓存已清理。"
-}
-
-command_stop_clear_cache() {
-  warn "此操作会断开 VMess 与 VLESS-ENC 两个临时 Argo，并清理旧域名、订阅、日志及 cloudflared 缓存。"
-  warn "Xray 核心、配置、UUID、WS 路径、优选地址和已安装程序都会保留。"
-  if ! confirm_yes "确认全部断开并清理请输入 yes："; then
-    info "已取消。"
-    return 0
-  fi
-  stop_tunnel || die "无法安全停止 VMess 临时 Argo。"
-  stop_xray_tunnel || die "无法安全停止 VLESS-ENC 临时 Argo。"
-  clear_vmess_tunnel_artifacts
-  clear_xray_tunnel_artifacts
-  ok "VMess 与 VLESS-ENC 临时 Argo 已断开，旧订阅和临时缓存已清理。"
-}
-
-vmess_tmux_candidates() {
-  printf '%s\n' "$TMUX_SESSION"
-  [[ -n "${VMESS_TMUX_SESSION:-}" && "${VMESS_TMUX_SESSION}" != "$TMUX_SESSION" ]] && printf '%s\n' "$VMESS_TMUX_SESSION"
-  [[ -n "${LEGACY_VMESS_TMUX_SESSION:-}" ]] && printf '%s\n' "$LEGACY_VMESS_TMUX_SESSION"
-  [[ -n "${LEGACY_TMUX_SESSION:-}" ]] && printf '%s\n' "$LEGACY_TMUX_SESSION"
-}
-
-vless_tmux_candidates() {
-  printf '%s\n' "$XRAY_TMUX_SESSION"
-  [[ -n "${VLESS_TMUX_SESSION:-}" && "${VLESS_TMUX_SESSION}" != "$XRAY_TMUX_SESSION" ]] && printf '%s\n' "$VLESS_TMUX_SESSION"
-  [[ -n "${LEGACY_XRAY_TMUX_SESSION:-}" ]] && printf '%s\n' "$LEGACY_XRAY_TMUX_SESSION"
-}
-
-tmux_session_exists() {
-  local session=""
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    tmux has-session -t "$session" 2>/dev/null && return 0
-  done < <(vmess_tmux_candidates | awk '!seen[$0]++')
-  return 1
-}
-
-tmux_session_has_runner() {
-  local session="$1"
-  local runner="$2"
-  tmux has-session -t "$session" 2>/dev/null || return 1
-  tmux list-panes -t "$session" -F '#{pane_start_command}' 2>/dev/null | grep -Fq "$runner"
-}
-
-active_tunnel_session() {
-  local session=""
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    if tmux_session_has_runner "$session" "$CLOUDFLARED_RUNNER"; then
-      printf '%s\n' "$session"
-      return 0
-    fi
-  done < <(vmess_tmux_candidates | awk '!seen[$0]++')
-  return 1
-}
-
-tunnel_is_running() {
-  active_tunnel_session >/dev/null
-}
-
-xray_tmux_session_exists() {
-  local session=""
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    tmux has-session -t "$session" 2>/dev/null && return 0
-  done < <(vless_tmux_candidates | awk '!seen[$0]++')
-  return 1
-}
-
-active_vless_tunnel_session() {
-  local session=""
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    if tmux_session_has_runner "$session" "$XRAY_CLOUDFLARED_RUNNER"; then
-      printf '%s\n' "$session"
-      return 0
-    fi
-  done < <(vless_tmux_candidates | awk '!seen[$0]++')
-  return 1
-}
-
-xray_tunnel_is_running() {
-  active_vless_tunnel_session >/dev/null
-}
-
-confirm_y_or_n() {
-  local prompt="$1"
-  local answer=""
-
-  while true; do
-    read_interactive answer "$prompt" "" || return 1
-    answer="${answer#"${answer%%[![:space:]]*}"}"
-    answer="${answer%"${answer##*[![:space:]]}"}"
-    case "${answer,,}" in
-      y|yes)
-        return 0
-        ;;
-      n|no|"")
-        return 1
-        ;;
-      *)
-        warn "请输入 y 或 n。"
-        ;;
-    esac
-  done
-}
-
-prompt_delete_vmess_unknown_tmux_sessions() {
-  local session=""
-  local removed=0
-
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    tmux has-session -t "$session" 2>/dev/null || continue
-    tmux_session_has_runner "$session" "$CLOUDFLARED_RUNNER" && continue
-    warn "发现 VMess 同名 tmux 会话 ${session}，但它不是本脚本创建的。"
-    if confirm_y_or_n "是否删除该同名 VMess tmux 会话 ${session}？输入 y 删除，输入 n 保留："; then
-      tmux kill-session -t "$session" 2>/dev/null \
-        && { ok "已删除同名 VMess tmux 会话：${session}"; removed=1; } \
-        || warn "删除同名 VMess tmux 会话失败：${session}"
-    else
-      info "已保留同名 VMess tmux 会话：${session}"
-    fi
-  done < <(vmess_tmux_candidates | awk '!seen[$0]++')
-
-  [[ $removed -eq 1 ]]
-}
-
-prompt_delete_vless_unknown_tmux_sessions() {
-  local session=""
-  local removed=0
-
-  while IFS= read -r session; do
-    [[ -n "$session" ]] || continue
-    tmux has-session -t "$session" 2>/dev/null || continue
-    tmux_session_has_runner "$session" "$XRAY_CLOUDFLARED_RUNNER" && continue
-    warn "发现 VLESS-ENC 同名 tmux 会话 ${session}，但它不是本脚本创建的。"
-    if confirm_y_or_n "是否删除该同名 VLESS-ENC tmux 会话 ${session}？输入 y 删除，输入 n 保留："; then
-      tmux kill-session -t "$session" 2>/dev/null \
-        && { ok "已删除同名 VLESS-ENC tmux 会话：${session}"; removed=1; } \
-        || warn "删除同名 VLESS-ENC tmux 会话失败：${session}"
-    else
-      info "已保留同名 VLESS-ENC tmux 会话：${session}"
-    fi
-  done < <(vless_tmux_candidates | awk '!seen[$0]++')
-
-  [[ $removed -eq 1 ]]
-}
-write_cloudflared_runner() {
-  [[ -n "$CLOUDFLARED_BIN" ]] || die "未找到 cloudflared。"
-  ensure_service_account
-  local service_uid=""
-  local service_gid=""
-  local tmp=""
-  service_uid="$(id -u "$SERVICE_USER")"
-  service_gid="$(id -g "$SERVICE_USER")"
-  [[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]] || die "无法读取低权限服务账户的 UID/GID。"
-  tmp="$(mktemp)"
-  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
-  cat >> "$tmp" <<EOF
-set -Eeuo pipefail
-IFS=\$'\\n\\t'
-umask 077
-export HOME="${CLOUDFLARED_HOME}"
-CF_PID=""
-CF_START=""
-process_start_time() {
-  local pid="\$1"
-  local stat_line=""
-  local remainder=""
-  local start_time=""
-  local -a fields=()
-  [[ "\$pid" =~ ^[0-9]+\$ ]] || return 1
-  [[ -r "/proc/\${pid}/stat" ]] || return 1
-  IFS= read -r stat_line < "/proc/\${pid}/stat" || return 1
-  [[ "\$stat_line" == *") "* ]] || return 1
-  remainder="\${stat_line##*) }"
-  IFS=' ' read -r -a fields <<< "\$remainder"
-  [[ \${#fields[@]} -ge 20 ]] || return 1
-  start_time="\${fields[19]}"
-  [[ "\$start_time" =~ ^[0-9]+\$ ]] || return 1
-  printf '%s\\n' "\$start_time"
-}
-identity_matches() {
-  local pid="\$1"
-  local recorded_start="\$2"
-  local actual_start=""
-  actual_start="\$(process_start_time "\$pid" 2>/dev/null || true)"
-  [[ -n "\$actual_start" && "\$actual_start" == "\$recorded_start" ]]
-}
-signal_verified() {
-  local signal_name="\$1"
-  local pid="\$2"
-  local recorded_start="\$3"
-  identity_matches "\$pid" "\$recorded_start" || return 0
-  kill "-\${signal_name}" "\$pid" 2>/dev/null || true
-}
-cleanup() {
-  local rc=\$?
-  local i=0
-  trap - EXIT HUP INT TERM
-  if [[ -n "\${CF_PID}" && -n "\${CF_START}" ]]; then
-    signal_verified TERM "\${CF_PID}" "\${CF_START}"
-    for ((i = 0; i < 8; i++)); do
-      identity_matches "\${CF_PID}" "\${CF_START}" || break
-      sleep 1
-    done
-    signal_verified KILL "\${CF_PID}" "\${CF_START}"
-    wait "\${CF_PID}" 2>/dev/null || true
-  fi
-  rm -f "${CLOUDFLARED_PID_FILE}"
-  exit "\$rc"
-}
-trap cleanup EXIT HUP INT TERM
-if [[ "${INIT_SYSTEM}" == "openrc" ]]; then
-  su-exec ${service_uid}:${service_gid} "${CLOUDFLARED_BIN}" tunnel --url "http://127.0.0.1:${LOCAL_PORT}" --edge-ip-version auto --no-autoupdate --protocol http2 > >(tee -a "${LOG_FILE}") 2>&1 &
-else
-  setpriv --reuid=${service_uid} --regid=${service_gid} --clear-groups --no-new-privs -- "${CLOUDFLARED_BIN}" tunnel --url "http://127.0.0.1:${LOCAL_PORT}" --edge-ip-version auto --no-autoupdate --protocol http2 > >(tee -a "${LOG_FILE}") 2>&1 &
-fi
-CF_PID=\$!
-CF_START="\$(process_start_time "\${CF_PID}" 2>/dev/null || true)"
-if [[ ! "\${CF_START}" =~ ^[0-9]+\$ ]]; then
-  wait "\${CF_PID}" 2>/dev/null || true
-  exit 1
-fi
-printf '%s %s\\n' "\${CF_PID}" "\${CF_START}" > "${CLOUDFLARED_PID_FILE}"
-chmod 600 "${CLOUDFLARED_PID_FILE}"
-wait "\${CF_PID}"
-EOF
-  install -m 0700 "$tmp" "$CLOUDFLARED_RUNNER"
-  rm -f "$tmp"
-}
-
-start_tunnel() {
-  local parsed_host=""
-  local attempt=0
-  local max_attempts=3
-  local retry_delay=5
-  local session=""
-  if session="$(active_tunnel_session 2>/dev/null)"; then
-    parsed_host="$(extract_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      ARGO_HOST="$parsed_host"
-      save_state
-      generate_vmess_link
-      info "现有 VMess 临时隧道运行正常，未重复创建。"
-      return 0
-    fi
-    warn "检测到 VMess tmux 会话 ${session}，但尚未取得有效临时域名，将重新创建。"
-    stop_tunnel || true
-  elif tmux_session_exists; then
-    die "已存在 VMess tmux 会话，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。"
-  fi
-  : > "$LOG_FILE"
-  chmod 600 "$LOG_FILE"
-  rm -f "$CLOUDFLARED_PID_FILE" "$VMESS_JSON_FILE" "$VMESS_LINK_FILE" "$ECH_NOTE_FILE"
-  ARGO_HOST=""
-  save_state
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    if ((attempt > 1)); then
-      printf '\n===== VMess Argo 重试 %d/%d =====\n' "$attempt" "$max_attempts" >> "$LOG_FILE"
-    fi
-    info "正在创建 VMess 临时 Argo（第 ${attempt}/${max_attempts} 次）……"
-    if tmux new-session -d -s "$TMUX_SESSION" "$CLOUDFLARED_RUNNER"; then
-      if wait_for_argo_host; then
-        generate_vmess_link
-        ok "第 ${attempt}/${max_attempts} 次尝试成功取得 VMess 临时域名。"
-        return 0
-      fi
-    else
-      warn "第 ${attempt}/${max_attempts} 次无法创建 VMess tmux 会话。"
-    fi
-    warn "第 ${attempt}/${max_attempts} 次未取得 trycloudflare.com 域名。"
-    stop_tunnel || true
-    if ((attempt < max_attempts)); then
-      warn "${retry_delay} 秒后重试。"
-      sleep "$retry_delay"
-    fi
-  done
-  if [[ -f "$LOG_FILE" ]]; then
-    warn "VMess cloudflared 最近日志："
-    tail -n 80 "$LOG_FILE" >&2 || true
-  fi
-  die "VMess 临时 Argo 三次尝试均失败，未取得 trycloudflare.com 域名。"
-}
-
-start_xray_tunnel() {
-  local parsed_host=""
-  local attempt=0
-  local max_attempts=3
-  local retry_delay=5
-  local session=""
-  if session="$(active_vless_tunnel_session 2>/dev/null)"; then
-    parsed_host="$(extract_xray_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      XRAY_ARGO_HOST="$parsed_host"
-      save_xray_state
-      generate_xray_vless_link
-      info "现有 VLESS-ENC 临时隧道运行正常，未重复创建。"
-      return 0
-    fi
-    warn "检测到 VLESS-ENC tmux 会话 ${session}，但尚未取得有效临时域名，将重新创建。"
-    stop_xray_tunnel || true
-  elif xray_tmux_session_exists; then
-    die "已存在 VLESS-ENC tmux 会话，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。"
-  fi
-  : > "$XRAY_LOG_FILE"
-  chmod 600 "$XRAY_LOG_FILE"
-  rm -f "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
-  XRAY_ARGO_HOST=""
-  save_xray_state
-  mkdir -p "$XRAY_CLOUDFLARED_HOME"
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$XRAY_CLOUDFLARED_HOME" 2>/dev/null || true
-  chmod 700 "$XRAY_CLOUDFLARED_HOME"
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    if ((attempt > 1)); then
-      printf '\n===== VLESS-ENC Argo 重试 %d/%d =====\n' "$attempt" "$max_attempts" >> "$XRAY_LOG_FILE"
-    fi
-    info "正在创建 VLESS-ENC 临时 Argo（第 ${attempt}/${max_attempts} 次）……"
-    if tmux new-session -d -s "$XRAY_TMUX_SESSION" "$XRAY_CLOUDFLARED_RUNNER"; then
-      if wait_for_xray_argo_host; then
-        generate_xray_vless_link
-        ok "第 ${attempt}/${max_attempts} 次尝试成功取得 VLESS-ENC 临时域名。"
-        return 0
-      fi
-    else
-      warn "第 ${attempt}/${max_attempts} 次无法创建 VLESS-ENC tmux 会话。"
-    fi
-    warn "第 ${attempt}/${max_attempts} 次未取得 trycloudflare.com 域名。"
-    stop_xray_tunnel || true
-    if ((attempt < max_attempts)); then
-      warn "${retry_delay} 秒后重试。"
-      sleep "$retry_delay"
-    fi
-  done
-  if [[ -f "$XRAY_LOG_FILE" ]]; then
-    warn "VLESS-ENC cloudflared 最近日志："
-    tail -n 80 "$XRAY_LOG_FILE" >&2 || true
-  fi
-  die "VLESS-ENC 临时 Argo 三次尝试均失败，未取得 trycloudflare.com 域名。"
-}
-
-stop_tunnel() {
-  local mode="${1:-safe}"
-  local stopped=0
-  local pid=""
-  local recorded_start=""
-  local i=0
-  local session=""
-  resolve_cloudflared_bin
-  if session="$(active_tunnel_session 2>/dev/null)"; then
-    tmux kill-session -t "$session" 2>/dev/null || true
-    stopped=1
-  elif tmux_session_exists; then
-    if [[ "$mode" == "prompt_unknown" ]]; then
-      prompt_delete_vmess_unknown_tmux_sessions && stopped=1
-    else
-      warn "发现 VMess tmux 会话，但它不是本脚本创建的；不会将其删除。"
-    fi
-  fi
-  sleep 1
-  if IFS=' ' read -r pid recorded_start < <(read_cloudflared_pid 2>/dev/null); then
-    if cloudflared_identity_matches "$pid" "$recorded_start"; then
-      signal_cloudflared_verified TERM "$pid" "$recorded_start" || true
-      for ((i = 0; i < 8; i++)); do
-        cloudflared_identity_matches "$pid" "$recorded_start" || break
-        sleep 1
-      done
-      if cloudflared_identity_matches "$pid" "$recorded_start"; then
-        signal_cloudflared_verified KILL "$pid" "$recorded_start" || true
-        sleep 1
-      fi
-      if cloudflared_identity_matches "$pid" "$recorded_start"; then
-        warn "VMess cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
-        return 1
-      fi
-      stopped=1
-    fi
-  fi
-  rm -f "$CLOUDFLARED_PID_FILE"
-  if [[ $stopped -eq 1 ]]; then
-    ok "VMess 临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
-  else
-    info "没有发现正在运行的 VMess 临时隧道。"
-  fi
-}
-
-stop_xray_tunnel() {
-  local mode="${1:-safe}"
-  local stopped=0
-  local pid=""
-  local recorded_start=""
-  local i=0
-  local session=""
-  resolve_cloudflared_bin
-  if session="$(active_vless_tunnel_session 2>/dev/null)"; then
-    tmux kill-session -t "$session" 2>/dev/null || true
-    stopped=1
-  elif xray_tmux_session_exists; then
-    if [[ "$mode" == "prompt_unknown" ]]; then
-      prompt_delete_vless_unknown_tmux_sessions && stopped=1
-    else
-      warn "发现 VLESS-ENC tmux 会话，但它不是本脚本创建的；不会将其删除。"
-    fi
-  fi
-  sleep 1
-  if IFS=' ' read -r pid recorded_start < <(read_xray_cloudflared_pid 2>/dev/null); then
-    if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-      signal_xray_cloudflared_verified TERM "$pid" "$recorded_start" || true
-      for ((i = 0; i < 8; i++)); do
-        xray_cloudflared_identity_matches "$pid" "$recorded_start" || break
-        sleep 1
-      done
-      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-        signal_xray_cloudflared_verified KILL "$pid" "$recorded_start" || true
-        sleep 1
-      fi
-      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-        warn "VLESS-ENC cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
-        return 1
-      fi
-      stopped=1
-    fi
-  fi
-  rm -f "$XRAY_CLOUDFLARED_PID_FILE"
-  if [[ $stopped -eq 1 ]]; then
-    ok "VLESS-ENC 临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
-  else
-    info "没有发现正在运行的 VLESS-ENC 临时隧道。"
-  fi
-}
-
-xray_template_unified() {
-  local vmess_enabled=0
-  local vless_enabled=0
-  local vmess_port="0"
-  local vless_port="0"
-  if vmess_state_is_ready; then
-    vmess_enabled=1
-    vmess_port="$LOCAL_PORT"
-  fi
-  if vless_state_is_ready; then
-    vless_enabled=1
-    vless_port="$XRAY_LOCAL_PORT"
-  fi
-  jq -n \
-    --argjson vmess_enabled "$vmess_enabled" \
-    --argjson vless_enabled "$vless_enabled" \
-    --argjson vmess_port "$vmess_port" \
-    --arg vmess_uuid "$UUID" \
-    --arg vmess_node "$NODE_NAME" \
-    --arg vmess_path "$WSPATH" \
-    --argjson vless_port "$vless_port" \
-    --arg vless_uuid "$XRAY_UUID" \
-    --arg vless_node "$XRAY_NODE_NAME" \
-    --arg vless_path "$XRAY_WS_PATH" \
-    --arg vless_decryption "$XRAY_VLESS_DECRYPTION" \
-    '
-    def vmess_inbound: {tag: "vmess-ws-in", listen: "127.0.0.1", port: $vmess_port, protocol: "vmess", settings: {clients: [{id: $vmess_uuid, alterId: 0, email: $vmess_node}]}, streamSettings: {network: "ws", security: "none", wsSettings: {path: $vmess_path}}, sniffing: {enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false}};
-    def vless_inbound: {tag: "vless-enc-ws-in", listen: "127.0.0.1", port: $vless_port, protocol: "vless", settings: {clients: [{id: $vless_uuid, level: 0, email: $vless_node, flow: "xtls-rprx-vision"}], decryption: $vless_decryption}, streamSettings: {network: "ws", security: "none", wsSettings: {path: $vless_path}}, sniffing: {enabled: true, destOverride: ["http", "tls", "quic"], metadataOnly: false}};
-    def direct_outbound: {tag: "direct", protocol: "freedom", settings: {}};
-    def block_rule: {type: "field", ip: ["0.0.0.0/8", "10.0.0.0/8", "100.64.0.0/10", "127.0.0.0/8", "169.254.0.0/16", "172.16.0.0/12", "192.0.0.0/24", "192.0.2.0/24", "192.168.0.0/16", "198.18.0.0/15", "198.51.100.0/24", "203.0.113.0/24", "224.0.0.0/4", "240.0.0.0/4", "::1/128", "fc00::/7", "fe80::/10", "169.254.169.254/32", "100.100.100.200/32"], outboundTag: "block"};
-    def vmess_route: {type: "field", inboundTag: ["vmess-ws-in"], outboundTag: "direct"};
-    def vless_route: {type: "field", inboundTag: ["vless-enc-ws-in"], outboundTag: "direct"};
-    {log: {loglevel: "warning"}, inbounds: ([if $vmess_enabled == 1 then vmess_inbound else empty end, if $vless_enabled == 1 then vless_inbound else empty end]), outbounds: ([direct_outbound, {tag: "block", protocol: "blackhole"}]), routing: {domainStrategy: "AsIs", rules: ([block_rule, if $vmess_enabled == 1 then vmess_route else empty end, if $vless_enabled == 1 then vless_route else empty end])}}'
-}
-
-show_xray_runtime_summary() {
-  local xray_count=""
-  local cf_count=""
-  xray_count="$(pgrep -a xray 2>/dev/null | grep -F "${XRAY_CONFIG}" | wc -l | tr -d '[:space:]' || true)"
-  cf_count="$(pgrep -a cloudflared 2>/dev/null | grep -E "127\\.0\\.0\\.1:(${LOCAL_PORT}|${XRAY_LOCAL_PORT})" | wc -l | tr -d '[:space:]' || true)"
-  printf '%s\n' "运行结构：Xray ${xray_count:-0} 个，cloudflared ${cf_count:-0} 个。"
-}
-
-show_status() {
-  local xray_status="未安装"
-  local core_line=""
-  local vmess_state="未运行"
-  local vless_state="未运行"
-  load_settings || true
-  load_state || true
-  load_xray_state || true
-  resolve_xray_bin || true
-  if [[ -n "$XRAY_BIN" ]]; then
-    core_line="$($XRAY_BIN version 2>/dev/null | head -n 1 || true)"
-    if [[ "$core_line" =~ ^Xray[[:space:]]+([^[:space:]]+) ]]; then
-      xray_status="v${BASH_REMATCH[1]}"
-    else
-      xray_status="已安装"
-    fi
-  fi
-  if tunnel_is_running; then
-    vmess_state="${C_YELLOW}运行中${C_RESET}"
-  fi
-  if xray_tunnel_is_running; then
-    vless_state="${C_YELLOW}运行中${C_RESET}"
-  fi
-  print_section_header "zargo 状态" "$C_YELLOW" 78
-  print_kv "核心版本：" "$xray_status" 18
-  printf '%s  状态 %s\n' "VMess" "$vmess_state"
-  printf '%s  状态 %s\n' "VLESS-ENC" "$vless_state"
-  show_xray_runtime_summary
-  print_section_footer "$C_GREEN" 78
-  printf '\n%s\n' "Xray 服务日志："
-  xray_service_print_logs 80
-  printf '\n%s\n' "VMess cloudflared 日志："
-  if [[ -f "$LOG_FILE" ]]; then tail -n 60 "$LOG_FILE" || true; else printf '%s\n' "暂无日志。"; fi
-  printf '\n%s\n' "VLESS-ENC cloudflared 日志："
-  if [[ -f "$XRAY_LOG_FILE" ]]; then tail -n 60 "$XRAY_LOG_FILE" || true; else printf '%s\n' "暂无日志。"; fi
-}
-
-command_update_components() {
-  info "开始更新 Xray 与 cloudflared……"
-  command_update_xray
-  command_update_cloudflared
-  ok "Xray 与 cloudflared 已完成更新检查。"
-}
-
-remove_zdd_components() {
-  assert_safe_managed_paths
-  load_settings
-  resolve_xray_bin
-  resolve_cloudflared_bin
-  stop_tunnel prompt_unknown || true
-  stop_xray_tunnel prompt_unknown || true
-  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-      xray_service_disable_now || true
-      rm -f "$XRAY_UNIT"
-    else
-      die "服务文件不是本项目创建的，拒绝继续卸载：${XRAY_UNIT}"
-    fi
-  fi
-  if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
-    if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-      service_disable_now || true
-      rm -f "$SINGBOX_UNIT"
-    else
-      warn "发现旧兼容服务文件但不属于本项目，已保留：${SINGBOX_UNIT}"
-    fi
-  fi
-  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    if logrotate_config_is_ours || logrotate_config_is_legacy_ours; then
-      rm -f "$LOGROTATE_CONFIG"
-    else
-      warn "日志轮转配置不是本项目创建的，未删除：${LOGROTATE_CONFIG}"
-    fi
-  fi
-  service_daemon_reload
-  service_reset_failed
-  xray_service_reset_failed
-  rm -rf -- "$DATA_DIR"
-  rm -f -- "$LOG_FILE" "$LOG_FILE".* "$XRAY_LOG_FILE" "$XRAY_LOG_FILE".* "$SINGBOX_LOG_FILE" "$SINGBOX_LOG_FILE".* "$XRAY_CORE_LOG_FILE" "$XRAY_CORE_LOG_FILE".*
-}
-
-command_uninstall_all() {
-  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、快捷命令、低权限账户及脚本专用核心。"
-  warn "不会删除 apt、apk 或其他脚本安装的共享程序和系统依赖。"
-  if ! confirm_yes "确认完整卸载请输入 yes："; then
-    info "已取消。"
-    return 0
-  fi
-  validate_service_account_removal
-  remove_zdd_components
-  remove_service_account
-  remove_xray_program
-  remove_cloudflared_program
-  remove_shortcuts
-  remove_managed_script
-  service_daemon_reload
-  remove_downloaded_source_if_confirmed
-  cleanup_bin_dir
-  ok "zdd-argo、脚本专用核心与 cloudflared 已完整卸载。"
-  if [[ $MENU_MODE -eq 1 ]]; then
-    return 10
-  fi
-}
-
 managed_paths_are_safe() {
   [[ "$DATA_DIR" == "/etc/zdd-argo" \
     && "$BIN_DIR" == "/usr/local/lib/zdd-argo" \
