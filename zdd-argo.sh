@@ -4,7 +4,7 @@ IFS=$'\n\t'
 umask 077
 
 SCRIPT_VERSION="0.1.0"
-BUILD_ID="SINGBOX-WARP-DOH-STATUS-XRAY-ROUTING-20260710"
+BUILD_ID="SINGBOX-WARP-DOH-MENU-STRATEGY-AUDIT-20260710"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_XRAY_NODE_NAME="$DEFAULT_NODE_NAME"
@@ -3275,7 +3275,7 @@ singbox_ip_strategy() {
       printf '%s' "prefer_ipv4"
       ;;
     *)
-      die "出站 IPv4 策略无效：${OUTBOUND_IP_MODE}"
+      die "出站策略无效：${OUTBOUND_IP_MODE}"
       ;;
   esac
 }
@@ -3289,7 +3289,7 @@ xray_freedom_domain_strategy() {
       printf '%s' "UseIPv4v6"
       ;;
     *)
-      die "出站 IPv4 策略无效：${OUTBOUND_IP_MODE}"
+      die "出站策略无效：${OUTBOUND_IP_MODE}"
       ;;
   esac
 }
@@ -3303,10 +3303,10 @@ outbound_ip_mode_label() {
 
   case "$mode" in
     ipv4_only)
-      printf '%s' "仅 IPv4"
+      printf '%s' "仅使用 IPv4"
       ;;
     prefer_ipv4)
-      printf '%s' "优先 IPv4（可回退 IPv6）"
+      printf '%s' "IPv4 优先（可回退 IPv6）"
       ;;
     *)
       printf '%s' "未设置"
@@ -3317,6 +3317,7 @@ outbound_ip_mode_label() {
 read_outbound_ip_mode() {
   local variable_name="$1"
   local current="$2"
+  local title="${3:-出站策略}"
   local input=""
   local normalized=""
   local current_label=""
@@ -3325,8 +3326,11 @@ read_outbound_ip_mode() {
   current_label="$(outbound_ip_mode_label "$current")"
 
   while true; do
+    printf '\n%s\n' "${title}（当前：${current_label}）"
+    printf '%s\n' "1. 仅使用 IPv4"
+    printf '%s\n' "2. IPv4 优先，可回退 IPv6（默认）"
     read_interactive input \
-      "${3:-出站地址族} [当前：${current_label}；1=仅 IPv4（sing-box ipv4_only / Xray UseIPv4），2=优先 IPv4（sing-box prefer_ipv4 / Xray UseIPv4v6）]：" \
+      "请选择 [1-2，直接回车保留当前]：" \
       "" || input=""
 
     if [[ -z "$input" ]]; then
@@ -3339,7 +3343,7 @@ read_outbound_ip_mode() {
       return 0
     fi
 
-    warn "请输入 1（仅 IPv4）或 2（优先 IPv4，可回退 IPv6）。"
+    warn "请输入 1（仅使用 IPv4）或 2（IPv4 优先，可回退 IPv6）。"
   done
 }
 
@@ -3464,7 +3468,7 @@ save_settings() {
   valid_feature_flag "$WARP_ENABLED" \
     || die "WARP 功能开关无效。"
   valid_outbound_ip_mode "$OUTBOUND_IP_MODE" \
-    || die "出站 IPv4 策略无效。"
+    || die "出站策略无效。"
 
   local tmp=""
   tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
@@ -3556,7 +3560,7 @@ configure_custom_settings() {
     warn "首次启用 WARP 时，脚本会调用第三方 wgcf，并以 --accept-tos 非交互注册 Cloudflare WARP 设备。"
   fi
 
-  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box / Xray 出站地址族"
+  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box 出站策略"
 
   save_settings
   ok "sing-box 自定义设置已保存。"
@@ -3617,7 +3621,7 @@ configure_xray_custom_settings() {
     warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
   done
 
-  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box / Xray 出站地址族"
+  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "Xray 出站策略"
 
   save_settings
   ok "Xray 自定义设置已保存。"
@@ -4346,7 +4350,7 @@ write_singbox_config() {
   valid_node_name "$NODE_NAME" || die "节点名称无效。"
   valid_feature_flag "$DOH_ENABLED" || die "DoH 功能开关无效。"
   valid_feature_flag "$WARP_ENABLED" || die "WARP 功能开关无效。"
-  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站 IPv4 策略无效。"
+  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站策略无效。"
 
   if [[ "$WARP_ENABLED" == "1" ]]; then
     load_warp_profile_parameters
@@ -6422,7 +6426,7 @@ write_xray_config() {
   valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效。"
   valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "VLESS-ENC decryption 无效。"
   valid_local_port "$XRAY_LOCAL_PORT" || die "Xray 本地端口无效。"
-  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站 IPv4 策略无效。"
+  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站策略无效。"
 
   local tmp=""
   tmp="$(mktemp "${DATA_DIR}/.xray-config.XXXXXX.json")"
@@ -7014,7 +7018,7 @@ show_xray_subscription() {
   print_kv "节点名称：" "${XRAY_NODE_NAME:-$NODE_NAME}" 18
   print_kv "优选域名/IP：" "${XRAY_PREFERRED_ENDPOINT:-未设置}" 18
   print_kv "传输方式：" "VLESS-ENC / WS / TLS" 18
-  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 18
+  print_kv "出站策略：" "$(outbound_ip_mode_label)" 18
   print_kv "后台运行：" "$running" 18
   print_kv "加密参数：" "0rtt + xorpub，已隐藏" 18
   print_section_footer "$C_GREEN" 78
@@ -7483,7 +7487,7 @@ show_subscription() {
   print_kv "UUID：" "${UUID:-尚未生成}" 20
   print_kv "WS 路径：" "${WSPATH:-尚未生成}" 20
   print_kv "本地监听：" "127.0.0.1:${LOCAL_PORT}" 20
-  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 20
+  print_kv "出站策略：" "$(outbound_ip_mode_label)" 20
   if [[ "$DOH_ENABLED" == "1" ]]; then
     print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 20
   else
@@ -7540,7 +7544,7 @@ show_status() {
   print_kv "运行平台：" "$(runtime_label)" 22
   print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
   print_kv "节点名称：" "$NODE_NAME" 22
-  print_kv "出站地址族：" "$(outbound_ip_mode_label)" 22
+  print_kv "出站策略：" "$(outbound_ip_mode_label)" 22
   if [[ "$DOH_ENABLED" == "1" ]]; then
     print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 22
   else
@@ -8322,28 +8326,6 @@ status_core_line() {
   printf '\n'
 }
 
-status_argo_line() {
-  local singbox_state="$1"
-  local xray_state="$2"
-  local left_plain="sing-box ${singbox_state}"
-  local left_width="32"
-  local actual_width=""
-  local padding=1
-
-  actual_width="$(text_display_width "$left_plain")"
-  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#left_plain}"
-  padding=$((left_width - actual_width))
-  ((padding >= 1)) || padding=1
-
-  print_aligned_label "Argo：" 12
-  printf '%s' "sing-box "
-  status_print_value "$singbox_state"
-  printf '%*s' "$padding" ''
-  printf '%s' "Xray "
-  status_print_value "$xray_state"
-  printf '\n'
-}
-
 print_menu_row() {
   local index="$1"
   local title="$2"
@@ -8368,8 +8350,6 @@ menu_header_status() {
   local xr_version="未安装"
   local sb_state="未运行"
   local xr_state="未运行"
-  local sb_argo="未运行"
-  local xr_argo="未运行"
 
   resolve_singbox_bin
   resolve_xray_bin
@@ -8381,7 +8361,7 @@ menu_header_status() {
             if ($1 == "sing-box" && $2 == "version" && $3 != "") {
               print "v" $3
             } else {
-              print $0
+              print "已安装"
             }
           }' \
         || true
@@ -8396,7 +8376,7 @@ menu_header_status() {
             if ($1 == "Xray" && $2 != "") {
               print "v" $2
             } else {
-              print $1
+              print "已安装"
             }
           }' \
         || true
@@ -8410,17 +8390,10 @@ menu_header_status() {
   if xray_service_is_active; then
     xr_state="运行中"
   fi
-  if tunnel_is_running; then
-    sb_argo="运行中"
-  fi
-  if xray_tunnel_is_running; then
-    xr_argo="运行中"
-  fi
 
   print_section_header "zargo 临时隧道" "$C_YELLOW" 78
   status_core_line "sing-box：" "$sb_version" "$sb_state"
   status_core_line "Xray：" "$xr_version" "$xr_state"
-  status_argo_line "$sb_argo" "$xr_argo"
   print_section_footer "$C_CYAN" 78
 }
 
