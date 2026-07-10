@@ -120,9 +120,6 @@ WARP_ENDPOINT_PORT=""
 WARP_PROFILE_ENDPOINT_PORT=""
 WARP_MTU="1280"
 MENU_MODE=0
-UI_WIDTH=78
-UI_LEFT_WIDTH=36
-MENU_DESC_COLUMN=44
 LOCK_HELD=0
 LOCK_OWNER_PID=""
 LOCK_OWNER_START=""
@@ -228,33 +225,6 @@ clear_screen() {
   fi
 }
 
-refresh_ui_width() {
-  local columns="${COLUMNS:-}"
-  local detected=""
-
-  if [[ -t 1 ]] && command -v tput >/dev/null 2>&1; then
-    detected="$(tput cols 2>/dev/null || true)"
-    [[ "$detected" =~ ^[0-9]+$ ]] && columns="$detected"
-  fi
-
-  if [[ "$columns" =~ ^[0-9]+$ ]]; then
-    if ((columns < 60)); then
-      UI_WIDTH=58
-    elif ((columns < 80)); then
-      UI_WIDTH=$((columns - 2))
-    else
-      UI_WIDTH=78
-    fi
-  else
-    UI_WIDTH=78
-  fi
-
-  UI_LEFT_WIDTH=$(( (UI_WIDTH - 10) / 2 ))
-  ((UI_LEFT_WIDTH >= 22)) || UI_LEFT_WIDTH=22
-  MENU_DESC_COLUMN=$((UI_WIDTH * 56 / 78))
-  ((MENU_DESC_COLUMN >= 34)) || MENU_DESC_COLUMN=34
-}
-
 ensure_utf8_locale() {
   local current=""
   local candidate=""
@@ -334,14 +304,10 @@ print_kv() {
 print_section_header() {
   local title="$1"
   local color="${2:-}"
-  local total_width="${3:-$UI_WIDTH}"
+  local total_width="${3:-78}"
   local title_width=""
   local left=0
   local right=0
-
-  if [[ "$total_width" == "78" && "$UI_WIDTH" -lt 78 ]]; then
-    total_width="$UI_WIDTH"
-  fi
 
   title_width="$(text_display_width "$title")"
   [[ "$title_width" =~ ^[0-9]+$ ]] || title_width="${#title}"
@@ -363,11 +329,7 @@ print_section_header() {
 
 print_section_footer() {
   local color="${1:-}"
-  local total_width="${2:-$UI_WIDTH}"
-
-  if [[ "$total_width" == "78" && "$UI_WIDTH" -lt 78 ]]; then
-    total_width="$UI_WIDTH"
-  fi
+  local total_width="${2:-78}"
 
   printf '%s' "$C_CYAN"
   printf '%*s' "$total_width" '' | tr ' ' '='
@@ -2072,7 +2034,12 @@ install_or_update_singbox() {
   local had_managed=0
   local had_unit=0
   local was_active=0
+  local legacy_config=0
   local -a sb_candidates=()
+
+  if singbox_config_has_legacy_domain_strategy; then
+    legacy_config=1
+  fi
 
   arch="$(uname -m)"
 
@@ -2203,9 +2170,12 @@ install_or_update_singbox() {
   if [[ -f "$SINGBOX_CONFIG" ]] \
       && ! "$candidate" check \
         -c "$SINGBOX_CONFIG"; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "新版 sing-box 无法通过现有 zdd-argo 配置校验，未执行更新。")"
+    if [[ $legacy_config -eq 1 ]]; then
+      warn "检测到旧版 sing-box domain_strategy 配置；更新后将自动迁移为 domain_resolver。"
+    else
+      rm -rf "$work"
+      die "$(printf '%s' "新版 sing-box 无法通过现有 zdd-argo 配置校验，未执行更新。")"
+    fi
   fi
 
   mkdir -p "$BIN_DIR"
@@ -2316,7 +2286,8 @@ install_or_update_singbox() {
   fi
 
   if [[ $had_unit -eq 1 \
-      && -f "$SINGBOX_CONFIG" ]]; then
+      && -f "$SINGBOX_CONFIG" \
+      && $legacy_config -eq 0 ]]; then
     write_singbox_service
 
     if [[ $was_active -eq 1 ]]; then
@@ -3326,7 +3297,7 @@ outbound_ip_mode_label() {
       printf '%s' "仅 IPv4"
       ;;
     prefer_ipv4)
-      printf '%s' "优先 IPv4"
+      printf '%s' "优先 IPv4（可回退 IPv6）"
       ;;
     *)
       printf '%s' "未设置"
@@ -4138,11 +4109,20 @@ singbox_template_base() {
           }
         }
       ],
+      dns: {
+        servers: [
+          {
+            type: "local",
+            tag: "local-dns"
+          }
+        ],
+        final: "local-dns",
+        strategy: $ip_strategy
+      },
       outbounds: [
         {
           type: "direct",
-          tag: "direct",
-          domain_strategy: $ip_strategy
+          tag: "direct"
         }
       ],
       route: {
@@ -4161,7 +4141,11 @@ singbox_template_base() {
             method: "drop"
           }
         ],
-        final: "direct"
+        final: "direct",
+        default_domain_resolver: {
+          server: "local-dns",
+          strategy: $ip_strategy
+        }
       }
     }'
 }
@@ -4410,7 +4394,7 @@ write_singbox_config() {
 
   jq -e \
     --arg ip_strategy "$expected_ip_strategy" \
-    '((.outbounds // []) | any(.tag == "direct" and .domain_strategy == $ip_strategy))
+    '(.route.default_domain_resolver.strategy == $ip_strategy)
       and ((.dns // null) == null or .dns.strategy == $ip_strategy)
       and ((.route.default_domain_resolver // null) == null or .route.default_domain_resolver.strategy == $ip_strategy)' \
     "$SINGBOX_CONFIG" >/dev/null \
@@ -4451,6 +4435,15 @@ write_singbox_config() {
         || die "DoH + WARP 模板写入结果不符合预期。"
       ;;
   esac
+}
+
+singbox_config_has_legacy_domain_strategy() {
+  [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
+  command -v jq >/dev/null 2>&1 || return 1
+
+  jq -e \
+    'any((.outbounds // [])[]?; has("domain_strategy"))' \
+    "$SINGBOX_CONFIG" >/dev/null 2>&1
 }
 
 find_free_loopback_port() {
@@ -6828,9 +6821,7 @@ command_generate_xray_vlessenc_ws() {
   prepare_xray_deployment
 
   stop_xray_tunnel || die "无法安全停止现有 Xray 临时隧道。"
-  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
   rebuild_xray_deployment_after_stop
-  save_settings
 
   deployment_transaction_commit
   ok "Xray VLESS-ENC + WS 临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
@@ -7209,7 +7200,6 @@ command_generate_noninteractive() {
 
   DOH_ENABLED="0"
   WARP_ENABLED="0"
-  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
   save_settings
 
   rebuild_deployment_after_stop
@@ -7227,7 +7217,6 @@ command_generate_noninteractive_doh_warp() {
 
   DOH_ENABLED="1"
   WARP_ENABLED="1"
-  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
   save_settings
   warn "本次无交互部署将启用 Cloudflare DoH（1.1.1.1）和 WARP；首次注册会调用第三方 wgcf 并使用 --accept-tos。"
 
@@ -7496,12 +7485,16 @@ show_status() {
 
 command_update_singbox() {
   local had_deployment=0
+  local legacy_config=0
 
   load_settings
 
   if [[ -f "$SINGBOX_CONFIG" \
       || -f "$SINGBOX_UNIT" ]]; then
     had_deployment=1
+    if singbox_config_has_legacy_domain_strategy; then
+      legacy_config=1
+    fi
   fi
 
   install_or_update_singbox
@@ -7511,11 +7504,19 @@ command_update_singbox() {
       && -f "$SINGBOX_CONFIG" ]]; then
     load_state
 
-    "$SINGBOX_BIN" check \
-      -c "$SINGBOX_CONFIG" \
-      || die "$(printf '%s' "更新后的 sing-box 无法通过现有 zdd-argo 配置校验。")"
+    if [[ $legacy_config -eq 1 ]]; then
+      write_singbox_config
+    else
+      "$SINGBOX_BIN" check \
+        -c "$SINGBOX_CONFIG" \
+        || die "$(printf '%s' "更新后的 sing-box 无法通过现有 zdd-argo 配置校验。")"
+    fi
 
     write_singbox_service
+
+    if [[ $legacy_config -eq 1 ]]; then
+      service_restart || true
+    fi
 
     if ! wait_for_singbox_ready; then
       ensure_singbox_running
@@ -7744,19 +7745,6 @@ remove_downloaded_source_if_confirmed() {
     || die "无法删除安装源文件：${source}"
 
   ok "安装源文件已删除：${source}"
-}
-
-remove_current_script_if_ours() {
-  local path="${SCRIPT_PATH:-}"
-
-  [[ -n "$path" && "$path" != "$MANAGED_SCRIPT_PATH" ]] || return 0
-  [[ -f "$path" && ! -L "$path" ]] || return 0
-  script_file_is_ours "$path" || return 0
-
-  rm -f -- "$path" \
-    || die "无法删除当前执行的安装脚本：${path}"
-
-  ok "当前执行的安装脚本已删除：${path}"
 }
 
 remove_shortcuts() {
@@ -8012,7 +8000,7 @@ remove_service_account() {
 }
 
 command_uninstall_all() {
-  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户、脚本副本及当前安装源 .sh 文件。"
+  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户及脚本专用 sing-box/Xray/cloudflared/wgcf。"
   warn "不会删除 apt、apk 或其他脚本安装的共享程序和系统依赖。"
 
   if ! confirm_yes "确认完整卸载请输入 yes："; then
@@ -8031,7 +8019,6 @@ command_uninstall_all() {
   remove_managed_script
   service_daemon_reload
   remove_downloaded_source_if_confirmed
-  remove_current_script_if_ours
   cleanup_bin_dir
 
   ok "zdd-argo 及脚本专用 sing-box、Xray、cloudflared、wgcf 已完整卸载。"
@@ -8127,7 +8114,7 @@ status_pair_line() {
   local left="$2"
   local right="$3"
   local label_width="${4:-8}"
-  local left_width="${5:-$UI_LEFT_WIDTH}"
+  local left_width="${5:-36}"
 
   print_aligned_label "$label" "$label_width"
   print_aligned_label "$left" "$left_width"
@@ -8144,7 +8131,7 @@ status_pair_line_parts() {
   local left_color="${6:-}"
   local right_color="${7:-}"
   local label_width="${8:-8}"
-  local left_width="${9:-$UI_LEFT_WIDTH}"
+  local left_width="${9:-36}"
   local left_plain="${left_prefix}${left_value}"
   local actual_width=""
   local padding=1
@@ -8161,6 +8148,45 @@ status_pair_line_parts() {
   printf '%s' "$right_prefix"
   printf '%s%s%s
 ' "$right_color" "$right_value" "$C_RESET"
+}
+
+status_flag_color() {
+  local value="$1"
+
+  if [[ "$value" == "开" || "$value" == "运行中" ]]; then
+    printf '%s' "$C_YELLOW"
+  fi
+}
+
+# The menu exposes sing-box DoH/WARP plus the shared address-family mode;
+# Xray is deliberately shown without sing-box-only feature flags.
+status_pair_outbound_line() {
+  local label="$1"
+  local left_doh="$2"
+  local left_warp="$3"
+  local ip_mode="$4"
+  local label_width="${5:-8}"
+  local left_width="${6:-36}"
+  local left_plain="sing-box DoH ${left_doh} / WARP ${left_warp} / ${ip_mode}"
+  local actual_width=""
+  local padding=1
+  local color=""
+
+  actual_width="$(text_display_width "$left_plain")"
+  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#left_plain}"
+  padding=$((left_width - actual_width))
+  ((padding >= 1)) || padding=1
+
+  print_aligned_label "$label" "$label_width"
+  printf '%s' "sing-box DoH "
+  color="$(status_flag_color "$left_doh")"
+  printf '%s%s%s' "$color" "$left_doh" "$C_RESET"
+  printf '%s' " / WARP "
+  color="$(status_flag_color "$left_warp")"
+  printf '%s%s%s' "$color" "$left_warp" "$C_RESET"
+  printf '%s' " / ${ip_mode}"
+  printf '%*s' "$padding" ''
+  printf '%s\n' "Xray ${ip_mode}"
 }
 
 status_domain_block() {
@@ -8183,7 +8209,7 @@ print_menu_row() {
   local index="$1"
   local title="$2"
   local desc="$3"
-  local desc_column="$MENU_DESC_COLUMN"
+  local desc_column=44
   local prefix="${index}. "
   local prefix_width=""
   local title_width=""
@@ -8267,8 +8293,7 @@ menu_header_status() {
   status_pair_line_parts "隧道：" "sing-box " "$argo" "Xray " "$xargo" "$argo_color" "$xargo_color"
   status_pair_line_parts "入口：" "sing-box " "${LOCAL_PORT}" "Xray " "${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}" "$C_YELLOW" "$C_YELLOW"
   status_pair_line_parts "优选：" "sing-box " "${PREFERRED_ENDPOINT:-未设置}" "Xray " "${XRAY_PREFERRED_ENDPOINT:-未设置}" "$C_YELLOW" "$C_YELLOW"
-  status_pair_line "出站：" "sing-box DoH ${doh_flag} / WARP ${warp_flag}" "Xray $(outbound_ip_mode_label)"
-  status_pair_line "语法：" "sing-box $(singbox_ip_strategy)" "Xray $(xray_domain_strategy)"
+  status_pair_outbound_line "出站：" "$doh_flag" "$warp_flag" "$(outbound_ip_mode_label)"
   status_domain_block "$host" "$xhost"
   print_section_footer "$C_CYAN" 78
 }
@@ -8409,7 +8434,6 @@ select_stop_scope() {
 
 interactive_menu() {
   MENU_MODE=1
-  refresh_ui_width
   trap 'clear_screen; exit 130' INT TERM
 
   while true; do
@@ -8425,7 +8449,9 @@ interactive_menu() {
     print_menu_row "7" "完整卸载" "含 sing-box / Xray"
     print_menu_row "0" "退出" ""
 
-    printf '%*s\n' "$UI_WIDTH" '' | tr ' ' '─'
+    printf '%s%s%s\n' "$C_CYAN" \
+      '==============================================================================' \
+      "$C_RESET"
     printf '%s%s%s\n' "$C_YELLOW" "提示：退出后输入 zargo 可重新打开菜单。" "$C_RESET"
 
     local choice=""
