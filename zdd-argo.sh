@@ -3,8 +3,8 @@ set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
-SCRIPT_VERSION="0.2.0"
-BUILD_ID="SINGBOX-WARP-DOH-XRAY-DUAL-IPMODE-20260710"
+SCRIPT_VERSION="0.1.0"
+BUILD_ID="SINGBOX-WARP-DOH-STATUS-XRAY-ROUTING-20260710"
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_LOCAL_PORT="10000"
 DEFAULT_XRAY_NODE_NAME="$DEFAULT_NODE_NAME"
@@ -425,6 +425,7 @@ check_os() {
         *" debian "*)
           INIT_SYSTEM="systemd"
           SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
+          XRAY_UNIT="$XRAY_SYSTEMD_UNIT"
           SERVICE_SHELL="/usr/sbin/nologin"
           ;;
 
@@ -1528,10 +1529,12 @@ resolved_zdd_is_ours() {
 script_file_is_ours() {
   local path="$1"
 
-  [[ -f "$path" ]] \
-    && grep -Fqx 'SCRIPT_VERSION="0.2.0"' "$path" 2>/dev/null \
+  [[ -f "$path" && ! -L "$path" ]] \
+    && grep -Eq '^SCRIPT_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$path" 2>/dev/null \
+    && grep -Eq '^BUILD_ID="[A-Z0-9_.-]+"$' "$path" 2>/dev/null \
     && grep -Fqx 'DEFAULT_NODE_NAME="zdd-argo"' "$path" 2>/dev/null \
-    && grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null
+    && grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null \
+    && grep -Fq 'SERVICE_MARKER_CONTENT="zdd-argo-service-account-v0.1.0"' "$path" 2>/dev/null
 }
 
 record_source_file() {
@@ -2034,11 +2037,11 @@ install_or_update_singbox() {
   local had_managed=0
   local had_unit=0
   local was_active=0
-  local legacy_config=0
+  local config_refresh=0
   local -a sb_candidates=()
 
-  if singbox_config_has_legacy_domain_strategy; then
-    legacy_config=1
+  if singbox_config_needs_refresh; then
+    config_refresh=1
   fi
 
   arch="$(uname -m)"
@@ -2170,8 +2173,8 @@ install_or_update_singbox() {
   if [[ -f "$SINGBOX_CONFIG" ]] \
       && ! "$candidate" check \
         -c "$SINGBOX_CONFIG"; then
-    if [[ $legacy_config -eq 1 ]]; then
-      warn "检测到旧版 sing-box domain_strategy 配置；更新后将自动迁移为 domain_resolver。"
+    if [[ $config_refresh -eq 1 ]]; then
+      warn "检测到旧版或不完整的 sing-box 配置；更新后将自动重建为当前类型化 DNS 与 WireGuard Endpoint 语法。"
     else
       rm -rf "$work"
       die "$(printf '%s' "新版 sing-box 无法通过现有 zdd-argo 配置校验，未执行更新。")"
@@ -2287,7 +2290,7 @@ install_or_update_singbox() {
 
   if [[ $had_unit -eq 1 \
       && -f "$SINGBOX_CONFIG" \
-      && $legacy_config -eq 0 ]]; then
+      && $config_refresh -eq 0 ]]; then
     write_singbox_service
 
     if [[ $was_active -eq 1 ]]; then
@@ -3277,7 +3280,7 @@ singbox_ip_strategy() {
   esac
 }
 
-xray_domain_strategy() {
+xray_freedom_domain_strategy() {
   case "$OUTBOUND_IP_MODE" in
     ipv4_only)
       printf '%s' "UseIPv4"
@@ -3291,8 +3294,14 @@ xray_domain_strategy() {
   esac
 }
 
+xray_routing_domain_strategy() {
+  printf '%s' "IPOnDemand"
+}
+
 outbound_ip_mode_label() {
-  case "$OUTBOUND_IP_MODE" in
+  local mode="${1:-$OUTBOUND_IP_MODE}"
+
+  case "$mode" in
     ipv4_only)
       printf '%s' "仅 IPv4"
       ;;
@@ -3313,7 +3322,7 @@ read_outbound_ip_mode() {
   local current_label=""
 
   valid_outbound_ip_mode "$current" || current="$DEFAULT_OUTBOUND_IP_MODE"
-  current_label="$(outbound_ip_mode_label)"
+  current_label="$(outbound_ip_mode_label "$current")"
 
   while true; do
     read_interactive input \
@@ -4128,6 +4137,11 @@ singbox_template_base() {
       route: {
         rules: [
           {
+            inbound: ["vmess-ws-in"],
+            action: "resolve",
+            strategy: $ip_strategy
+          },
+          {
             ip_is_private: true,
             action: "reject",
             method: "drop"
@@ -4366,6 +4380,167 @@ write_singbox_config() {
       ;;
   esac
 
+  jq -e \
+    --arg name "$NODE_NAME" \
+    --arg uuid "$UUID" \
+    --arg path "$WSPATH" \
+    --arg ip_strategy "$expected_ip_strategy" \
+    --argjson port "$LOCAL_PORT" \
+    '(.inbounds | type == "array" and length == 1)
+      and (.inbounds[0].type == "vmess")
+      and (.inbounds[0].tag == "vmess-ws-in")
+      and (.inbounds[0].listen == "127.0.0.1")
+      and (.inbounds[0].listen_port == $port)
+      and (.inbounds[0].users | type == "array" and length == 1)
+      and (.inbounds[0].users[0].name == $name)
+      and (.inbounds[0].users[0].uuid == $uuid)
+      and (.inbounds[0].users[0].alterId == 0)
+      and (.inbounds[0].transport.type == "ws")
+      and (.inbounds[0].transport.path == $path)
+      and any((.outbounds // [])[]?; .type == "direct" and .tag == "direct")
+      and (.dns.strategy == $ip_strategy)
+      and (.route.default_domain_resolver.strategy == $ip_strategy)
+      and any((.route.rules // [])[]?;
+        .action == "resolve"
+        and (.inbound // []) == ["vmess-ws-in"]
+        and .strategy == $ip_strategy)
+      and any((.route.rules // [])[]?;
+        .ip_is_private == true
+        and .action == "reject"
+        and .method == "drop")
+      and any((.route.rules // [])[]?;
+        .action == "reject"
+        and .method == "drop"
+        and ((.ip_cidr // []) | index("169.254.169.254/32") != null)
+        and ((.ip_cidr // []) | index("100.100.100.200/32") != null))
+      and ([.. | objects | select(has("domain_strategy"))] | length == 0)' \
+    "$tmp" >/dev/null \
+    || { rm -f "$tmp"; die "生成的 sing-box 配置未通过通用结构自检。"; }
+
+  case "${DOH_ENABLED}:${WARP_ENABLED}" in
+    0:0)
+      jq -e '
+        (.route.final == "direct")
+        and (.dns.final == "local-dns")
+        and (.route.default_domain_resolver.server == "local-dns")
+        and any((.dns.servers // [])[]?;
+          .tag == "local-dns" and .type == "local")
+        and ((.endpoints // []) | length == 0)
+      ' "$tmp" >/dev/null \
+        || { rm -f "$tmp"; die "直接出站模板写入结果不符合预期。"; }
+      ;;
+    1:0)
+      jq -e '
+        (.route.final == "direct")
+        and (.dns.final == "cloudflare-doh")
+        and (.route.default_domain_resolver.server == "cloudflare-doh")
+        and any((.dns.servers // [])[]?;
+          .tag == "cloudflare-doh"
+          and .type == "https"
+          and .server == "1.1.1.1"
+          and .server_port == 443
+          and .path == "/dns-query"
+          and .tls.enabled == true
+          and .tls.server_name == "cloudflare-dns.com"
+          and (has("detour") | not))
+        and ((.endpoints // []) | length == 0)
+      ' "$tmp" >/dev/null \
+        || { rm -f "$tmp"; die "DoH 模板写入结果不符合预期。"; }
+      ;;
+    0:1)
+      jq -e \
+        --arg private_key "$WARP_PRIVATE_KEY" \
+        --arg ipv4 "$WARP_IPV4" \
+        --arg ipv6 "$WARP_IPV6" \
+        --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
+        --argjson peer_port "$WARP_ENDPOINT_PORT" \
+        --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+        --argjson mtu "$WARP_MTU" \
+        --arg ip_strategy "$expected_ip_strategy" \
+        '(.route.final == "warp")
+          and (.dns.final == "local-dns")
+          and (.route.default_domain_resolver.server == "local-dns")
+          and any((.dns.servers // [])[]?;
+            .tag == "local-dns"
+            and .type == "local"
+            and .prefer_go == true)
+          and any((.dns.servers // [])[]?;
+            .tag == "warp-bootstrap-doh"
+            and .type == "https"
+            and .server == "1.1.1.1"
+            and .server_port == 443
+            and .path == "/dns-query"
+            and .tls.enabled == true
+            and .tls.server_name == "cloudflare-dns.com")
+          and any((.endpoints // [])[]?;
+            .tag == "warp"
+            and .type == "wireguard"
+            and .system == false
+            and .mtu == $mtu
+            and .address == [$ipv4, $ipv6]
+            and .private_key == $private_key
+            and .domain_resolver.server == "warp-bootstrap-doh"
+            and .domain_resolver.strategy == $ip_strategy
+            and any((.peers // [])[]?;
+              .address == $peer_address
+              and .port == $peer_port
+              and .public_key == $public_key
+              and .allowed_ips == ["0.0.0.0/0", "::/0"]
+              and .persistent_keepalive_interval == 30))' \
+        "$tmp" >/dev/null \
+        || { rm -f "$tmp"; die "WARP 模板写入结果不符合预期。"; }
+      ;;
+    1:1)
+      jq -e \
+        --arg private_key "$WARP_PRIVATE_KEY" \
+        --arg ipv4 "$WARP_IPV4" \
+        --arg ipv6 "$WARP_IPV6" \
+        --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
+        --argjson peer_port "$WARP_ENDPOINT_PORT" \
+        --arg public_key "$WARP_PEER_PUBLIC_KEY" \
+        --argjson mtu "$WARP_MTU" \
+        --arg ip_strategy "$expected_ip_strategy" \
+        '(.route.final == "warp")
+          and (.dns.final == "cloudflare-doh")
+          and (.route.default_domain_resolver.server == "cloudflare-doh")
+          and any((.dns.servers // [])[]?;
+            .tag == "warp-bootstrap-doh"
+            and .type == "https"
+            and .server == "1.1.1.1"
+            and .server_port == 443
+            and .path == "/dns-query"
+            and .tls.enabled == true
+            and .tls.server_name == "cloudflare-dns.com"
+            and (has("detour") | not))
+          and any((.dns.servers // [])[]?;
+            .tag == "cloudflare-doh"
+            and .type == "https"
+            and .server == "1.1.1.1"
+            and .server_port == 443
+            and .path == "/dns-query"
+            and .tls.enabled == true
+            and .tls.server_name == "cloudflare-dns.com"
+            and .detour == "warp")
+          and any((.endpoints // [])[]?;
+            .tag == "warp"
+            and .type == "wireguard"
+            and .system == false
+            and .mtu == $mtu
+            and .address == [$ipv4, $ipv6]
+            and .private_key == $private_key
+            and .domain_resolver.server == "warp-bootstrap-doh"
+            and .domain_resolver.strategy == $ip_strategy
+            and any((.peers // [])[]?;
+              .address == $peer_address
+              and .port == $peer_port
+              and .public_key == $public_key
+              and .allowed_ips == ["0.0.0.0/0", "::/0"]
+              and .persistent_keepalive_interval == 30))' \
+        "$tmp" >/dev/null \
+        || { rm -f "$tmp"; die "DoH + WARP 模板写入结果不符合预期。"; }
+      ;;
+  esac
+
   chmod 640 "$tmp"
   chown root:"$SERVICE_GROUP" "$tmp"
 
@@ -4391,58 +4566,18 @@ write_singbox_config() {
 
   "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" \
     || die "已覆盖的 sing-box 配置未通过二次校验。"
-
-  jq -e \
-    --arg ip_strategy "$expected_ip_strategy" \
-    '(.route.default_domain_resolver.strategy == $ip_strategy)
-      and ((.dns // null) == null or .dns.strategy == $ip_strategy)
-      and ((.route.default_domain_resolver // null) == null or .route.default_domain_resolver.strategy == $ip_strategy)' \
-    "$SINGBOX_CONFIG" >/dev/null \
-    || die "sing-box 配置中的 IPv4 出站策略与保存设置不一致。"
-
-  case "${DOH_ENABLED}:${WARP_ENABLED}" in
-    0:0)
-      jq -e '
-        (.route.final == "direct")
-        and ((.endpoints // []) | length == 0)
-        and ((.dns // null) == null)
-      ' "$SINGBOX_CONFIG" >/dev/null \
-        || die "直接出站模板写入结果不符合预期。"
-      ;;
-    1:0)
-      jq -e '
-        (.route.final == "direct")
-        and (.dns.final == "cloudflare-doh")
-        and ((.endpoints // []) | length == 0)
-      ' "$SINGBOX_CONFIG" >/dev/null \
-        || die "DoH 模板写入结果不符合预期。"
-      ;;
-    0:1)
-      jq -e '
-        (.route.final == "warp")
-        and (.dns.final == "local-dns")
-        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
-      ' "$SINGBOX_CONFIG" >/dev/null \
-        || die "WARP 模板写入结果不符合预期。"
-      ;;
-    1:1)
-      jq -e '
-        (.route.final == "warp")
-        and (.dns.final == "cloudflare-doh")
-        and ((.dns.servers // []) | any(.tag == "cloudflare-doh" and .detour == "warp"))
-        and ((.endpoints // []) | any(.tag == "warp" and .type == "wireguard"))
-      ' "$SINGBOX_CONFIG" >/dev/null \
-        || die "DoH + WARP 模板写入结果不符合预期。"
-      ;;
-  esac
 }
 
-singbox_config_has_legacy_domain_strategy() {
+singbox_config_needs_refresh() {
   [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
   command -v jq >/dev/null 2>&1 || return 1
 
   jq -e \
-    'any((.outbounds // [])[]?; has("domain_strategy"))' \
+    '([.. | objects | select(has("domain_strategy"))] | length > 0)
+      or ((.dns // null) == null)
+      or ((.route.default_domain_resolver // null) == null)
+      or ([.route.rules[]? | select(.action == "resolve")] | length == 0)
+      or any((.outbounds // [])[]?; .type == "wireguard")' \
     "$SINGBOX_CONFIG" >/dev/null 2>&1
 }
 
@@ -6199,7 +6334,8 @@ xray_template_direct() {
     --arg node "$XRAY_NODE_NAME" \
     --arg path "$XRAY_WS_PATH" \
     --arg decryption "$XRAY_VLESS_DECRYPTION" \
-    --arg domain_strategy "$(xray_domain_strategy)" \
+    --arg freedom_strategy "$(xray_freedom_domain_strategy)" \
+    --arg routing_strategy "$(xray_routing_domain_strategy)" \
     '{
       log: {
         loglevel: "warning"
@@ -6240,7 +6376,7 @@ xray_template_direct() {
           tag: "direct",
           protocol: "freedom",
           settings: {
-            domainStrategy: $domain_strategy
+            domainStrategy: $freedom_strategy
           }
         },
         {
@@ -6249,7 +6385,7 @@ xray_template_direct() {
         }
       ],
       routing: {
-        domainStrategy: $domain_strategy,
+        domainStrategy: $routing_strategy,
         rules: [
           {
             type: "field",
@@ -6298,17 +6434,29 @@ write_xray_config() {
     --arg uuid "$XRAY_UUID" \
     --arg path "$XRAY_WS_PATH" \
     --arg decryption "$XRAY_VLESS_DECRYPTION" \
-    --arg domain_strategy "$(xray_domain_strategy)" \
+    --arg freedom_strategy "$(xray_freedom_domain_strategy)" \
+    --arg routing_strategy "$(xray_routing_domain_strategy)" \
     '.inbounds[0].port == $port
       and .inbounds[0].settings.clients[0].id == $uuid
       and .inbounds[0].settings.decryption == $decryption
       and .inbounds[0].settings.clients[0].flow == "xtls-rprx-vision"
-       and .inbounds[0].streamSettings.network == "ws"
-       and .inbounds[0].streamSettings.wsSettings.path == $path
-       and (.inbounds[0].streamSettings.wsSettings | has("mode") | not)
-       and (.inbounds[0].streamSettings.wsSettings | has("host") | not)
-       and ((.outbounds // []) | any(.tag == "direct" and .settings.domainStrategy == $domain_strategy))
-       and .routing.domainStrategy == $domain_strategy' \
+      and .inbounds[0].streamSettings.network == "ws"
+      and .inbounds[0].streamSettings.wsSettings.path == $path
+      and (.inbounds[0].streamSettings.wsSettings | has("mode") | not)
+      and (.inbounds[0].streamSettings.wsSettings | has("host") | not)
+      and any((.outbounds // [])[]?;
+        .tag == "direct"
+        and .protocol == "freedom"
+        and .settings.domainStrategy == $freedom_strategy)
+      and any((.outbounds // [])[]?;
+        .tag == "block" and .protocol == "blackhole")
+      and .routing.domainStrategy == $routing_strategy
+      and any((.routing.rules // [])[]?;
+        .type == "field"
+        and .outboundTag == "block"
+        and ((.ip // []) | index("127.0.0.0/8") != null)
+        and ((.ip // []) | index("169.254.169.254/32") != null)
+        and ((.ip // []) | index("100.100.100.200/32") != null))' \
     "$tmp" >/dev/null \
     || { rm -f "$tmp"; die "生成的 Xray 配置未通过结构自检。"; }
 
@@ -7010,6 +7158,8 @@ deployment_transaction_rollback() {
   fi
 
   if [[ "${TRANSACTION_SCOPE:-all}" == "xray" ]]; then
+    local rel=""
+
     (stop_xray_tunnel) >/dev/null 2>&1 || true
 
     if xray_unit_is_ours || xray_unit_is_legacy_ours; then
@@ -7017,33 +7167,55 @@ deployment_transaction_rollback() {
     fi
 
     mkdir -p "$DATA_DIR"
-    if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
-      for rel in \
-        "$(basename "$XRAY_CONFIG")" \
-        "$(basename "$XRAY_STATE_JSON")" \
-        "$(basename "$XRAY_CLOUDFLARED_RUNNER")" \
-        "$(basename "$XRAY_CLOUDFLARED_PID_FILE")" \
-        "$(basename "$XRAY_VLESS_JSON_FILE")" \
-        "$(basename "$XRAY_VLESS_LINK_FILE")"
-      do
-        if [[ -e "${TRANSACTION_DIR}/data/${rel}" || -L "${TRANSACTION_DIR}/data/${rel}" ]]; then
-          cp -a "${TRANSACTION_DIR}/data/${rel}" "${DATA_DIR}/${rel}" \
-            || warn "回滚 Xray 数据文件失败：${DATA_DIR}/${rel}"
-        else
-          rm -f "${DATA_DIR}/${rel}"
-        fi
-      done
-    else
-      rm -f "$XRAY_CONFIG" "$XRAY_STATE_JSON" "$XRAY_CLOUDFLARED_RUNNER" "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
-    fi
+    for rel in \
+      "$(basename "$XRAY_CONFIG")" \
+      "$(basename "$XRAY_STATE_JSON")" \
+      "$(basename "$XRAY_CLOUDFLARED_RUNNER")" \
+      "$(basename "$XRAY_CLOUDFLARED_PID_FILE")" \
+      "$(basename "$XRAY_VLESS_JSON_FILE")" \
+      "$(basename "$XRAY_VLESS_LINK_FILE")" \
+      "$(basename "$SETTINGS_JSON")" \
+      "$(basename "$ECH_NOTE_FILE")"
+    do
+      if [[ -f "${TRANSACTION_DIR}/had-data" \
+          && ( -e "${TRANSACTION_DIR}/data/${rel}" \
+            || -L "${TRANSACTION_DIR}/data/${rel}" ) ]]; then
+        cp -a "${TRANSACTION_DIR}/data/${rel}" "${DATA_DIR}/${rel}" \
+          || warn "回滚 Xray 数据文件失败：${DATA_DIR}/${rel}"
+      else
+        rm -f "${DATA_DIR}/${rel}"
+      fi
+    done
 
-    rm -f -- "$XRAY_UNIT"
+    mkdir -p "$BIN_DIR"
+    for rel in \
+      "$(basename "$MANAGED_XRAY_BIN")" \
+      "$(basename "$XRAY_RELEASE_META")" \
+      "$(basename "$MANAGED_CLOUDFLARED_BIN")" \
+      "$(basename "$CLOUDFLARED_RELEASE_META")"
+    do
+      if [[ -f "${TRANSACTION_DIR}/had-bin" \
+          && ( -e "${TRANSACTION_DIR}/bin/${rel}" \
+            || -L "${TRANSACTION_DIR}/bin/${rel}" ) ]]; then
+        cp -a "${TRANSACTION_DIR}/bin/${rel}" "${BIN_DIR}/${rel}" \
+          || warn "回滚 Xray 程序文件失败：${BIN_DIR}/${rel}"
+      else
+        rm -f "${BIN_DIR}/${rel}"
+      fi
+    done
+
+    rm -f -- "$XRAY_UNIT" "$LOGROTATE_CONFIG"
     if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
       cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
         || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
     fi
+    if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
+      cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
+        || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
+    fi
 
     service_daemon_reload
+    hash -r
     load_settings
     resolve_xray_bin
     resolve_cloudflared_bin
@@ -7062,6 +7234,27 @@ deployment_transaction_rollback() {
           start_xray_tunnel
         fi
       ) >/dev/null 2>&1 || true
+    fi
+
+    if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]]; then
+      (remove_service_account) >/dev/null 2>&1 || true
+
+      if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
+        if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
+            && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
+          groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
+        fi
+
+        if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 \
+            && -d "$SERVICE_HOME" \
+            && ! -L "$SERVICE_HOME" ]]; then
+          rm -rf -- "$SERVICE_HOME"
+        fi
+      fi
+    fi
+
+    if [[ ! -f "${TRANSACTION_DIR}/had-data" ]]; then
+      rmdir "$DATA_DIR" 2>/dev/null || true
     fi
 
     if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
@@ -7099,6 +7292,10 @@ deployment_transaction_rollback() {
     cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT" \
       || warn "回滚服务文件失败：${SINGBOX_UNIT}"
   fi
+  if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
+    cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
+      || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
+  fi
   if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
     cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
       || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
@@ -7122,6 +7319,22 @@ deployment_transaction_rollback() {
       load_state
       if service_is_active; then
         start_tunnel
+      fi
+    ) >/dev/null 2>&1 || true
+  fi
+
+  if [[ $TRANSACTION_OLD_XRAY_SERVICE_ACTIVE -eq 1 ]] \
+      && (xray_unit_is_ours || xray_unit_is_legacy_ours); then
+    xray_service_enable_now || true
+  fi
+
+  if [[ $TRANSACTION_OLD_XRAY_TUNNEL_RUNNING -eq 1 \
+      && -x "$XRAY_CLOUDFLARED_RUNNER" \
+      && -f "$XRAY_STATE_JSON" ]]; then
+    (
+      load_xray_state
+      if xray_service_is_active; then
+        start_xray_tunnel
       fi
     ) >/dev/null 2>&1 || true
   fi
@@ -7485,15 +7698,15 @@ show_status() {
 
 command_update_singbox() {
   local had_deployment=0
-  local legacy_config=0
+  local config_refresh=0
 
   load_settings
 
   if [[ -f "$SINGBOX_CONFIG" \
       || -f "$SINGBOX_UNIT" ]]; then
     had_deployment=1
-    if singbox_config_has_legacy_domain_strategy; then
-      legacy_config=1
+    if singbox_config_needs_refresh; then
+      config_refresh=1
     fi
   fi
 
@@ -7504,7 +7717,8 @@ command_update_singbox() {
       && -f "$SINGBOX_CONFIG" ]]; then
     load_state
 
-    if [[ $legacy_config -eq 1 ]]; then
+    if [[ $config_refresh -eq 1 ]]; then
+      ensure_service_account
       write_singbox_config
     else
       "$SINGBOX_BIN" check \
@@ -7514,7 +7728,7 @@ command_update_singbox() {
 
     write_singbox_service
 
-    if [[ $legacy_config -eq 1 ]]; then
+    if [[ $config_refresh -eq 1 ]]; then
       service_restart || true
     fi
 
@@ -8079,130 +8293,55 @@ cleanup_bin_dir() {
     || true
 }
 
-status_gap_line() {
-  printf '\n'
-}
-
-status_full_line() {
-  local label="$1"
-  local value="$2"
-  local label_width="${3:-8}"
-
-  print_aligned_label "$label" "$label_width"
-  printf '%s
-' "$value"
-}
-
-status_colored_value() {
-  local value="$1"
-  local width="$2"
-  local color="${3:-}"
-  local actual_width=""
-  local padding=1
-
-  actual_width="$(text_display_width "$value")"
-  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#value}"
-  padding=$((width - actual_width))
-  ((padding >= 1)) || padding=1
-
-  printf '%s%s%s' "$color" "$value" "$C_RESET"
-  printf '%*s' "$padding" ''
-}
-
-status_pair_line() {
-  local label="$1"
-  local left="$2"
-  local right="$3"
-  local label_width="${4:-8}"
-  local left_width="${5:-36}"
-
-  print_aligned_label "$label" "$label_width"
-  print_aligned_label "$left" "$left_width"
-  printf '%s
-' "$right"
-}
-
-status_pair_line_parts() {
-  local label="$1"
-  local left_prefix="$2"
-  local left_value="$3"
-  local right_prefix="$4"
-  local right_value="$5"
-  local left_color="${6:-}"
-  local right_color="${7:-}"
-  local label_width="${8:-8}"
-  local left_width="${9:-36}"
-  local left_plain="${left_prefix}${left_value}"
-  local actual_width=""
-  local padding=1
-
-  actual_width="$(text_display_width "$left_plain")"
-  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#left_plain}"
-  padding=$((left_width - actual_width))
-  ((padding >= 1)) || padding=1
-
-  print_aligned_label "$label" "$label_width"
-  printf '%s' "$left_prefix"
-  printf '%s%s%s' "$left_color" "$left_value" "$C_RESET"
-  printf '%*s' "$padding" ''
-  printf '%s' "$right_prefix"
-  printf '%s%s%s
-' "$right_color" "$right_value" "$C_RESET"
-}
-
-status_flag_color() {
+status_running_color() {
   local value="$1"
 
-  if [[ "$value" == "开" || "$value" == "运行中" ]]; then
+  if [[ "$value" == "运行中" ]]; then
     printf '%s' "$C_YELLOW"
   fi
 }
 
-# The menu exposes sing-box DoH/WARP plus the shared address-family mode;
-# Xray is deliberately shown without sing-box-only feature flags.
-status_pair_outbound_line() {
+status_print_value() {
+  local value="$1"
+  local color=""
+
+  color="$(status_running_color "$value")"
+  printf '%s%s%s' "$color" "$value" "$C_RESET"
+}
+
+status_core_line() {
   local label="$1"
-  local left_doh="$2"
-  local left_warp="$3"
-  local ip_mode="$4"
-  local label_width="${5:-8}"
-  local left_width="${6:-36}"
-  local left_plain="sing-box DoH ${left_doh} / WARP ${left_warp} / ${ip_mode}"
+  local version="$2"
+  local state="$3"
+  local label_width="12"
+  local version_width="32"
+
+  print_aligned_label "$label" "$label_width"
+  print_aligned_label "$version" "$version_width"
+  status_print_value "$state"
+  printf '\n'
+}
+
+status_argo_line() {
+  local singbox_state="$1"
+  local xray_state="$2"
+  local left_plain="sing-box ${singbox_state}"
+  local left_width="32"
   local actual_width=""
   local padding=1
-  local color=""
 
   actual_width="$(text_display_width "$left_plain")"
   [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#left_plain}"
   padding=$((left_width - actual_width))
   ((padding >= 1)) || padding=1
 
-  print_aligned_label "$label" "$label_width"
-  printf '%s' "sing-box DoH "
-  color="$(status_flag_color "$left_doh")"
-  printf '%s%s%s' "$color" "$left_doh" "$C_RESET"
-  printf '%s' " / WARP "
-  color="$(status_flag_color "$left_warp")"
-  printf '%s%s%s' "$color" "$left_warp" "$C_RESET"
-  printf '%s' " / ${ip_mode}"
+  print_aligned_label "Argo：" 12
+  printf '%s' "sing-box "
+  status_print_value "$singbox_state"
   printf '%*s' "$padding" ''
-  printf '%s\n' "Xray ${ip_mode}"
-}
-
-status_domain_block() {
-  local host="$1"
-  local xhost="$2"
-  local label_width="${3:-8}"
-  local name_width="${4:-10}"
-
-  print_aligned_label "域名：" "$label_width"
-  print_aligned_label "sing-box" "$name_width"
-  printf '%s
-' "$host"
-  print_aligned_label "" "$label_width"
-  print_aligned_label "Xray" "$name_width"
-  printf '%s
-' "$xhost"
+  printf '%s' "Xray "
+  status_print_value "$xray_state"
+  printf '\n'
 }
 
 print_menu_row() {
@@ -8221,82 +8360,70 @@ print_menu_row() {
 
   printf '%s' "$prefix"
   print_aligned_label "$title" "$title_width"
-  printf '%s
-' "$desc"
+  printf '%s\n' "$desc"
 }
 
 menu_header_status() {
-  local sb="未安装"
-  local xr="未安装"
-  local argo="未运行"
-  local xargo="未运行"
-  local argo_color=""
-  local xargo_color=""
-  local host="—"
-  local xhost="—"
-  local xray_state_port=""
-  local xray_state_endpoint=""
-  local doh_flag="关"
-  local warp_flag="关"
+  local sb_version="未安装"
+  local xr_version="未安装"
+  local sb_state="未运行"
+  local xr_state="未运行"
+  local sb_argo="未运行"
+  local xr_argo="未运行"
 
-  load_settings
   resolve_singbox_bin
   resolve_xray_bin
 
   if [[ -n "$SINGBOX_BIN" ]]; then
-    sb="$("$SINGBOX_BIN" version 2>/dev/null | awk 'NR == 1 { if ($1 == "sing-box" && $2 == "version" && $3 != "") { print "v" $3 } else { print $0 } }' || true)"
-    [[ -n "$sb" ]] || sb="已安装"
+    sb_version="$(
+      "$SINGBOX_BIN" version 2>/dev/null \
+        | awk 'NR == 1 {
+            if ($1 == "sing-box" && $2 == "version" && $3 != "") {
+              print "v" $3
+            } else {
+              print $0
+            }
+          }' \
+        || true
+    )"
+    [[ -n "$sb_version" ]] || sb_version="已安装"
   fi
 
   if [[ -n "$XRAY_BIN" ]]; then
-    xr="$("$XRAY_BIN" version 2>/dev/null | awk 'NR == 1 { if ($1 == "Xray" && $2 != "") { print "v" $2 } else { print $1 } }' || true)"
-    [[ -n "$xr" ]] || xr="已安装"
+    xr_version="$(
+      "$XRAY_BIN" version 2>/dev/null \
+        | awk 'NR == 1 {
+            if ($1 == "Xray" && $2 != "") {
+              print "v" $2
+            } else {
+              print $1
+            }
+          }' \
+        || true
+    )"
+    [[ -n "$xr_version" ]] || xr_version="已安装"
   fi
 
+  if service_is_active; then
+    sb_state="运行中"
+  fi
+  if xray_service_is_active; then
+    xr_state="运行中"
+  fi
   if tunnel_is_running; then
-    argo="运行中"
-    argo_color="$C_YELLOW"
+    sb_argo="运行中"
   fi
   if xray_tunnel_is_running; then
-    xargo="运行中"
-    xargo_color="$C_YELLOW"
-  fi
-
-  if [[ -f "$STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
-    host="$(jq -r '.argo_host // "—"' "$STATE_JSON" 2>/dev/null || printf '%s' "状态异常")"
-    [[ -n "$host" ]] || host="—"
-  fi
-  if [[ -f "$XRAY_STATE_JSON" ]] && command -v jq >/dev/null 2>&1; then
-    xhost="$(jq -r '.argo_host // "—"' "$XRAY_STATE_JSON" 2>/dev/null || printf '%s' "状态异常")"
-    [[ -n "$xhost" ]] || xhost="—"
-    xray_state_port="$(jq -r '.local_port // ""' "$XRAY_STATE_JSON" 2>/dev/null || true)"
-    xray_state_endpoint="$(jq -r '.preferred_endpoint // ""' "$XRAY_STATE_JSON" 2>/dev/null || true)"
-    xray_state_endpoint="$(normalize_preferred_endpoint "$xray_state_endpoint")"
-    if valid_local_port "$xray_state_port"; then
-      XRAY_LOCAL_PORT="$((10#$xray_state_port))"
-    fi
-    if valid_preferred_endpoint "$xray_state_endpoint"; then
-      XRAY_PREFERRED_ENDPOINT="$xray_state_endpoint"
-    fi
-  fi
-
-  if [[ "$DOH_ENABLED" == "1" ]]; then
-    doh_flag="开"
-  fi
-  if [[ "$WARP_ENABLED" == "1" ]]; then
-    warp_flag="开"
+    xr_argo="运行中"
   fi
 
   print_section_header "zargo 临时隧道" "$C_YELLOW" 78
-  status_pair_line "平台：" "$(runtime_label)" "脚本 v${SCRIPT_VERSION}"
-  status_pair_line "内核：" "sing-box ${sb}" "Xray ${xr}"
-  status_pair_line_parts "隧道：" "sing-box " "$argo" "Xray " "$xargo" "$argo_color" "$xargo_color"
-  status_pair_line_parts "入口：" "sing-box " "${LOCAL_PORT}" "Xray " "${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}" "$C_YELLOW" "$C_YELLOW"
-  status_pair_line_parts "优选：" "sing-box " "${PREFERRED_ENDPOINT:-未设置}" "Xray " "${XRAY_PREFERRED_ENDPOINT:-未设置}" "$C_YELLOW" "$C_YELLOW"
-  status_pair_outbound_line "出站：" "$doh_flag" "$warp_flag" "$(outbound_ip_mode_label)"
-  status_domain_block "$host" "$xhost"
+  status_core_line "sing-box：" "$sb_version" "$sb_state"
+  status_core_line "Xray：" "$xr_version" "$xr_state"
+  status_argo_line "$sb_argo" "$xr_argo"
   print_section_footer "$C_CYAN" 78
 }
+
 run_menu_action() {
   local fn="$1"
   local rc=0
