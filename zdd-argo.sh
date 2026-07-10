@@ -5489,6 +5489,16 @@ cloudflared_pid_is_ours() {
   cloudflared_identity_matches "$pid" "$recorded_start"
 }
 
+singbox_runtime_is_running() {
+  [[ -n "$CLOUDFLARED_BIN" ]] || resolve_cloudflared_bin
+  [[ -n "$CLOUDFLARED_BIN" ]] || return 1
+
+  service_is_active \
+    && listener_exact_loopback \
+    && tunnel_is_running \
+    && cloudflared_pid_is_ours
+}
+
 signal_cloudflared_verified() {
   local signal_name="$1"
   local pid="$2"
@@ -6683,6 +6693,16 @@ xray_cloudflared_pid_is_ours() {
   xray_cloudflared_identity_matches "$pid" "$recorded_start"
 }
 
+xray_runtime_is_running() {
+  [[ -n "$CLOUDFLARED_BIN" ]] || resolve_cloudflared_bin
+  [[ -n "$CLOUDFLARED_BIN" ]] || return 1
+
+  xray_service_is_active \
+    && xray_listener_exact_loopback \
+    && xray_tunnel_is_running \
+    && xray_cloudflared_pid_is_ours
+}
+
 signal_xray_cloudflared_verified() {
   local signal_name="$1"
   local pid="$2"
@@ -6874,6 +6894,7 @@ generate_xray_vless_link() {
       encryption: $encryption,
       security: $security,
       sni: $sni,
+      vcn: $sni,
       host: $host,
       path: $path,
       type: $type,
@@ -6884,10 +6905,11 @@ generate_xray_vless_link() {
       echConfigList: $ech
     }' > "$tmp_json"
 
-  printf 'vless://%s@%s:443?encryption=%s&flow=xtls-rprx-vision&security=tls&sni=%s&fp=firefox&type=ws&host=%s&path=%s&alpn=http%%2F1.1&ech=%s&echConfigList=%s#%s\n' \
+  printf 'vless://%s@%s:443?encryption=%s&flow=xtls-rprx-vision&security=tls&sni=%s&vcn=%s&fp=firefox&type=ws&host=%s&path=%s&alpn=http%%2F1.1&ech=%s&echConfigList=%s#%s\n' \
     "$XRAY_UUID" \
     "$XRAY_PREFERRED_ENDPOINT" \
     "$enc_encryption" \
+    "$enc_sni" \
     "$enc_sni" \
     "$enc_sni" \
     "$enc_path" \
@@ -6907,6 +6929,7 @@ generate_xray_vless_link() {
         and .add == $add
         and .host == $host
         and .sni == $host
+        and .vcn == $host
         and .path == $path
         and .type == "ws"
         and .flow == "xtls-rprx-vision"
@@ -6914,7 +6937,8 @@ generate_xray_vless_link() {
         and .encryption == $encryption
         and .ech == $ech
         and .echConfigList == $ech' \
-      "$tmp_json" >/dev/null; then
+      "$tmp_json" >/dev/null \
+      || ! grep -Fq "&vcn=${enc_sni}" "$tmp_link"; then
     rm -f "$tmp_json" "$tmp_link"
     die "生成的 VLESS-ENC + WS 链接自检失败，未写入磁盘。"
   fi
@@ -7000,7 +7024,7 @@ show_xray_subscription() {
   local running="否"
   local parsed_host=""
 
-  if xray_tunnel_is_running; then
+  if xray_runtime_is_running; then
     running="是"
     parsed_host="$(extract_xray_argo_host || true)"
     if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
@@ -7024,6 +7048,10 @@ show_xray_subscription() {
   print_section_footer "$C_GREEN" 78
 
   if [[ -f "$XRAY_VLESS_LINK_FILE" ]]; then
+    if ! xray_runtime_is_running; then
+      warn "Xray 或其临时 Argo 隧道当前未完整运行；下面是保存的旧链接，目前不可用。"
+    fi
+
     printf '\n%sXray 分享链接：%s\n' "$C_CYAN" "$C_RESET"
     cat "$XRAY_VLESS_LINK_FILE"
     printf '\n保存位置： %s\n' "$XRAY_VLESS_LINK_FILE"
@@ -7464,7 +7492,7 @@ show_subscription() {
   local running="否"
   local parsed_host=""
 
-  if tunnel_is_running; then
+  if singbox_runtime_is_running; then
     running="是"
     parsed_host="$(extract_argo_host || true)"
 
@@ -7500,8 +7528,8 @@ show_subscription() {
   printf '\n'
 
   if [[ -f "$VMESS_LINK_FILE" ]]; then
-    if ! tunnel_is_running; then
-      warn "后台隧道当前未运行；下面是保存的旧链接，目前不可用。"
+    if ! singbox_runtime_is_running; then
+      warn "sing-box 或其临时 Argo 隧道当前未完整运行；下面是保存的旧链接，目前不可用。"
     fi
 
     printf '%ssing-box 分享链接：%s\n' "$C_CYAN" "$C_RESET"
@@ -7651,7 +7679,7 @@ show_status() {
   fi
 
   print_aligned_label "Argo / tmux：" 22
-  if tunnel_is_running; then
+  if singbox_runtime_is_running; then
     printf '%s运行中%s（会话：%s）\n' "$C_GREEN" "$C_RESET" "$(active_tunnel_session 2>/dev/null || printf '%s' "$TMUX_SESSION")"
   else
     printf '%s未运行%s\n' "$C_RED" "$C_RESET"
@@ -7669,7 +7697,7 @@ show_status() {
     else
       print_kv "Xray 服务：" "未运行" 22
     fi
-    if xray_tunnel_is_running; then
+    if xray_runtime_is_running; then
       print_kv "Xray Argo：" "运行中" 22
     else
       print_kv "Xray Argo：" "未运行" 22
@@ -7732,9 +7760,8 @@ command_update_singbox() {
 
     write_singbox_service
 
-    if [[ $config_refresh -eq 1 ]]; then
-      service_restart || true
-    fi
+    service_restart \
+      || die "$(printf '%s' "sing-box 已更新，但服务重启失败；拒绝继续使用旧进程。")"
 
     if ! wait_for_singbox_ready; then
       ensure_singbox_running
@@ -7766,6 +7793,9 @@ command_update_xray() {
       || die "更新后的 Xray 无法通过现有 VLESS-ENC + WS 配置校验。"
 
     write_xray_service
+
+    xray_service_restart \
+      || die "Xray 已更新，但服务重启失败；拒绝继续使用旧进程。"
 
     if ! wait_for_xray_ready; then
       ensure_xray_running
@@ -7827,6 +7857,15 @@ command_update_components() {
   command_update_xray
   command_update_cloudflared
   command_update_wgcf
+
+  if singbox_runtime_is_running; then
+    load_state
+    generate_vmess_link
+  fi
+  if xray_runtime_is_running; then
+    load_xray_state
+    generate_xray_vless_link
+  fi
 
   deployment_transaction_commit
   ok "sing-box、Xray、cloudflared 与 WARP 工具已完成更新检查。"
@@ -8384,10 +8423,10 @@ menu_header_status() {
     [[ -n "$xr_version" ]] || xr_version="已安装"
   fi
 
-  if service_is_active; then
+  if singbox_runtime_is_running; then
     sb_state="运行中"
   fi
-  if xray_service_is_active; then
+  if xray_runtime_is_running; then
     xr_state="运行中"
   fi
 
