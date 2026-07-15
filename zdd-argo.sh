@@ -1,8678 +1,7892 @@
-#!/usr/bin/env bash
-set -Eeuo pipefail
-IFS=$'\n\t'
-umask 077
+#!/bin/bash
 
-SCRIPT_VERSION="0.1.0"
-BUILD_ID="SINGBOX-WARP-DOH-MENU-STRATEGY-AUDIT-20260710"
-DEFAULT_NODE_NAME="zdd-argo"
-DEFAULT_LOCAL_PORT="10000"
-DEFAULT_XRAY_NODE_NAME="$DEFAULT_NODE_NAME"
-DEFAULT_XRAY_LOCAL_PORT="10001"
-DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
-DEFAULT_XRAY_PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-DEFAULT_DOH_ENABLED="0"
-DEFAULT_WARP_ENABLED="0"
-DEFAULT_OUTBOUND_IP_MODE="prefer_ipv4"
-NODE_NAME="$DEFAULT_NODE_NAME"
-LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-XRAY_NODE_NAME="$DEFAULT_XRAY_NODE_NAME"
-XRAY_LOCAL_PORT="$DEFAULT_XRAY_LOCAL_PORT"
-PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-DOH_ENABLED="$DEFAULT_DOH_ENABLED"
-WARP_ENABLED="$DEFAULT_WARP_ENABLED"
-OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
-ECH_CONFIG="cloudflare-ech.com+https://doh.pub/dns-query"
-SETTINGS_CONFIGURED=0
-TMUX_SESSION="zdd-argo-singbox"
-LEGACY_TMUX_SESSION="zdd-argo"
-XRAY_TMUX_SESSION="zdd-argo-xr"
-SERVICE_NAME="zdd-argo-singbox"
-XRAY_SERVICE_NAME="zdd-argo-xray"
-SERVICE_USER="zdd-argo-svc"
-SERVICE_GROUP="zdd-argo-svc"
-SERVICE_HOME="/var/lib/zdd-argo"
-SERVICE_MARKER="${SERVICE_HOME}/.managed-by-zdd-argo"
-SERVICE_MARKER_CONTENT="zdd-argo-service-account-v0.1.0"
-SERVICE_SHELL="/usr/sbin/nologin"
-OS_ID=""
-INIT_SYSTEM=""
+set -u
+set -o pipefail
 
-DATA_DIR="/etc/zdd-argo"
-STATE_JSON="${DATA_DIR}/state.json"
-LEGACY_STATE_FILE="${DATA_DIR}/state.env"
-SINGBOX_CONFIG="${DATA_DIR}/sing-box.json"
-XRAY_CONFIG="${DATA_DIR}/xray-vlessenc-ws.json"
-XRAY_STATE_JSON="${DATA_DIR}/xray-state.json"
-SINGBOX_SYSTEMD_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
-SINGBOX_OPENRC_SERVICE="/etc/init.d/${SERVICE_NAME}"
-XRAY_SYSTEMD_UNIT="/etc/systemd/system/${XRAY_SERVICE_NAME}.service"
-XRAY_OPENRC_SERVICE="/etc/init.d/${XRAY_SERVICE_NAME}"
-SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
-XRAY_UNIT="$XRAY_SYSTEMD_UNIT"
-CLOUDFLARED_RUNNER="${DATA_DIR}/run-cloudflared.sh"
-XRAY_CLOUDFLARED_RUNNER="${DATA_DIR}/run-cloudflared-xray.sh"
-CLOUDFLARED_HOME="${SERVICE_HOME}/cloudflared-home"
-XRAY_CLOUDFLARED_HOME="${SERVICE_HOME}/cloudflared-home-xray"
-CLOUDFLARED_PID_FILE="${DATA_DIR}/cloudflared.pid"
-XRAY_CLOUDFLARED_PID_FILE="${DATA_DIR}/cloudflared-xray.pid"
-LOG_FILE="/var/log/zdd-argo-cloudflared.log"
-XRAY_LOG_FILE="/var/log/zdd-argo-xray-cloudflared.log"
-SINGBOX_LOG_FILE="/var/log/zdd-argo-singbox.log"
-XRAY_CORE_LOG_FILE="/var/log/zdd-argo-xray.log"
-LOGROTATE_CONFIG="/etc/logrotate.d/zdd-argo-cloudflared"
-VMESS_JSON_FILE="${DATA_DIR}/vmess.json"
-VMESS_LINK_FILE="${DATA_DIR}/vmess.txt"
-XRAY_VLESS_JSON_FILE="${DATA_DIR}/vless-ws.json"
-XRAY_VLESS_LINK_FILE="${DATA_DIR}/vless-ws.txt"
-ECH_NOTE_FILE="${DATA_DIR}/ech.txt"
-SETTINGS_JSON="${DATA_DIR}/settings.json"
-WARP_DIR="${DATA_DIR}/warp"
-WARP_ACCOUNT_FILE="${WARP_DIR}/wgcf-account.toml"
-WARP_PROFILE_FILE="${WARP_DIR}/wgcf-profile.conf"
-WARP_CHECK_FILE="${WARP_DIR}/warp-check.json"
-LOCK_DIR="/run/lock/zdd-argo.lock.d"
-LOCK_OWNER_FILE="${LOCK_DIR}/owner"
-SHORTCUT_PATH="/usr/local/bin/zargo"
-SHORTCUT_COMPAT_PATH="/usr/local/sbin/zargo"
-SHORTCUT_FALLBACK_PATH="/usr/bin/zargo"
-LEGACY_ZDD_PATHS=("/usr/bin/zdd" "/usr/local/sbin/zdd" "/usr/local/bin/zdd")
-LEGACY_SHORTCUT_PATH="/usr/local/sbin/zdd-argo"
-LEGACY_SHORTCUT_BIN="/usr/local/bin/zdd-argo"
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[0;33m'
+BRIGHT_YELLOW='\033[1;93m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+NC='\033[0m'
 
-BIN_DIR="/usr/local/lib/zdd-argo"
-SOURCE_RECORD_FILE="${BIN_DIR}/source-record"
-MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"
-MANAGED_SINGBOX_BIN="${BIN_DIR}/sing-box"
-MANAGED_XRAY_BIN="${BIN_DIR}/xray"
-MANAGED_CLOUDFLARED_BIN="${BIN_DIR}/cloudflared"
-MANAGED_WGCF_BIN="${BIN_DIR}/wgcf"
-SINGBOX_RELEASE_META="${BIN_DIR}/sing-box.release.json"
-XRAY_RELEASE_META="${BIN_DIR}/xray.release.json"
-CLOUDFLARED_RELEASE_META="${BIN_DIR}/cloudflared.release.json"
-WGCF_RELEASE_META="${BIN_DIR}/wgcf.release.json"
-GITHUB_API_BASE="https://api.github.com"
-
-SCRIPT_PATH=""
-UUID=""
-WSPATH=""
-ARGO_HOST=""
-XRAY_UUID=""
-XRAY_WS_PATH=""
-XRAY_ARGO_HOST=""
-XRAY_CREATED_AT=""
-XRAY_VLESS_ENCRYPTION=""
-XRAY_VLESS_DECRYPTION=""
-XRAY_KEY_PRIVATE=""
-XRAY_KEY_PUBLIC=""
-CREATED_AT=""
-SINGBOX_BIN=""
-XRAY_BIN=""
-CLOUDFLARED_BIN=""
-WGCF_BIN=""
-WARP_PRIVATE_KEY=""
-WARP_IPV4=""
-WARP_IPV6=""
-WARP_PEER_PUBLIC_KEY=""
-WARP_ENDPOINT_ADDRESS=""
-WARP_ENDPOINT_PORT=""
-WARP_PROFILE_ENDPOINT_PORT=""
-WARP_MTU="1280"
-MENU_MODE=0
-LOCK_HELD=0
-LOCK_OWNER_PID=""
-LOCK_OWNER_START=""
-LOCK_DIR_INODE=""
+AUTHOR_NAME="Doudou Zhang"
+SCRIPT_VERSION="v 0.2.1"
+UI_WIDTH=60
+DATA_DIR="/usr/local/share/doudou-xray"
+SELF_DIR="/usr/local/lib/doudou"
+SELF_SCRIPT_PATH="${SELF_DIR}/xray_manager.sh"
+SOURCE_RECORD_FILE="${SELF_DIR}/source-record"
+SCRIPT_REMOTE_URL="https://raw.githubusercontent.com/WhiteMitty/xray-manager/main/xray-manager.sh"
+QUICK_BIN="/usr/local/bin/zxray"
+LEGACY_QUICK_BIN="/usr/local/bin/zdd"
+INFO_FILE="${DATA_DIR}/xray_node_info.txt"
+SUB_FILE="${DATA_DIR}/xray_subscription.txt"
+CONFIG_FILE="/usr/local/etc/xray/config.json"
+CONFIG_DIR="/usr/local/etc/xray"
+SNI_POOL_FILE="${DATA_DIR}/.xray_sni_pool"
+SYSCTL_BBR_FILE="/etc/sysctl.d/99-bbr.conf"
+SYSCTL_BBR_BACKUP_FILE="${DATA_DIR}/sysctl_99-bbr.conf.original"
+XHTTP_PATCH_DIR="${DATA_DIR}/xhttp_patches"
+DEFAULT_PORT=443
+REALITY_GATE_PORT=4431
+REALITY_GATE_RULES_JSON=""
+TMP_FILES=()
+BEST_DEST=""
+BEST_DEST_POOL_SIG=""
+SNI_POOL_SOURCE="default"
+QUICK_INSTALL=0
+QUICK_UNINSTALL=0
+QUICK_UPDATE=0
+QUICK_FORCE=0
+QUICK_SCENARIO=""
+SERVICE_KIND_FILE="${DATA_DIR}/.install_kind"
+ALPINE_SS_CONFIG_DIR="/etc/shadowsocks-rust"
+ALPINE_SS_CONFIG_FILE="${ALPINE_SS_CONFIG_DIR}/ssserver.json"
+ALPINE_SS_SERVICE_FILE="/etc/init.d/ssserver"
+ALPINE_XRAY_SERVICE_FILE="/etc/init.d/xray"
+ALPINE_RESOLV_BACKUP="${DATA_DIR}/alpine_resolv.conf.bak"
+ALPINE_REPO_BACKUP_FILE="${DATA_DIR}/alpine_repositories.original"
+GLOBAL_LOCK_FILE="/run/lock/doudou-xray-manager.lock"
+GLOBAL_LOCK_MODE=""
+GLOBAL_LOCK_DIR=""
 TRANSACTION_ACTIVE=0
-TRANSACTION_SCOPE="all"
 TRANSACTION_DIR=""
-TRANSACTION_OLD_SERVICE_ACTIVE=0
-TRANSACTION_OLD_TUNNEL_RUNNING=0
-TRANSACTION_OLD_XRAY_SERVICE_ACTIVE=0
-TRANSACTION_OLD_XRAY_TUNNEL_RUNNING=0
-TRANSACTION_OLD_SERVICE_ACCOUNT=0
-TRANSACTION_OLD_SERVICE_GROUP=0
-TRANSACTION_OLD_SERVICE_HOME=0
+TRANSACTION_RUNTIME=""
+TRANSACTION_XRAY_ACTIVE=0
+TRANSACTION_XRAY_ENABLED=0
+TRANSACTION_SS_ACTIVE=0
+TRANSACTION_SS_ENABLED=0
+TRANSACTION_SS_PACKAGE_PRESENT=0
+TRANSACTION_CONGESTION_CONTROL=""
+TRANSACTION_DEFAULT_QDISC=""
+TRANSACTION_PATHS=()
+TRANSACTION_PRESENT=()
 
-if [[ -t 1 ]]; then
-  C_GREEN=$'\033[32m'
-  C_YELLOW=$'\033[1;93m'
-  C_RED=$'\033[31m'
-  C_CYAN=$'\033[36m'
-  C_BOLD=$'\033[1m'
-  C_RESET=$'\033[0m'
-else
-  C_GREEN=""
-  C_YELLOW=""
-  C_RED=""
-  C_CYAN=""
-  C_BOLD=""
-  C_RESET=""
+if [[ ! -t 1 || -n "${NO_COLOR:-}" ]]; then
+    RED=''
+    GREEN=''
+    YELLOW=''
+    BRIGHT_YELLOW=''
+    CYAN=''
+    BOLD=''
+    NC=''
+elif command -v tput >/dev/null 2>&1; then
+    terminal_width=$(tput cols 2>/dev/null || true)
+    if [[ "$terminal_width" =~ ^[0-9]+$ ]]; then
+        (( terminal_width < 50 )) && UI_WIDTH="$terminal_width"
+        (( terminal_width > 80 )) && UI_WIDTH=80
+    fi
+    unset terminal_width
 fi
 
-read_interactive() {
-  local variable_name="$1"
-  local prompt="${2:-}"
-  local default_value="${3:-}"
-  local value=""
-  local input_fd=0
+DEFAULT_DEST_OPTIONS=(
+    "c.6sc.co"
+    "www.aws.com"
+    "www.amd.com"
+    "www.sony.com"
+    "www.tesla.com"
+    "www.intel.com"
+    "www.adobe.com"
+    "www.amazon.com"
+    "drivers.amd.com"
+    "a0.awsstatic.com"
+    "d1.awsstatic.com"
+    "s0.awsstatic.com"
+    "gateway.icloud.com"
+    "m.media-amazon.com"
+    "addons.mozilla.org"
+    "tag.demandbase.com"
+    "t0.m.awsstatic.com"
+    "images-na.ssl-images-amazon.com"
+    "i7158c100-ds-aksb-a.akamaihd.net"
+)
 
-  if [[ -t 0 ]]; then
-    input_fd=0
-  elif [[ -r /dev/tty ]]; then
-    exec {input_fd}</dev/tty 2>/dev/null || {
-      printf -v "$variable_name" '%s' "$default_value"
-      return 1
-    }
-  else
-    printf -v "$variable_name" '%s' "$default_value"
-    return 1
-  fi
-
-  if ! IFS= read -r -u "$input_fd" -p "$prompt" value; then
-    value="$default_value"
-  fi
-
-  if [[ $input_fd -ne 0 ]]; then
-    exec {input_fd}<&-
-  fi
-
-  printf -v "$variable_name" '%s' "$value"
+function line() {
+    local linebuf
+    printf -v linebuf '%*s' "$UI_WIDTH" ''
+    echo -e "${GREEN}${linebuf// /-}${NC}"
 }
 
-info() {
-  printf '%s[%s]%s %s\n' \
-    "$C_CYAN" \
-    "$(printf '%s' "信息")" \
-    "$C_RESET" \
-    "$*"
-}
+function center_text() {
+    local text="$1"
+    local width="${2:-$UI_WIDTH}"
+    local len=${#text}
+    local pad=0
 
-ok() {
-  printf '%s[%s]%s %s\n' \
-    "$C_GREEN" \
-    "$(printf '%s' "完成")" \
-    "$C_RESET" \
-    "$*"
-}
-
-warn() {
-  printf '%s[%s] %s%s\n' \
-    "$C_YELLOW" \
-    "$(printf '%s' "注意")" \
-    "$*" \
-    "$C_RESET"
-}
-
-error() {
-  printf '%s[%s]%s %s\n' \
-    "$C_RED" \
-    "$(printf '%s' "错误")" \
-    "$C_RESET" \
-    "$*" \
-    >&2
-}
-
-die() {
-  error "$*"
-  exit 1
-}
-
-clear_screen() {
-  if [[ -t 1 ]]; then
-    printf '\033[2J\033[H'
-  fi
-}
-
-ensure_utf8_locale() {
-  local current=""
-  local candidate=""
-
-  if command -v locale >/dev/null 2>&1; then
-    current="$(locale charmap 2>/dev/null || true)"
-    if [[ "${current^^}" == "UTF-8" || "${current^^}" == "UTF8" ]]; then
-      return 0
-    fi
-
-    for candidate in C.UTF-8 C.utf8 en_US.UTF-8 en_US.utf8; do
-      current="$(LC_ALL="$candidate" locale charmap 2>/dev/null || true)"
-      if [[ "${current^^}" == "UTF-8" || "${current^^}" == "UTF8" ]]; then
-        export LANG="$candidate"
-        export LC_ALL="$candidate"
+    if (( len >= width )); then
+        printf '%s\n' "$text"
         return 0
-      fi
-    done
-  fi
-
-  export LANG=C.UTF-8
-  export LC_ALL=C.UTF-8
-}
-
-text_is_valid_utf8() {
-  local value="$1"
-
-  if command -v iconv >/dev/null 2>&1; then
-    printf '%s' "$value" \
-      | iconv -f UTF-8 -t UTF-8 >/dev/null 2>&1
-    return
-  fi
-
-  return 0
-}
-
-text_display_width() {
-  local value="$1"
-  local width=""
-
-  if command -v wc >/dev/null 2>&1; then
-    width="$(printf '%s' "$value" | wc -L 2>/dev/null | tr -d '[:space:]' || true)"
-  fi
-
-  if [[ "$width" =~ ^[0-9]+$ ]]; then
-    printf '%s\n' "$width"
-  else
-    printf '%s\n' "${#value}"
-  fi
-}
-
-print_aligned_label() {
-  local label="$1"
-  local target_width="${2:-20}"
-  local actual_width=""
-  local padding=1
-
-  actual_width="$(text_display_width "$label")"
-  [[ "$actual_width" =~ ^[0-9]+$ ]] || actual_width="${#label}"
-
-  padding=$((target_width - actual_width))
-  ((padding >= 1)) || padding=1
-
-  printf '%s' "$label"
-  printf '%*s' "$padding" ''
-}
-
-print_kv() {
-  local label="$1"
-  local value="$2"
-  local target_width="${3:-20}"
-
-  print_aligned_label "$label" "$target_width"
-  printf '%s\n' "$value"
-}
-
-print_section_header() {
-  local title="$1"
-  local color="${2:-}"
-  local total_width="${3:-78}"
-  local title_width=""
-  local left=0
-  local right=0
-
-  title_width="$(text_display_width "$title")"
-  [[ "$title_width" =~ ^[0-9]+$ ]] || title_width="${#title}"
-
-  if ((title_width + 2 >= total_width)); then
-    printf '\n%s%s%s\n' "$color" "$title" "$C_RESET"
-    return 0
-  fi
-
-  left=$(((total_width - title_width - 2) / 2))
-  right=$((total_width - title_width - 2 - left))
-
-  printf '\n%s' "$C_CYAN"
-  printf '%*s' "$left" '' | tr ' ' '='
-  printf ' %s%s%s ' "$color" "$title" "$C_CYAN"
-  printf '%*s' "$right" '' | tr ' ' '='
-  printf '%s\n' "$C_RESET"
-}
-
-print_section_footer() {
-  local color="${1:-}"
-  local total_width="${2:-78}"
-
-  printf '%s' "$C_CYAN"
-  printf '%*s' "$total_width" '' | tr ' ' '='
-  printf '%s\n' "$C_RESET"
-}
-
-wait_for_zero() {
-  local prompt="$1"
-  local choice=""
-
-  if [[ ! -t 0 && ! -r /dev/tty ]]; then
-    return 0
-  fi
-
-  while true; do
-    if ! read_interactive choice "$prompt" ""; then
-      return 0
     fi
 
-    if [[ "$choice" == "0" ]]; then
-      return 0
+    pad=$(((width - len) / 2))
+    printf '%*s%s\n' "$pad" '' "$text"
+}
+
+function center_echo() {
+    local text="$1"
+    local color="${2:-}"
+    if [[ -n "$color" ]]; then
+        printf '%b' "$color"
+        center_text "$text"
+        printf '%b' "$NC"
+    else
+        center_text "$text"
+    fi
+}
+
+function clear_screen() {
+    if [[ -t 1 ]]; then
+        clear 2>/dev/null || printf 'c'
+    fi
+}
+
+function read_input() {
+    # 只用于交互提示；文件读取、数组拆分仍直接使用 Bash 内置 read。
+    # shellcheck disable=SC2162 # -r 是否启用由每个交互调用点显式决定。
+    if builtin read "$@"; then
+        return 0
     fi
 
-    warn "$(printf '%s' "请输入 0。")"
-  done
-}
-
-pause_screen() {
-  printf '\n'
-
-  wait_for_zero "$(printf '%s' "输入 0 返回菜单：")"
-}
-
-resolve_script_path() {
-  local candidate="${BASH_SOURCE[0]:-}"
-  local dir=""
-  local base=""
-
-  if [[ -z "$candidate" ]]; then
-    SCRIPT_PATH=""
-    return 0
-  fi
-
-  if [[ "$candidate" != /* ]]; then
-    candidate="$(pwd)/$candidate"
-  fi
-
-  dir="$(dirname -- "$candidate")"
-  base="$(basename -- "$candidate")"
-
-  dir="$(
-    cd -- "$dir" 2>/dev/null \
-      && pwd -P \
-      || printf '%s' "$dir"
-  )"
-
-  SCRIPT_PATH="${dir}/${base}"
-}
-
-require_root() {
-  [[ ${EUID:-$(id -u)} -eq 0 ]] \
-    || die "$(printf '%s' "请使用 root 运行此脚本。")"
-}
-
-check_os() {
-  [[ -r /etc/os-release ]] \
-    || die "$(printf '%s' "无法识别操作系统，仅支持 Debian / Ubuntu / Alpine。")"
-
-  source /etc/os-release
-  OS_ID="${ID:-}"
-
-  case "${ID:-}" in
-    debian|ubuntu)
-      INIT_SYSTEM="systemd"
-      SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
-      XRAY_UNIT="$XRAY_SYSTEMD_UNIT"
-      SERVICE_SHELL="/usr/sbin/nologin"
-      ;;
-
-    alpine)
-      INIT_SYSTEM="openrc"
-      SINGBOX_UNIT="$SINGBOX_OPENRC_SERVICE"
-      XRAY_UNIT="$XRAY_OPENRC_SERVICE"
-      if [[ -x /sbin/nologin ]]; then
-        SERVICE_SHELL="/sbin/nologin"
-      else
-        SERVICE_SHELL="/bin/false"
-      fi
-      ;;
-
-    *)
-      case " ${ID_LIKE:-} " in
-        *" debian "*)
-          INIT_SYSTEM="systemd"
-          SINGBOX_UNIT="$SINGBOX_SYSTEMD_UNIT"
-          XRAY_UNIT="$XRAY_SYSTEMD_UNIT"
-          SERVICE_SHELL="/usr/sbin/nologin"
-          ;;
-
-        *)
-          die "$(printf '%s' "当前系统为 ${PRETTY_NAME:-未知}，本脚本仅支持 Debian / Ubuntu / Alpine。")"
-          ;;
-      esac
-      ;;
-  esac
-}
-
-service_is_active() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl is-active --quiet "$SERVICE_NAME" 2>/dev/null
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" status >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_enable() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl enable "$SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-update add "$SERVICE_NAME" default >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_restart() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl restart "$SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" restart \
-        || rc-service "$SERVICE_NAME" start
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_stop() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl stop "$SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" stop >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_disable_now() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl disable --now "$SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" stop >/dev/null 2>&1 || true
-      rc-update del "$SERVICE_NAME" default >/dev/null 2>&1 || true
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_enable_now() {
-  service_enable || return 1
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl start "$SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" start >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-service_daemon_reload() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl daemon-reload >/dev/null 2>&1 || true
-      ;;
-    openrc)
-      :
-      ;;
-  esac
-}
-
-service_reset_failed() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl reset-failed "$SERVICE_NAME" >/dev/null 2>&1 || true
-      ;;
-    openrc)
-      :
-      ;;
-  esac
-}
-
-service_print_logs() {
-  local lines="${1:-80}"
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      journalctl \
-        -u "$SERVICE_NAME" \
-        -n "$lines" \
-        --no-pager \
-        >&2 \
-        || true
-      ;;
-    openrc)
-      rc-service "$SERVICE_NAME" status >&2 || true
-      ss -ltnp 2>/dev/null | grep -E "(^|:)${LOCAL_PORT}[[:space:]]" >&2 || true
-
-      if [[ -f "$SINGBOX_LOG_FILE" ]]; then
-        tail -n "$lines" "$SINGBOX_LOG_FILE" >&2 || true
-      else
-        warn "OpenRC 模式未找到 sing-box 日志文件：${SINGBOX_LOG_FILE}"
-      fi
-      ;;
-  esac
-}
-
-runtime_label() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      printf '%s' "Debian/Ubuntu + systemd"
-      ;;
-    openrc)
-      printf '%s' "Alpine + OpenRC"
-      ;;
-    *)
-      printf '%s' "未知"
-      ;;
-  esac
-}
-
-download_tool_available() {
-  command -v curl >/dev/null 2>&1 \
-    || wget_is_usable
-}
-
-wget_is_usable() {
-  command -v wget >/dev/null 2>&1 || return 1
-  wget --version >/dev/null 2>&1
-}
-
-ensure_download_tool() {
-  [[ -n "$INIT_SYSTEM" ]] || check_os
-
-  if download_tool_available; then
-    return 0
-  fi
-
-  info "未检测到 curl 或 wget，正在安装下载工具……"
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      command -v apt-get >/dev/null 2>&1 \
-        || die "未找到 curl/wget，且当前系统无法使用 apt-get 自动安装。"
-
-      export DEBIAN_FRONTEND=noninteractive
-      export NEEDRESTART_MODE=a
-      export APT_LISTCHANGES_FRONTEND=none
-
-      apt-get update \
-        || die "apt-get update 失败，无法安装 curl/wget。"
-      apt-get install -y curl wget ca-certificates \
-        || die "curl/wget 安装失败。"
-      ;;
-    openrc)
-      command -v apk >/dev/null 2>&1 \
-        || die "未找到 curl/wget，且当前系统无法使用 apk 自动安装。"
-
-      apk add --no-cache curl wget ca-certificates \
-        || die "Alpine curl/wget 安装失败。"
-      ;;
-    *)
-      die "未检测到 curl/wget，且无法识别系统包管理器。"
-      ;;
-  esac
-
-  download_tool_available \
-    || die "已尝试安装 curl/wget，但仍未检测到可用下载工具。"
-}
-
-ensure_alpine_binary_compat() {
-  [[ "$INIT_SYSTEM" == "openrc" ]] || return 0
-  command -v apk >/dev/null 2>&1 \
-    || return 1
-
-  if apk info -e gcompat >/dev/null 2>&1; then
-    apk info -e libstdc++ >/dev/null 2>&1 \
-      || apk add --no-cache libstdc++ >/dev/null 2>&1 \
-      || true
-    return 0
-  fi
-
-  if apk info -e libc6-compat >/dev/null 2>&1; then
-    apk info -e libstdc++ >/dev/null 2>&1 \
-      || apk add --no-cache libstdc++ >/dev/null 2>&1 \
-      || true
-    return 0
-  fi
-
-  info "Alpine 正在安装二进制兼容库（gcompat/libstdc++）……"
-  if apk add --no-cache gcompat libstdc++ >/dev/null 2>&1; then
-    return 0
-  fi
-
-  ensure_alpine_community_repo || true
-  if apk add --no-cache gcompat libstdc++ >/dev/null 2>&1; then
-    return 0
-  fi
-
-  warn "gcompat 安装失败，尝试 libc6-compat/libstdc++ 兼容层。"
-  if apk add --no-cache libc6-compat libstdc++ >/dev/null 2>&1; then
-    return 0
-  fi
-
-  warn "无法自动安装 Alpine 二进制兼容库；如仍自检失败，请手动启用 community 仓库后安装 gcompat。"
-  return 1
-}
-
-ensure_alpine_community_repo() {
-  local repo_file="/etc/apk/repositories"
-  local release_line=""
-  local branch=""
-  local community_line=""
-
-  [[ "$INIT_SYSTEM" == "openrc" ]] || return 0
-  [[ -f "$repo_file" ]] || return 1
-
-  if grep -Eq '^[[:space:]]*https?://.*/community([[:space:]]|$)' "$repo_file"; then
-    return 0
-  fi
-
-  release_line="$(cat /etc/alpine-release 2>/dev/null || true)"
-  if [[ "$release_line" =~ ^([0-9]+)\.([0-9]+) ]]; then
-    branch="v${BASH_REMATCH[1]}.${BASH_REMATCH[2]}"
-  else
-    branch="edge"
-  fi
-
-  community_line="https://dl-cdn.alpinelinux.org/alpine/${branch}/community"
-  warn "未检测到 Alpine community 仓库，正在追加：${community_line}"
-  printf '%s\n' "$community_line" >> "$repo_file" \
-    || return 1
-  apk update >/dev/null 2>&1 || true
-}
-
-print_binary_run_error() {
-  local binary="$1"
-  local err_file=""
-
-  shift
-  err_file="$(mktemp)"
-  "$binary" "$@" >/dev/null 2>"$err_file" || true
-
-  if [[ -s "$err_file" ]]; then
-    warn "二进制运行错误：$(head -n 1 "$err_file")"
-  fi
-
-  rm -f "$err_file"
-}
-
-singbox_version_ok() {
-  local binary="$1"
-  local first_line=""
-
-  first_line="$("$binary" version 2>/dev/null | head -n 1 || true)"
-  [[ "$first_line" == sing-box\ version\ * ]]
-}
-
-cloudflared_version_ok() {
-  local binary="$1"
-  local first_line=""
-
-  first_line="$("$binary" --version 2>/dev/null | head -n 1 || true)"
-  [[ "${first_line,,}" == cloudflared\ version\ * ]]
-}
-
-wgcf_version_ok() {
-  local binary="$1"
-  local help_text=""
-
-  help_text="$("$binary" --help 2>&1 || true)"
-  [[ "$help_text" == *"WireGuard Cloudflare Warp utility"* \
-    || "$help_text" == *"wgcf is a utility for Cloudflare Warp"* ]]
-}
-
-xray_version_ok() {
-  local binary="$1"
-  local first_line=""
-
-  first_line="$("$binary" version 2>/dev/null | head -n 1 || true)"
-  [[ "$first_line" == Xray\ * || "$first_line" == *"Xray"* ]]
-}
-
-install_dependencies() {
-  local missing=0
-  local cmd=""
-
-  [[ -n "$INIT_SYSTEM" ]] || check_os
-
-  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    [[ -d /run/systemd/system ]] \
-      || die "当前系统不是由 systemd 管理，无法创建后台服务。"
-
-    command -v systemctl >/dev/null 2>&1 \
-      || die "未找到 systemctl。"
-
-    command -v journalctl >/dev/null 2>&1 \
-      || die "未找到 journalctl。"
-
-    ensure_download_tool
-
-    for cmd in \
-      curl jq openssl tmux ss base64 awk sed grep tar unzip sha256sum find \
-      install mktemp readlink stat getent useradd groupadd userdel groupdel \
-      setpriv logrotate wc iconv locale
-    do
-      if ! command -v "$cmd" >/dev/null 2>&1; then
-        missing=1
-        break
-      fi
+    local last_arg=""
+    local arg=""
+    for arg in "$@"; do
+        last_arg="$arg"
     done
 
-    if [[ $missing -eq 1 ]]; then
-      info "安装 Debian / Ubuntu 基础依赖……"
-
-      export DEBIAN_FRONTEND=noninteractive
-      export NEEDRESTART_MODE=a
-      export APT_LISTCHANGES_FRONTEND=none
-
-      apt-get update \
-        || die "apt-get update 失败。"
-
-      apt-get install -y \
-        curl wget jq openssl ca-certificates tmux iproute2 coreutils tar unzip \
-        findutils grep sed gawk passwd util-linux logrotate libc-bin \
-        || die "基础依赖安装失败。"
-    fi
-  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-    command -v apk >/dev/null 2>&1 \
-      || die "Alpine 模式未找到 apk。"
-
-    if ! command -v rc-service >/dev/null 2>&1 \
-        || ! command -v rc-update >/dev/null 2>&1; then
-      info "未检测到完整 OpenRC 工具，正在安装 openrc……"
-      apk add --no-cache openrc \
-        || die "Alpine openrc 安装失败。"
+    if [[ -n "$last_arg" && "$last_arg" != -* && "$last_arg" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+        printf -v "$last_arg" '%s' ""
     fi
 
-    command -v rc-service >/dev/null 2>&1 \
-      || die "Alpine 模式未找到 rc-service；请确认当前系统使用 OpenRC。"
-    command -v rc-update >/dev/null 2>&1 \
-      || die "Alpine 模式未找到 rc-update；请确认当前系统使用 OpenRC。"
+    if [[ "${QUICK_INSTALL:-0}" != "1" && "${QUICK_FORCE:-0}" != "1" ]]; then
+        echo -e "\n${YELLOW}检测到输入结束（EOF），脚本将安全退出。${NC}" >&2
+        cleanup_tmp_files
+        exit 0
+    fi
+    return 1
+}
 
-    ensure_download_tool
+function add_tmp_file() {
+    local f="$1"
+    [[ -n "$f" ]] && TMP_FILES+=("$f")
+}
 
-    for cmd in \
-      curl jq openssl tmux ss base64 awk sed grep tar unzip sha256sum find \
-      install mktemp readlink stat getent useradd groupadd userdel groupdel \
-      su-exec logrotate wc
-    do
-      if ! command -v "$cmd" >/dev/null 2>&1; then
-        missing=1
-        break
-      fi
+function cleanup_tmp_files() {
+    local f
+    for f in "${TMP_FILES[@]-}"; do
+        [[ -n "$f" && -e "$f" ]] && rm -f -- "$f"
     done
+    TMP_FILES=()
+}
 
-    if [[ $missing -eq 1 ]]; then
-      info "安装 Alpine / OpenRC 基础依赖……"
-
-      apk add --no-cache \
-        bash curl wget jq openssl ca-certificates tmux iproute2 coreutils tar unzip \
-        findutils grep sed gawk shadow su-exec logrotate musl-utils \
-        || die "Alpine 基础依赖安装失败。"
+function release_global_lock() {
+    if [[ "$GLOBAL_LOCK_MODE" == "mkdir" && -n "$GLOBAL_LOCK_DIR" && -d "$GLOBAL_LOCK_DIR" ]]; then
+        local owner_pid=""
+        owner_pid=$(head -n 1 "${GLOBAL_LOCK_DIR}/owner" 2>/dev/null || true)
+        if [[ "$owner_pid" == "$$" ]]; then
+            rm -rf -- "$GLOBAL_LOCK_DIR" >/dev/null 2>&1 || true
+        fi
     fi
-
-    ensure_alpine_binary_compat || true
-  else
-    die "无法识别服务管理器，当前 INIT_SYSTEM=${INIT_SYSTEM:-unknown}。"
-  fi
+    GLOBAL_LOCK_MODE=""
+    GLOBAL_LOCK_DIR=""
 }
 
-process_start_time() {
-  local pid="$1"
-  local stat_line=""
-  local remainder=""
-  local start_time=""
-  local -a fields=()
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ -r "/proc/${pid}/stat" ]] || return 1
-
-  IFS= read -r stat_line < "/proc/${pid}/stat" \
-    || return 1
-
-  [[ "$stat_line" == *") "* ]] || return 1
-  remainder="${stat_line##*) }"
-
-  IFS=' ' read -r -a fields <<< "$remainder"
-  [[ ${#fields[@]} -ge 20 ]] || return 1
-
-  start_time="${fields[19]}"
-  [[ "$start_time" =~ ^[0-9]+$ ]] || return 1
-  printf '%s\n' "$start_time"
-}
-
-process_state() {
-  local pid="$1"
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ -r "/proc/${pid}/status" ]] || return 1
-
-  awk '
-    $1 == "State:" {
-      print substr($2, 1, 1)
-      exit
-    }
-  ' "/proc/${pid}/status" 2>/dev/null
-}
-
-process_command_line() {
-  local pid="$1"
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ -r "/proc/${pid}/cmdline" ]] || return 1
-
-  tr '\0' ' ' \
-    < "/proc/${pid}/cmdline" \
-    2>/dev/null
-}
-
-process_effective_uid() {
-  local pid="$1"
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ -r "/proc/${pid}/status" ]] || return 1
-
-  awk '
-    $1 == "Uid:" {
-      print $3
-      exit
-    }
-  ' "/proc/${pid}/status" 2>/dev/null
-}
-
-process_is_zdd_operation() {
-  local pid="$1"
-  local uid=""
-  local cmdline=""
-
-  uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
-  [[ "$uid" == "0" ]] || return 1
-
-  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
-  [[ -n "$cmdline" ]] || return 1
-
-  [[ ( -n "$SCRIPT_PATH" && "$cmdline" == *"${SCRIPT_PATH}"* ) \
-    || "$cmdline" == *"${MANAGED_SCRIPT_PATH}"* \
-    || "$cmdline" == *"${SHORTCUT_PATH}"* \
-    || "$cmdline" == *"${SHORTCUT_COMPAT_PATH}"* \
-    || "$cmdline" == *"${SHORTCUT_FALLBACK_PATH}"* ]]
-}
-
-secure_root_directory() {
-  local path="$1"
-  local uid=""
-  local mode=""
-
-  [[ -d "$path" && ! -L "$path" ]] || return 1
-  uid="$(stat -Lc '%u' "$path" 2>/dev/null || true)"
-  mode="$(stat -Lc '%a' "$path" 2>/dev/null || true)"
-
-  [[ "$uid" == "0" && "$mode" == "700" ]]
-}
-
-secure_root_file() {
-  local path="$1"
-  local uid=""
-  local mode=""
-
-  [[ -f "$path" && ! -L "$path" ]] || return 1
-  uid="$(stat -Lc '%u' "$path" 2>/dev/null || true)"
-  mode="$(stat -Lc '%a' "$path" 2>/dev/null || true)"
-
-  [[ "$uid" == "0" && "$mode" == "600" ]]
-}
-
-read_lock_owner() {
-  local lock_path="${1:-$LOCK_DIR}"
-  local owner_file="${lock_path}/owner"
-  local pid=""
-  local start=""
-  local operation=""
-  local extra=""
-
-  secure_root_directory "$lock_path" || return 1
-  secure_root_file "$owner_file" || return 1
-
-  IFS=' ' read -r pid start operation extra < "$owner_file" \
-    || return 1
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  [[ "$start" =~ ^[0-9]+$ ]] || return 1
-  [[ "$operation" =~ ^[A-Za-z0-9_.:-]+$ ]] || operation="unknown"
-  [[ -z "$extra" ]] || return 1
-
-  printf '%s %s %s\n' "$pid" "$start" "$operation"
-}
-
-lock_owner_is_alive() {
-  local pid="$1"
-  local recorded_start="$2"
-  local actual_start=""
-  local state=""
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  state="$(process_state "$pid" 2>/dev/null || true)"
-
-  [[ -n "$actual_start" \
-    && "$actual_start" == "$recorded_start" \
-    && "$state" != "Z" \
-    && "$state" != "X" ]] \
-    || return 1
-
-  process_is_zdd_operation "$pid"
-}
-
-write_lock_owner() {
-  local operation="${1:-unknown}"
-  local owner_pid="$BASHPID"
-  local start=""
-  local tmp=""
-
-  [[ "$operation" =~ ^[A-Za-z0-9_.:-]+$ ]] || operation="unknown"
-
-  start="$(process_start_time "$owner_pid")" \
-    || {
-      rm -rf -- "$LOCK_DIR"
-      die "无法记录当前 zdd-argo 操作。"
+function acquire_global_lock() {
+    local lock_parent=""
+    local owner_info=""
+    local owner_pid=""
+    local lock_acquired=0
+    lock_parent=$(dirname -- "$GLOBAL_LOCK_FILE")
+    mkdir -p "$lock_parent" 2>/dev/null || {
+        echo -e "${RED}错误：无法创建全局锁目录 ${lock_parent}${NC}"
+        return 1
     }
 
-  tmp="${LOCK_DIR}/.owner.${owner_pid}"
-
-  if ! printf '%s %s %s\n' "$owner_pid" "$start" "$operation" > "$tmp"; then
-    rm -f "$tmp"
-    rm -rf -- "$LOCK_DIR"
-    die "无法写入 zdd-argo 操作锁信息。"
-  fi
-
-  if ! chmod 600 "$tmp" || ! mv -f "$tmp" "$LOCK_OWNER_FILE"; then
-    rm -f "$tmp"
-    rm -rf -- "$LOCK_DIR"
-    die "无法保存 zdd-argo 操作锁信息。"
-  fi
-
-  LOCK_OWNER_PID="$owner_pid"
-  LOCK_OWNER_START="$start"
-  LOCK_HELD=1
-  trap 'deployment_transaction_exit_handler $?' EXIT
-}
-
-release_lock() {
-  local pid=""
-  local start=""
-  local operation=""
-  local current_inode=""
-
-  [[ $LOCK_HELD -eq 1 ]] || return 0
-  [[ "$BASHPID" == "$LOCK_OWNER_PID" ]] || return 0
-
-  current_inode="$(
-    stat -Lc '%i' "$LOCK_DIR" 2>/dev/null \
-      || true
-  )"
-
-  if [[ -n "$LOCK_DIR_INODE" \
-      && "$current_inode" == "$LOCK_DIR_INODE" ]]; then
-
-    if IFS=' ' read -r \
-        pid \
-        start \
-        operation \
-        < <(read_lock_owner 2>/dev/null); then
-
-      if [[ "$pid" == "$LOCK_OWNER_PID" \
-          && "$start" == "$LOCK_OWNER_START" ]]; then
-        rm -f "$LOCK_OWNER_FILE"
-        rmdir "$LOCK_DIR" 2>/dev/null || true
-      fi
-    elif [[ ! -e "$LOCK_OWNER_FILE" ]]; then
-      rmdir "$LOCK_DIR" 2>/dev/null || true
-    fi
-  fi
-
-  LOCK_HELD=0
-  LOCK_OWNER_PID=""
-  LOCK_OWNER_START=""
-  LOCK_DIR_INODE=""
-}
-
-collect_descendants() {
-  local parent="$1"
-  local status=""
-  local child=""
-  local ppid=""
-
-  for status in /proc/[0-9]*/status; do
-    [[ -r "$status" ]] || continue
-
-    child="${status#/proc/}"
-    child="${child%/status}"
-
-    [[ "$child" =~ ^[0-9]+$ ]] || continue
-
-    ppid="$(
-      awk '
-        $1 == "PPid:" {
-          print $2
-          exit
+    if command -v flock >/dev/null 2>&1; then
+        exec 9>"$GLOBAL_LOCK_FILE" || {
+            echo -e "${RED}错误：无法打开全局锁 ${GLOBAL_LOCK_FILE}${NC}"
+            return 1
         }
-      ' "$status" 2>/dev/null \
-        || true
-    )"
-
-    [[ "$ppid" == "$parent" ]] || continue
-
-    collect_descendants "$child"
-    printf '%s\n' "$child"
-  done
-}
-
-snapshot_process_tree() {
-  local owner_pid="$1"
-  local pid=""
-  local start=""
-
-  while IFS= read -r pid; do
-    start="$(
-      process_start_time "$pid" \
-        2>/dev/null \
-        || true
-    )"
-
-    if [[ "$start" =~ ^[0-9]+$ ]]; then
-      printf '%s %s\n' \
-        "$pid" \
-        "$start"
-    fi
-  done < <(
-    collect_descendants "$owner_pid"
-  )
-
-  start="$(
-    process_start_time "$owner_pid" \
-      2>/dev/null \
-      || true
-  )"
-
-  if [[ "$start" =~ ^[0-9]+$ ]]; then
-    printf '%s %s\n' \
-      "$owner_pid" \
-      "$start"
-  fi
-}
-
-signal_process_tree() {
-  local signal_name="$1"
-  local snapshot_file="$2"
-  local pid=""
-  local recorded_start=""
-  local actual_start=""
-
-  while IFS=' ' read -r \
-      pid \
-      recorded_start
-  do
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-
-    [[ "$pid" != "$BASHPID" \
-      && "$pid" != "$$" ]] \
-      || continue
-
-    actual_start="$(
-      process_start_time "$pid" \
-        2>/dev/null \
-        || true
-    )"
-
-    [[ "$actual_start" == "$recorded_start" ]] \
-      || continue
-
-    kill "-${signal_name}" "$pid" \
-      2>/dev/null \
-      || true
-  done < "$snapshot_file"
-}
-
-wait_for_process_exit() {
-  local pid="$1"
-  local recorded_start="$2"
-  local seconds="$3"
-  local i=0
-
-  for ((i = 0; i < seconds; i++)); do
-    if ! lock_owner_is_alive \
-        "$pid" \
-        "$recorded_start"; then
-      return 0
+        if ! flock -n 9; then
+            owner_info=$(cat "$GLOBAL_LOCK_FILE" 2>/dev/null || true)
+            echo -e "${RED}错误：已有另一个 xray-manager 实例正在运行。${NC}"
+            [[ -n "$owner_info" ]] && echo -e "${YELLOW}${owner_info}${NC}"
+            return 1
+        fi
+        GLOBAL_LOCK_MODE="flock"
+        printf 'PID=%s  启动时间=%s  脚本=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" "${BASH_SOURCE[0]:-$0}" >&9
+        return 0
     fi
 
-    sleep 1
-  done
-
-  return 1
+    GLOBAL_LOCK_DIR="${GLOBAL_LOCK_FILE}.d"
+    if mkdir "$GLOBAL_LOCK_DIR" 2>/dev/null; then
+        lock_acquired=1
+    else
+        owner_pid=$(head -n 1 "${GLOBAL_LOCK_DIR}/owner" 2>/dev/null || true)
+        if [[ "$owner_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$owner_pid" 2>/dev/null; then
+            rm -rf -- "$GLOBAL_LOCK_DIR" >/dev/null 2>&1 || true
+            if mkdir "$GLOBAL_LOCK_DIR" 2>/dev/null; then
+                lock_acquired=1
+            fi
+        fi
+    fi
+    if [[ "$lock_acquired" != "1" ]]; then
+        owner_info=$(cat "${GLOBAL_LOCK_DIR}/details" 2>/dev/null || true)
+        echo -e "${RED}错误：已有另一个 xray-manager 实例正在运行。${NC}"
+        [[ -n "$owner_info" ]] && echo -e "${YELLOW}${owner_info}${NC}"
+        return 1
+    fi
+    GLOBAL_LOCK_MODE="mkdir"
+    printf '%s\n' "$$" > "${GLOBAL_LOCK_DIR}/owner"
+    printf 'PID=%s  启动时间=%s  脚本=%s\n' "$$" "$(date '+%Y-%m-%d %H:%M:%S')" "${BASH_SOURCE[0]:-$0}" > "${GLOBAL_LOCK_DIR}/details"
 }
 
-lock_operation_label() {
-  case "${1:-unknown}" in
-    command_generate_noninteractive)
-      printf '%s' "新建 sing-box VMess/WS（直出）"
-      ;;
-    command_generate_noninteractive_doh_warp)
-      printf '%s' "新建 sing-box VMess/WS（DoH + WARP）"
-      ;;
-    command_generate_custom)
-      printf '%s' "新建 sing-box VMess/WS（自定义）"
-      ;;
-    command_generate_xray_vlessenc_ws)
-      printf '%s' "新建 Xray VLESS-ENC/WS（直出）"
-      ;;
-    show_subscription|show_all_subscriptions|show_xray_subscription)
-      printf '%s' "查看当前订阅"
-      ;;
-    command_update_components)
-      printf '%s' "更新全部组件"
-      ;;
-    command_stop_clear_cache)
-      printf '%s' "停止全部隧道并清理缓存"
-      ;;
-    command_uninstall_all)
-      printf '%s' "完整卸载 zdd-argo（含 Xray）"
-      ;;
-    *)
-      printf '%s' "未知操作"
-      ;;
-  esac
+function reset_transaction_state() {
+    TRANSACTION_ACTIVE=0
+    TRANSACTION_DIR=""
+    TRANSACTION_RUNTIME=""
+    TRANSACTION_XRAY_ACTIVE=0
+    TRANSACTION_XRAY_ENABLED=0
+    TRANSACTION_SS_ACTIVE=0
+    TRANSACTION_SS_ENABLED=0
+    TRANSACTION_SS_PACKAGE_PRESENT=0
+    TRANSACTION_CONGESTION_CONTROL=""
+    TRANSACTION_DEFAULT_QDISC=""
+    TRANSACTION_PATHS=()
+    TRANSACTION_PRESENT=()
 }
 
-confirm_force() {
-  local prompt="$1"
-  local answer=""
+function begin_deployment_transaction() {
+    local runtime="$1"
+    local idx=""
+    local path=""
 
-  read_interactive answer "$prompt" "" \
-    || die "$(printf '%s' "此操作必须在交互式终端中执行。")"
+    if [[ "$TRANSACTION_ACTIVE" == "1" ]]; then
+        echo -e "${RED}  ✗ 内部错误：已有部署事务正在进行。${NC}"
+        return 1
+    fi
 
-  answer="${answer#"${answer%%[![:space:]]*}"}"
-  answer="${answer%"${answer##*[![:space:]]}"}"
+    TRANSACTION_DIR=$(mktemp -d /tmp/doudou-xray-transaction.XXXXXX) || {
+        echo -e "${RED}  ✗ 无法创建部署回滚目录。${NC}"
+        return 1
+    }
+    chmod 700 "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+    mkdir -p "${TRANSACTION_DIR}/items" || {
+        rm -rf -- "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+        reset_transaction_state
+        return 1
+    }
 
-  [[ "$answer" == "FORCE" ]]
+    TRANSACTION_RUNTIME="$runtime"
+    TRANSACTION_CONGESTION_CONTROL=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)
+    TRANSACTION_DEFAULT_QDISC=$(sysctl -n net.core.default_qdisc 2>/dev/null || true)
+    TRANSACTION_PATHS=(
+        "/usr/local/bin/xray"
+        "/usr/local/share/xray"
+        "/usr/local/etc/xray"
+        "$SYSCTL_BBR_FILE"
+        "$SYSCTL_BBR_BACKUP_FILE"
+        "$INFO_FILE"
+        "$SUB_FILE"
+        "$SERVICE_KIND_FILE"
+        "$XHTTP_PATCH_DIR"
+    )
+
+    case "$runtime" in
+        systemd)
+            TRANSACTION_PATHS+=(
+                "/etc/systemd/system/xray.service"
+                "/etc/systemd/system/xray@.service"
+                "/etc/systemd/system/xray.service.d"
+                "/etc/systemd/system/xray@.service.d"
+            )
+            systemctl is-active --quiet xray 2>/dev/null && TRANSACTION_XRAY_ACTIVE=1
+            systemctl is-enabled --quiet xray 2>/dev/null && TRANSACTION_XRAY_ENABLED=1
+            ;;
+        alpine)
+            TRANSACTION_PATHS+=(
+                "$ALPINE_XRAY_SERVICE_FILE"
+                "$ALPINE_SS_SERVICE_FILE"
+                "$ALPINE_SS_CONFIG_DIR"
+                "/etc/apk/repositories"
+                "$ALPINE_REPO_BACKUP_FILE"
+            )
+            rc-service xray status >/dev/null 2>&1 && TRANSACTION_XRAY_ACTIVE=1
+            rc-service ssserver status >/dev/null 2>&1 && TRANSACTION_SS_ACTIVE=1
+            rc-update show 2>/dev/null | grep -Eq '(^|[[:space:]])xray([[:space:]]|$)' && TRANSACTION_XRAY_ENABLED=1
+            rc-update show 2>/dev/null | grep -Eq '(^|[[:space:]])ssserver([[:space:]]|$)' && TRANSACTION_SS_ENABLED=1
+            apk info -e shadowsocks-rust >/dev/null 2>&1 && TRANSACTION_SS_PACKAGE_PRESENT=1
+            ;;
+        *)
+            echo -e "${RED}  ✗ 未知部署事务类型：${runtime}${NC}"
+            rm -rf -- "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+            reset_transaction_state
+            return 1
+            ;;
+    esac
+
+    TRANSACTION_PRESENT=()
+    for idx in "${!TRANSACTION_PATHS[@]}"; do
+        path="${TRANSACTION_PATHS[$idx]}"
+        if [[ -e "$path" || -L "$path" ]]; then
+            TRANSACTION_PRESENT[idx]=1
+            if ! cp -a -- "$path" "${TRANSACTION_DIR}/items/${idx}"; then
+                echo -e "${RED}  ✗ 无法备份部署事务文件：${path}${NC}"
+                rm -rf -- "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+                reset_transaction_state
+                return 1
+            fi
+        else
+            TRANSACTION_PRESENT[idx]=0
+        fi
+    done
+
+    TRANSACTION_ACTIVE=1
+    echo -e "${CYAN}  已建立部署事务快照；后续失败将自动恢复旧核心、配置与服务状态。${NC}"
 }
 
-quarantine_lock_dir() {
-  local expected_inode="$1"
-  local expected_pid="${2:-}"
-  local expected_start="${3:-}"
-  local quarantine=""
-  local moved_inode=""
-  local pid=""
-  local start=""
-  local operation=""
+function rollback_deployment_transaction() {
+    local idx=""
+    local path=""
+    local rollback_failed=0
 
-  [[ "$expected_inode" =~ ^[0-9]+$ ]] || return 1
+    [[ "$TRANSACTION_ACTIVE" == "1" ]] || return 0
+    echo -e "${YELLOW}  正在回滚本次部署...${NC}"
 
-  quarantine="${LOCK_DIR}.stale.${BASHPID}.${RANDOM}"
-  while [[ -e "$quarantine" || -L "$quarantine" ]]; do
-    quarantine="${LOCK_DIR}.stale.${BASHPID}.${RANDOM}"
-  done
+    case "$TRANSACTION_RUNTIME" in
+        systemd)
+            systemctl stop xray >/dev/null 2>&1 || true
+            ;;
+        alpine)
+            rc-service xray stop >/dev/null 2>&1 || true
+            rc-service ssserver stop >/dev/null 2>&1 || true
+            ;;
+    esac
 
-  mv -- "$LOCK_DIR" "$quarantine" 2>/dev/null || return 1
+    for idx in "${!TRANSACTION_PATHS[@]}"; do
+        path="${TRANSACTION_PATHS[$idx]}"
+        rm -rf -- "$path" >/dev/null 2>&1 || rollback_failed=1
+        if [[ "${TRANSACTION_PRESENT[$idx]:-0}" == "1" ]]; then
+            mkdir -p -- "$(dirname -- "$path")" >/dev/null 2>&1 || rollback_failed=1
+            cp -a -- "${TRANSACTION_DIR}/items/${idx}" "$path" >/dev/null 2>&1 || rollback_failed=1
+        fi
+    done
 
-  moved_inode="$(stat -Lc '%i' "$quarantine" 2>/dev/null || true)"
-  if [[ "$moved_inode" != "$expected_inode" ]]; then
-    if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
-      mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
+    case "$TRANSACTION_RUNTIME" in
+        systemd)
+            systemctl daemon-reload >/dev/null 2>&1 || true
+            systemctl reset-failed xray >/dev/null 2>&1 || true
+            if [[ "$TRANSACTION_XRAY_ENABLED" == "1" ]]; then
+                systemctl enable xray >/dev/null 2>&1 || rollback_failed=1
+            else
+                systemctl disable xray >/dev/null 2>&1 || true
+            fi
+            if [[ "$TRANSACTION_XRAY_ACTIVE" == "1" ]]; then
+                systemctl restart xray >/dev/null 2>&1 || rollback_failed=1
+            else
+                systemctl stop xray >/dev/null 2>&1 || true
+            fi
+            ;;
+        alpine)
+            if [[ "$TRANSACTION_SS_PACKAGE_PRESENT" == "0" ]] && apk info -e shadowsocks-rust >/dev/null 2>&1; then
+                apk del shadowsocks-rust mimalloc >/dev/null 2>&1 || true
+            fi
+            if [[ "$TRANSACTION_XRAY_ENABLED" == "1" ]]; then
+                rc-update add xray default >/dev/null 2>&1 || rollback_failed=1
+            else
+                rc-update del xray default >/dev/null 2>&1 || true
+            fi
+            if [[ "$TRANSACTION_SS_ENABLED" == "1" ]]; then
+                rc-update add ssserver default >/dev/null 2>&1 || rollback_failed=1
+            else
+                rc-update del ssserver default >/dev/null 2>&1 || true
+            fi
+            [[ "$TRANSACTION_XRAY_ACTIVE" == "1" ]] && rc-service xray start >/dev/null 2>&1 || true
+            [[ "$TRANSACTION_SS_ACTIVE" == "1" ]] && rc-service ssserver start >/dev/null 2>&1 || true
+            if [[ "$TRANSACTION_XRAY_ACTIVE" == "1" ]] && ! rc-service xray status >/dev/null 2>&1; then
+                rollback_failed=1
+            fi
+            if [[ "$TRANSACTION_SS_ACTIVE" == "1" ]] && ! rc-service ssserver status >/dev/null 2>&1; then
+                rollback_failed=1
+            fi
+            ;;
+    esac
+
+    if [[ -n "$TRANSACTION_CONGESTION_CONTROL" ]]; then
+        sysctl -w "net.ipv4.tcp_congestion_control=${TRANSACTION_CONGESTION_CONTROL}" >/dev/null 2>&1 || rollback_failed=1
+    fi
+    if [[ -n "$TRANSACTION_DEFAULT_QDISC" ]]; then
+        sysctl -w "net.core.default_qdisc=${TRANSACTION_DEFAULT_QDISC}" >/dev/null 2>&1 || rollback_failed=1
+    fi
+    rm -rf -- "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+    reset_transaction_state
+
+    if [[ "$rollback_failed" == "0" ]]; then
+        echo -e "${GREEN}  ✓ 已恢复部署前的核心、配置与服务状态。${NC}"
+        return 0
+    fi
+    echo -e "${RED}  ✗ 自动回滚未完全成功，请立即检查服务状态与配置。${NC}"
+    return 1
+}
+
+function commit_deployment_transaction() {
+    [[ "$TRANSACTION_ACTIVE" == "1" ]] || return 0
+    rm -rf -- "$TRANSACTION_DIR" >/dev/null 2>&1 || true
+    reset_transaction_state
+}
+
+function run_transactional() {
+    local runtime="$1"
+    local label="$2"
+    local implementation="$3"
+    shift 3
+    local ret=0
+
+    begin_deployment_transaction "$runtime" || return 1
+    "$implementation" "$@"
+    ret=$?
+    if [[ "$ret" -eq 0 ]]; then
+        commit_deployment_transaction
+        return 0
+    fi
+
+    echo -e "${RED}  ✗ ${label}未完成，开始自动恢复。${NC}"
+    rollback_deployment_transaction || true
+    return "$ret"
+}
+
+function _cleanup_on_interrupt() {
+    echo -e "\n${RED}>>> 脚本被中断，正在清理临时文件...${NC}"
+    rollback_deployment_transaction || true
+    cleanup_tmp_files
+    release_global_lock
+    echo -e "${YELLOW}  已清理临时文件，并尝试恢复中断前的服务状态。${NC}"
+    exit 1
+}
+
+function _cleanup_on_exit() {
+    if [[ "$TRANSACTION_ACTIVE" == "1" ]]; then
+        rollback_deployment_transaction || true
+    fi
+    cleanup_tmp_files
+    release_global_lock
+}
+trap '_cleanup_on_interrupt' INT TERM
+trap '_cleanup_on_exit' EXIT
+
+function resolve_self_source_path() {
+    if [[ -n "${BASH_SOURCE[0]:-}" && -r "${BASH_SOURCE[0]}" ]]; then
+        printf '%s\n' "${BASH_SOURCE[0]}"
+        return 0
+    fi
+
+    if [[ -r "/proc/$$/fd/255" ]]; then
+        printf '/proc/%s/fd/255\n' "$$"
+        return 0
+    fi
+
+    if [[ -r "$0" ]]; then
+        printf '%s\n' "$0"
+        return 0
+    fi
+
+    return 1
+}
+
+function materialize_self_source() {
+    local source_path="$1"
+    local target_path="$2"
+
+    cp -f -- "$source_path" "$target_path" 2>/dev/null && return 0
+    cat -- "$source_path" > "$target_path" 2>/dev/null && return 0
+    return 1
+}
+
+function record_source_file() {
+    local source_path="${1:-}"
+    local source_dir=""
+    local source_base=""
+    local source_sha=""
+    local record_tmp=""
+
+    [[ -n "$source_path" ]] || return 0
+    case "$source_path" in
+        /proc/*|/dev/*|/tmp/doudou-entry.*.sh)
+            return 0
+            ;;
+    esac
+    [[ -f "$source_path" && ! -L "$source_path" ]] || return 0
+
+    if [[ "$source_path" != /* ]]; then
+        source_dir=$(cd -- "$(dirname -- "$source_path")" 2>/dev/null && pwd -P) || return 0
+        source_base=$(basename -- "$source_path" 2>/dev/null || true)
+        [[ -n "$source_base" ]] || return 0
+        source_path="${source_dir}/${source_base}"
+    fi
+
+    [[ "$source_path" != "$SELF_SCRIPT_PATH" ]] || return 0
+    command -v sha256sum >/dev/null 2>&1 || return 0
+    source_sha=$(sha256sum -- "$source_path" 2>/dev/null | awk 'NR==1 {print $1}')
+    [[ "$source_sha" =~ ^[0-9a-fA-F]{64}$ ]] || return 0
+
+    record_tmp="${SOURCE_RECORD_FILE}.new.$$"
+    if ! (
+        umask 077
+        printf '%s\n%s\n' "$source_path" "${source_sha,,}" > "$record_tmp"
+    ); then
+        rm -f -- "$record_tmp" >/dev/null 2>&1 || true
+        return 1
+    fi
+    chmod 600 "$record_tmp" >/dev/null 2>&1 || true
+    mv -f -- "$record_tmp" "$SOURCE_RECORD_FILE" 2>/dev/null || {
+        rm -f -- "$record_tmp" >/dev/null 2>&1 || true
+        return 1
+    }
+}
+
+function reexec_with_root() {
+    if [[ $EUID -eq 0 ]]; then
+        if [[ -n "${DOUDOU_ENTRY_TEMP:-}" && -f "${DOUDOU_ENTRY_TEMP}" ]]; then
+            rm -f -- "${DOUDOU_ENTRY_TEMP}" >/dev/null 2>&1 || true
+        fi
+        return 0
+    fi
+
+    local self_path
+    local temp_self
+
+    if ! self_path=$(resolve_self_source_path); then
+        echo -e "${RED}错误：无法解析当前脚本来源，请改用本地文件执行，或使用 bash <(curl -fsSL URL) 这种方式运行。${NC}"
+        exit 1
+    fi
+
+    temp_self=$(mktemp /tmp/doudou-entry.XXXXXX.sh) || {
+        echo -e "${RED}错误：无法创建临时入口脚本。${NC}"
+        exit 1
+    }
+
+    if ! materialize_self_source "$self_path" "$temp_self"; then
+        rm -f -- "$temp_self" >/dev/null 2>&1 || true
+        echo -e "${RED}错误：无法准备提权所需的临时入口脚本。${NC}"
+        exit 1
+    fi
+    chmod 700 "$temp_self" >/dev/null 2>&1 || true
+
+    if command -v sudo >/dev/null 2>&1; then
+        echo -e "${YELLOW}检测到当前非 root，正在尝试 sudo 提权重新执行...${NC}"
+        exec env DOUDOU_ENTRY_TEMP="$temp_self" sudo -E bash "$temp_self" "$@"
+    fi
+
+    if command -v su >/dev/null 2>&1; then
+        local cmd
+        cmd="DOUDOU_ENTRY_TEMP=$(printf '%q' "$temp_self") bash $(printf '%q' "$temp_self")"
+        local arg
+        for arg in "$@"; do
+            cmd+=" $(printf '%q' "$arg")"
+        done
+        echo -e "${YELLOW}检测到当前非 root，正在尝试 su 提权重新执行...${NC}"
+        exec su -c "$cmd"
+    fi
+
+    rm -f -- "$temp_self" >/dev/null 2>&1 || true
+    echo -e "${RED}错误：当前不是 root，且系统未检测到 sudo/su，无法自动提权。${NC}"
+    exit 1
+}
+
+function ensure_runtime_layout() {
+    mkdir -p "$DATA_DIR" "$SELF_DIR"
+    chmod 700 "$DATA_DIR" >/dev/null 2>&1 || true
+    chmod 755 "$SELF_DIR" >/dev/null 2>&1 || true
+}
+
+function is_managed_quick_launcher() {
+    local launcher_path="$1"
+    local resolved_path=""
+
+    [[ -e "$launcher_path" || -L "$launcher_path" ]] || return 1
+    if [[ -L "$launcher_path" ]]; then
+        resolved_path=$(readlink -f -- "$launcher_path" 2>/dev/null || true)
+        [[ "$resolved_path" == "$SELF_SCRIPT_PATH" ]] && return 0
+    fi
+    [[ -f "$launcher_path" ]] || return 1
+    grep -Fq '# Managed by doudou-xray-manager' "$launcher_path" 2>/dev/null && return 0
+    grep -Fq "$SELF_SCRIPT_PATH" "$launcher_path" 2>/dev/null && return 0
+    grep -Fq '输入 zxray 可重新唤醒菜单' "$launcher_path" 2>/dev/null && return 0
+    return 1
+}
+
+function remove_managed_quick_launcher() {
+    local launcher_path="$1"
+    [[ -e "$launcher_path" || -L "$launcher_path" ]] || return 0
+    if is_managed_quick_launcher "$launcher_path"; then
+        rm -f -- "$launcher_path" >/dev/null 2>&1 || return 1
+        return 0
+    fi
+    echo -e "${YELLOW}  ⚠ 保留非本项目创建的同名命令：${launcher_path}${NC}"
+    return 0
+}
+
+function install_quick_launcher() {
+    local current_path
+    current_path=$(resolve_self_source_path 2>/dev/null || true)
+
+    ensure_runtime_layout
+
+    if [[ -n "$current_path" ]]; then
+        if [[ "$current_path" != "$SELF_SCRIPT_PATH" ]]; then
+            materialize_self_source "$current_path" "$SELF_SCRIPT_PATH" || return 1
+        fi
+        chmod 755 "$SELF_SCRIPT_PATH" >/dev/null 2>&1 || true
+        if [[ "$current_path" != "$SELF_SCRIPT_PATH" ]]; then
+            record_source_file "$current_path" >/dev/null 2>&1 || true
+        fi
+    fi
+
+    if [[ -e "$QUICK_BIN" || -L "$QUICK_BIN" ]]; then
+        if ! is_managed_quick_launcher "$QUICK_BIN"; then
+            echo -e "${YELLOW}  ⚠ ${QUICK_BIN} 已存在且不属于本项目，未覆盖该文件。${NC}"
+            return 1
+        fi
+    fi
+
+    local legacy_path
+    for legacy_path in \
+        "$LEGACY_QUICK_BIN" "/usr/local/bin/doudou" "/usr/local/bin/xray-manager" \
+        "/usr/bin/zxray" "/usr/bin/zdd" "/usr/bin/doudou" "/usr/bin/xray-manager" \
+        "/usr/sbin/zxray" "/usr/sbin/zdd" "/usr/sbin/doudou" "/usr/sbin/xray-manager" \
+        "/root/bin/zxray" "/root/bin/zdd" "/root/bin/doudou" "/root/bin/xray-manager" \
+        "/root/.local/bin/zxray" "/root/.local/bin/zdd" "/root/.local/bin/doudou" "/root/.local/bin/xray-manager"; do
+        remove_managed_quick_launcher "$legacy_path" || true
+    done
+
+    cat > "$QUICK_BIN" <<EOF
+#!/bin/bash
+# Managed by doudou-xray-manager
+set -u
+
+    if [[ \$# -eq 0 ]]; then
+        exec "$SELF_SCRIPT_PATH"
+    fi
+
+    echo "用法: zxray"
+    exit 1
+EOF
+    chmod 755 "$QUICK_BIN" >/dev/null 2>&1 || true
+}
+
+function download_latest_script_to() {
+    local target_path="$1"
+
+    [[ "$SCRIPT_REMOTE_URL" == https://* ]] || {
+        echo -e "${RED}错误：脚本更新地址不是 HTTPS，已拒绝下载。${NC}"
+        return 1
+    }
+    if command -v curl >/dev/null 2>&1; then
+        curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL -o "$target_path" "$SCRIPT_REMOTE_URL" || return 1
+        return 0
+    fi
+
+    if command -v wget >/dev/null 2>&1; then
+        if wget --help 2>&1 | grep -q -- '--https-only'; then
+            wget -q --https-only -O "$target_path" "$SCRIPT_REMOTE_URL" || return 1
+            return 0
+        fi
+        echo -e "${RED}错误：当前 wget 不支持 --https-only，请先安装 curl 后重试。${NC}"
+        return 1
+    fi
+
+    echo -e "${RED}错误：未检测到 curl 或 wget，无法拉取最新脚本。${NC}"
+    return 1
+}
+
+function get_file_sha256() {
+    local file_path="$1"
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum -- "$file_path" 2>/dev/null | awk 'NR==1 {print tolower($1); exit}'
+        return "${PIPESTATUS[0]}"
+    fi
+    if command -v openssl >/dev/null 2>&1; then
+        openssl dgst -sha256 "$file_path" 2>/dev/null | awk '{print tolower($NF); exit}'
+        return "${PIPESTATUS[0]}"
     fi
     return 1
-  fi
-
-  if [[ -n "$expected_pid" || -n "$expected_start" ]]; then
-    if ! IFS=' ' read -r pid start operation \
-        < <(read_lock_owner "$quarantine" 2>/dev/null); then
-      if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
-        mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
-      fi
-      return 1
-    fi
-
-    if [[ "$pid" != "$expected_pid" || "$start" != "$expected_start" ]]; then
-      if [[ ! -e "$LOCK_DIR" && ! -L "$LOCK_DIR" ]]; then
-        mv -- "$quarantine" "$LOCK_DIR" 2>/dev/null || true
-      fi
-      return 1
-    fi
-  fi
-
-  rm -rf -- "$quarantine"
 }
 
-remove_lock_dir_if_owner_matches() {
-  local expected_pid="$1"
-  local expected_start="$2"
-  local inode=""
-  local pid=""
-  local start=""
-  local operation=""
+function verify_optional_pinned_sha256() {
+    local file_path="$1"
+    local expected_sha="${2,,}"
+    local label="$3"
+    local actual_sha=""
 
-  [[ -d "$LOCK_DIR" && ! -L "$LOCK_DIR" ]] || return 0
-
-  inode="$(stat -Lc '%i' "$LOCK_DIR" 2>/dev/null || true)"
-  [[ "$inode" =~ ^[0-9]+$ ]] || return 1
-
-  if ! IFS=' ' read -r pid start operation \
-      < <(read_lock_owner 2>/dev/null); then
-    return 1
-  fi
-
-  [[ "$pid" == "$expected_pid" \
-    && "$start" == "$expected_start" ]] \
-    || return 1
-
-  quarantine_lock_dir "$inode" "$expected_pid" "$expected_start"
-}
-
-clear_unverifiable_lock() {
-  local inode_before=""
-  local pid=""
-  local start=""
-  local operation=""
-
-  inode_before="$(
-    stat -Lc '%i' "$LOCK_DIR" 2>/dev/null \
-      || true
-  )"
-
-  [[ "$inode_before" =~ ^[0-9]+$ ]] \
-    || die "$(printf '%s' "zdd-argo 操作锁状态异常，无法安全处理。")"
-
-  warn "$(printf '%s' "检测到无法验证所有者的 zdd-argo 操作锁。")"
-  warn "$(printf '%s' "这通常表示上一次操作在创建锁后被强制中断；清理该锁不会终止任何已确认的进程。")"
-
-  if ! confirm_force "$(printf '%s' "输入大写 FORCE 清理异常锁并继续，输入其他内容取消：")"; then
-    die "$(printf '%s' "已取消清理异常操作锁。")"
-  fi
-
-  if IFS=' ' read -r pid start operation \
-      < <(read_lock_owner 2>/dev/null); then
+    [[ -n "$expected_sha" ]] || return 0
+    if [[ ! "$expected_sha" =~ ^[0-9a-f]{64}$ ]]; then
+        echo -e "${RED}  ✗ ${label}的固定 SHA-256 格式无效，已拒绝执行。${NC}"
+        return 1
+    fi
+    actual_sha=$(get_file_sha256 "$file_path") || {
+        echo -e "${RED}  ✗ 无法计算${label}的 SHA-256，已拒绝执行。${NC}"
+        return 1
+    }
+    if [[ "$actual_sha" != "$expected_sha" ]]; then
+        echo -e "${RED}  ✗ ${label} SHA-256 不匹配，已拒绝执行。${NC}"
+        echo -e "${YELLOW}    期望: ${expected_sha}${NC}"
+        echo -e "${YELLOW}    实际: ${actual_sha}${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ ${label}固定 SHA-256 校验通过${NC}"
     return 0
-  fi
-
-  if quarantine_lock_dir "$inode_before"; then
-    ok "$(printf '%s' "异常的 zdd-argo 操作锁已清理。")"
-  fi
 }
 
-force_take_over_lock() {
-  local owner_pid=""
-  local owner_start=""
-  local owner_operation=""
-  local owner_command=""
-  local snapshot_file=""
+function validate_downloaded_manager_script() {
+    local script_path="$1"
+    local script_size=""
 
-  for _ in 1 2 3 4 5; do
-    if IFS=' ' read -r \
-        owner_pid \
-        owner_start \
-        owner_operation \
-        < <(read_lock_owner 2>/dev/null); then
-      break
+    [[ -f "$script_path" && ! -L "$script_path" ]] || return 1
+    script_size=$(wc -c < "$script_path" 2>/dev/null | tr -d '[:space:]')
+    if ! [[ "$script_size" =~ ^[0-9]+$ ]] || (( script_size < 50000 || script_size > 2000000 )); then
+        echo -e "${RED}  ✗ 拉取脚本大小异常：${script_size:-unknown} 字节。${NC}"
+        return 1
     fi
-
-    sleep 0.2
-  done
-
-  if [[ ! "$owner_pid" =~ ^[0-9]+$ \
-      || ! "$owner_start" =~ ^[0-9]+$ ]]; then
-    clear_unverifiable_lock
+    if [[ "$(head -n 1 "$script_path" 2>/dev/null)" != "#!/bin/bash" ]]; then
+        echo -e "${RED}  ✗ 拉取结果缺少预期的 Bash shebang。${NC}"
+        return 1
+    fi
+    if ! bash -n "$script_path"; then
+        echo -e "${RED}  ✗ 拉取脚本未通过 bash -n 语法检查。${NC}"
+        return 1
+    fi
+    if ! grep -Fq 'DATA_DIR="/usr/local/share/doudou-xray"' "$script_path" \
+        || ! grep -Fq 'QUICK_BIN="/usr/local/bin/zxray"' "$script_path" \
+        || ! grep -Fq 'SCRIPT_REMOTE_URL=' "$script_path" \
+        || ! grep -Eq '^function (_)?install_xray\(\)' "$script_path"; then
+        echo -e "${RED}  ✗ 拉取脚本未通过项目身份标记检查。${NC}"
+        return 1
+    fi
+    verify_optional_pinned_sha256 "$script_path" "${DOUDOU_MANAGER_SHA256:-}" "管理脚本" || return 1
     return 0
-  fi
+}
 
-  if ! lock_owner_is_alive \
-      "$owner_pid" \
-      "$owner_start"; then
+function self_update_and_update_xray() {
+    line
+    echo -e "${YELLOW}  正在拉取最新脚本并覆盖当前版本...${NC}"
 
-    if remove_lock_dir_if_owner_matches \
-        "$owner_pid" \
-        "$owner_start"; then
-      ok "$(printf '%s' "检测到上一次操作留下的陈旧锁，已自动清理。")"
+    local temp_script=""
+    local downloaded_sha=""
+    temp_script=$(mktemp /tmp/doudou-self-update.XXXXXX.sh) || {
+        echo -e "${RED}  ✗ 无法创建临时更新文件。${NC}"
+        line
+        return 1
+    }
+    add_tmp_file "$temp_script"
+
+    if ! download_latest_script_to "$temp_script"; then
+        echo -e "${RED}  ✗ 最新脚本拉取失败，请检查网络后重试。${NC}"
+        line
+        return 1
     fi
 
-    return 0
-  fi
-
-  owner_command="$(
-    process_command_line "$owner_pid" \
-      2>/dev/null \
-      || true
-  )"
-
-  warn "$(printf '%s' "另一个 zdd-argo 操作正在运行。")"
-
-  printf '%s %s\n' \
-    "$(printf '%s' "占用进程：")" \
-    "$owner_pid"
-
-  printf '%s %s\n' \
-    "$(printf '%s' "当前操作：")" \
-    "$(lock_operation_label "$owner_operation")"
-
-  printf '%s %s\n' \
-    "$(printf '%s' "进程命令：")" \
-    "${owner_command:-$(printf '%s' "无法读取")}"
-
-  warn "$(printf '%s' "强制接管会终止该 zdd-argo 操作及其子进程；如果它正在安装或更新程序，该次操作会被中断。")"
-
-  if ! confirm_yes "$(printf '%s' "确认强制停止并接管请输入 yes：")"; then
-
-    die "$(printf '%s' "已取消强制接管。")"
-  fi
-
-  snapshot_file="$(mktemp)"
-
-  snapshot_process_tree "$owner_pid" \
-    > "$snapshot_file"
-
-  signal_process_tree \
-    TERM \
-    "$snapshot_file"
-
-  if ! wait_for_process_exit \
-      "$owner_pid" \
-      "$owner_start" \
-      8; then
-
-    signal_process_tree \
-      KILL \
-      "$snapshot_file"
-
-    if ! wait_for_process_exit \
-        "$owner_pid" \
-        "$owner_start" \
-        3; then
-
-      rm -f "$snapshot_file"
-
-      die "$(printf '%s' "无法停止原 zdd-argo 操作，当前操作不会继续。")"
+    if ! validate_downloaded_manager_script "$temp_script"; then
+        echo -e "${RED}  ✗ 拉取结果未通过完整校验，已取消覆盖。${NC}"
+        line
+        return 1
     fi
-  else
-    sleep 1
+    downloaded_sha=$(get_file_sha256 "$temp_script" 2>/dev/null || true)
+    [[ -n "$downloaded_sha" ]] && echo -e "${CYAN}  下载内容 SHA-256: ${downloaded_sha}${NC}"
 
-    signal_process_tree \
-      KILL \
-      "$snapshot_file"
-  fi
-
-  rm -f "$snapshot_file"
-
-  remove_lock_dir_if_owner_matches \
-    "$owner_pid" \
-    "$owner_start" \
-    || true
-
-  ok "$(printf '%s' "原 zdd-argo 操作已停止，当前操作将接管。")"
-}
-
-acquire_lock() {
-  local operation="${1:-unknown}"
-
-  if [[ $LOCK_HELD -eq 1 ]]; then
-    return 0
-  fi
-
-  mkdir -p "$(dirname "$LOCK_DIR")"
-
-  while true; do
-    if mkdir "$LOCK_DIR" 2>/dev/null; then
-      if ! chmod 700 "$LOCK_DIR"; then
-        rm -rf -- "$LOCK_DIR"
-        die "$(printf '%s' "无法设置 zdd-argo 操作锁目录权限。")"
-      fi
-
-      LOCK_DIR_INODE="$(
-        stat -Lc '%i' "$LOCK_DIR" 2>/dev/null \
-          || true
-      )"
-
-      if [[ ! "$LOCK_DIR_INODE" =~ ^[0-9]+$ ]]; then
-        rm -rf -- "$LOCK_DIR"
-
-        die "$(printf '%s' "无法确认 zdd-argo 操作锁目录。")"
-      fi
-
-      write_lock_owner "$operation"
-      return 0
+    ensure_runtime_layout
+    local self_backup=""
+    local staged_script=""
+    if [[ -f "$SELF_SCRIPT_PATH" ]]; then
+        self_backup="${SELF_SCRIPT_PATH}.bak.$(date +%Y%m%d-%H%M%S)"
+        if ! cp -a -- "$SELF_SCRIPT_PATH" "$self_backup"; then
+            echo -e "${RED}  ✗ 当前脚本备份失败，已取消自更新。${NC}"
+            line
+            return 1
+        fi
+        chmod 600 "$self_backup" >/dev/null 2>&1 || true
+        echo -e "${CYAN}  已备份当前脚本：${self_backup}${NC}"
     fi
 
-    if [[ ! -d "$LOCK_DIR" ]]; then
-      die "无法创建 zdd-argo 操作锁目录：${LOCK_DIR}"
+    staged_script="${SELF_SCRIPT_PATH}.new.$$"
+    if ! cp -f -- "$temp_script" "$staged_script" 2>/dev/null; then
+        echo -e "${RED}  ✗ 无法准备自更新暂存文件。${NC}"
+        line
+        return 1
+    fi
+    chmod 755 "$staged_script" >/dev/null 2>&1 || true
+    if ! validate_downloaded_manager_script "$staged_script"; then
+        rm -f -- "$staged_script" >/dev/null 2>&1 || true
+        echo -e "${RED}  ✗ 暂存脚本复检失败，已保留当前版本。${NC}"
+        line
+        return 1
+    fi
+    if ! mv -f -- "$staged_script" "$SELF_SCRIPT_PATH"; then
+        rm -f -- "$staged_script" >/dev/null 2>&1 || true
+        echo -e "${RED}  ✗ 原子替换当前脚本失败。${NC}"
+        line
+        return 1
     fi
 
-    if ! secure_root_directory "$LOCK_DIR"; then
-      clear_unverifiable_lock
-      continue
-    fi
-
-    force_take_over_lock
-  done
+    echo -e "${GREEN}  ✓ 脚本已更新到最新版本。${NC}"
+    echo -e "${YELLOW}  正在继续更新当前运行组件...${NC}"
+    line
+    exec env DOUDOU_SELF_UPDATED=1 bash "$SELF_SCRIPT_PATH" --quick-update
 }
 
-run_with_lock() {
-  local fn="$1"
-  shift
+reexec_with_root "$@"
 
-  acquire_lock "$fn"
-  install_dependencies
-  "$fn" "$@"
+function parse_cli_args() {
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --quick-install)
+                QUICK_INSTALL=1
+                shift
+                ;;
+            --quick-uninstall)
+                QUICK_UNINSTALL=1
+                shift
+                ;;
+            --quick-update)
+                QUICK_UPDATE=1
+                shift
+                ;;
+            --quick-scenario)
+                shift
+                if [[ $# -eq 0 ]]; then
+                    echo -e "${RED}错误：--quick-scenario 需要一个安装模板编号${NC}" >&2
+                    exit 1
+                fi
+                QUICK_SCENARIO="$1"
+                shift
+                ;;
+            --force)
+                QUICK_FORCE=1
+                shift
+                ;;
+            *)
+                echo -e "${RED}错误：未知参数 $1${NC}" >&2
+                exit 1
+                ;;
+        esac
+    done
 }
 
-path_is_zdd_launcher() {
-  local path="$1"
-
-  [[ -f "$path" ]] \
-    && { \
-      grep -Fqx 'ZDD_ARGO_LAUNCHER=1' "$path" 2>/dev/null \
-        || grep -Fq '# zdd-argo launcher' "$path" 2>/dev/null; \
-    } \
-    && grep -Fq \
-      "$MANAGED_SCRIPT_PATH" \
-      "$path" \
-      2>/dev/null
-}
-
-path_is_legacy_zdd_launcher() {
-  local path="$1"
-
-  [[ -f "$path" ]] \
-    && grep -Fq \
-      'zdd argo' \
-      "$path" \
-      2>/dev/null \
-    && grep -Fq \
-      'exec /usr/bin/env bash' \
-      "$path" \
-      2>/dev/null \
-    && grep -Fq \
-      'zdd-argo.sh' \
-      "$path" \
-      2>/dev/null
-}
-
-path_is_replaceable_zdd_launcher() {
-  local path="$1"
-
-  path_is_zdd_launcher "$path" \
-    || path_is_legacy_zdd_launcher "$path"
-}
-
-resolved_zdd_is_ours() {
-  local resolved="${1:-}"
-
-  [[ -n "$resolved" ]] \
-    && path_is_zdd_launcher "$resolved"
-}
-
-script_file_is_ours() {
-  local path="$1"
-
-  [[ -f "$path" && ! -L "$path" ]] \
-    && grep -Eq '^SCRIPT_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$path" 2>/dev/null \
-    && grep -Eq '^BUILD_ID="[A-Z0-9_.-]+"$' "$path" 2>/dev/null \
-    && grep -Fqx 'DEFAULT_NODE_NAME="zdd-argo"' "$path" 2>/dev/null \
-    && grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null \
-    && grep -Fq 'SERVICE_MARKER_CONTENT="zdd-argo-service-account-v0.1.0"' "$path" 2>/dev/null
-}
-
-record_source_file() {
-  local source_sha=""
-  local tmp=""
-
-  [[ -n "$SCRIPT_PATH" && "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]] || return 0
-  [[ "$SCRIPT_PATH" != *$'\n'* && "$SCRIPT_PATH" != *$'\r'* ]] || return 0
-  [[ -f "$SCRIPT_PATH" && ! -L "$SCRIPT_PATH" ]] || return 0
-  script_file_is_ours "$SCRIPT_PATH" || return 0
-  command -v sha256sum >/dev/null 2>&1 || return 0
-
-  source_sha="$(sha256sum "$SCRIPT_PATH" | awk '{print $1}')"
-  [[ "$source_sha" =~ ^[0-9a-fA-F]{64}$ ]] || return 0
-
-  tmp="${SOURCE_RECORD_FILE}.new.$$"
-  printf '%s\n%s\n' "$SCRIPT_PATH" "${source_sha,,}" > "$tmp"
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$SOURCE_RECORD_FILE"
-}
-
-install_shortcut() {
-  [[ -n "$SCRIPT_PATH" \
-    && -f "$SCRIPT_PATH" ]] \
-    || die "$(printf '%s' "无法识别当前脚本文件，不能安装快捷命令。")"
-
-  script_file_is_ours "$SCRIPT_PATH" \
-    || die "$(printf '%s' "当前文件未通过 zdd-argo 脚本标识校验。")"
-
-  bash -n "$SCRIPT_PATH" \
-    || die "$(printf '%s' "当前脚本未通过 Bash 语法检查，拒绝安装。")"
-
-  local existing_zargo=""
-  local path=""
-
-  existing_zargo="$(
-    type -P zargo \
-      2>/dev/null \
-      || true
-  )"
-
-  if [[ -n "$existing_zargo" ]] \
-      && ! path_is_replaceable_zdd_launcher "$existing_zargo"; then
-    die "$(printf '%s' "当前 PATH 中的 zargo 已被其他程序占用：${existing_zargo}；为避免覆盖，未进行安装。")"
-  fi
-
-  for path in \
-    "$SHORTCUT_PATH" \
-    "$SHORTCUT_COMPAT_PATH" \
-    "$SHORTCUT_FALLBACK_PATH"
-  do
-    [[ -e "$path" || -L "$path" ]] || continue
-
-    if [[ \
-      ( "$path" == "$SHORTCUT_COMPAT_PATH" \
-        || "$path" == "$SHORTCUT_FALLBACK_PATH" ) \
-      && -L "$path" \
-    ]] && [[ \
-      "$(readlink "$path" 2>/dev/null || true)" \
-        == "$SHORTCUT_PATH" \
-    ]]; then
-      continue
-    fi
-
-    path_is_replaceable_zdd_launcher "$path" \
-      || die "$(printf '%s' "快捷命令路径已被其他程序占用：${path}")"
-  done
-
-  if [[ -e "$MANAGED_SCRIPT_PATH" ]] \
-      && ! script_file_is_ours "$MANAGED_SCRIPT_PATH"; then
-
-    die "$(printf '%s' "目标路径已存在非 zdd-argo 文件：${MANAGED_SCRIPT_PATH}")"
-  fi
-
-  mkdir -p "$BIN_DIR"
-  chmod 0755 "$BIN_DIR"
-  record_source_file
-  mkdir -p \
-    "$(dirname -- "$SHORTCUT_PATH")" \
-    "$(dirname -- "$SHORTCUT_COMPAT_PATH")" \
-    "$(dirname -- "$SHORTCUT_FALLBACK_PATH")"
-
-  if [[ "$SCRIPT_PATH" != "$MANAGED_SCRIPT_PATH" ]]; then
-    local managed_tmp=""
-
-    managed_tmp="${MANAGED_SCRIPT_PATH}.new.$$"
-
-    install -m 0755 \
-      "$SCRIPT_PATH" \
-      "$managed_tmp"
-
-    mv -f \
-      "$managed_tmp" \
-      "$MANAGED_SCRIPT_PATH"
-  else
-    chmod 0755 "$MANAGED_SCRIPT_PATH"
-  fi
-
-  local tmp=""
-  local launcher_new=""
-  local resolved_zargo=""
-
-  tmp="$(mktemp)"
-
-  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
-  cat >> "$tmp" <<EOF
-set -Eeuo pipefail
-ZDD_ARGO_LAUNCHER=1
-
-if [[ "\$#" -ne 0 ]]; then
-  printf '%s\n' '用法：zargo' >&2
-  exit 2
+parse_cli_args "$@"
+acquire_global_lock || exit 1
+ensure_runtime_layout
+if ! install_quick_launcher; then
+    echo -e "${YELLOW}  ⚠ 快捷命令安装未完成；当前脚本仍可继续使用。${NC}"
 fi
 
-exec /usr/bin/env bash ${MANAGED_SCRIPT_PATH@Q}
-EOF
-
-  launcher_new="${SHORTCUT_PATH}.new.$$"
-
-  install -m 0755 \
-    "$tmp" \
-    "$launcher_new"
-
-  rm -f "$tmp"
-
-  mv -f \
-    "$launcher_new" \
-    "$SHORTCUT_PATH"
-
-  rm -f "$SHORTCUT_COMPAT_PATH"
-
-  ln -s \
-    "$SHORTCUT_PATH" \
-    "$SHORTCUT_COMPAT_PATH"
-
-  hash -r
-
-  resolved_zargo="$(
-    type -P zargo \
-      2>/dev/null \
-      || true
-  )"
-
-  if [[ -n "$resolved_zargo" \
-      && ( -e "$SHORTCUT_FALLBACK_PATH" \
-        || -L "$SHORTCUT_FALLBACK_PATH" ) ]]; then
-
-    if path_is_replaceable_zdd_launcher \
-        "$SHORTCUT_FALLBACK_PATH"; then
-      rm -f "$SHORTCUT_FALLBACK_PATH"
-
-      ln -s \
-        "$SHORTCUT_PATH" \
-        "$SHORTCUT_FALLBACK_PATH"
+function get_os_id() {
+    if [[ -r /etc/os-release ]]; then
+        awk -F= '/^ID=/{gsub(/"/, "", $2); print tolower($2); exit}' /etc/os-release
+        return 0
     fi
-  fi
-
-  if [[ -z "$resolved_zargo" ]]; then
-    if [[ -e "$SHORTCUT_FALLBACK_PATH" \
-        || -L "$SHORTCUT_FALLBACK_PATH" ]]; then
-
-      if [[ -L "$SHORTCUT_FALLBACK_PATH" ]] \
-          && [[ \
-            "$(readlink "$SHORTCUT_FALLBACK_PATH" 2>/dev/null || true)" \
-              == "$SHORTCUT_PATH" \
-          ]]; then
-        :
-      elif path_is_replaceable_zdd_launcher \
-          "$SHORTCUT_FALLBACK_PATH"; then
-
-        rm -f "$SHORTCUT_FALLBACK_PATH"
-
-        ln -s \
-          "$SHORTCUT_PATH" \
-          "$SHORTCUT_FALLBACK_PATH"
-      else
-        die "$(printf '%s' "当前 PATH 无法找到 /usr/local/bin/zargo，且备用路径已被其他程序占用：${SHORTCUT_FALLBACK_PATH}")"
-      fi
-    else
-      ln -s \
-        "$SHORTCUT_PATH" \
-        "$SHORTCUT_FALLBACK_PATH"
-    fi
-
-    hash -r
-
-    resolved_zargo="$(
-      type -P zargo \
-        2>/dev/null \
-        || true
-    )"
-  fi
-
-  [[ -x "$MANAGED_SCRIPT_PATH" ]] \
-    || die "$(printf '%s' "已安装脚本副本不可执行。")"
-
-  [[ -x "$SHORTCUT_PATH" ]] \
-    || die "$(printf '%s' "快捷启动器安装失败。")"
-
-  bash -n "$SHORTCUT_PATH" \
-    || die "$(printf '%s' "快捷启动器语法检查失败。")"
-
-  resolved_zdd_is_ours "$resolved_zargo" \
-    || die "$(printf '%s' "快捷命令已写入磁盘，但当前 shell 未解析到本项目的 zargo；请检查 PATH。")"
-
-  for path in "${LEGACY_ZDD_PATHS[@]}"; do
-    [[ -e "$path" || -L "$path" ]] || continue
-
-    if path_is_replaceable_zdd_launcher "$path"; then
-      rm -f "$path"
-    fi
-  done
-
-  for path in \
-    "$LEGACY_SHORTCUT_PATH" \
-    "$LEGACY_SHORTCUT_BIN"
-  do
-    [[ -e "$path" || -L "$path" ]] || continue
-
-    if path_is_replaceable_zdd_launcher "$path" \
-        || grep -Fq \
-          'zdd-argo' \
-          "$path" \
-          2>/dev/null; then
-      rm -f "$path"
-    else
-      warn "$(printf '%s' "发现同名旧快捷路径但无法确认归属，未删除：${path}")"
-    fi
-  done
-}
-
-resolve_singbox_bin() {
-  SINGBOX_BIN=""
-
-  if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
-    SINGBOX_BIN="$MANAGED_SINGBOX_BIN"
-  elif command -v sing-box >/dev/null 2>&1; then
-    SINGBOX_BIN="$(command -v sing-box)"
-  elif [[ -x /usr/bin/sing-box ]]; then
-    SINGBOX_BIN="/usr/bin/sing-box"
-  fi
-}
-
-resolve_xray_bin() {
-  XRAY_BIN=""
-
-  if [[ -x "$MANAGED_XRAY_BIN" ]]; then
-    XRAY_BIN="$MANAGED_XRAY_BIN"
-  elif command -v xray >/dev/null 2>&1; then
-    XRAY_BIN="$(command -v xray)"
-  elif [[ -x /usr/local/bin/xray ]]; then
-    XRAY_BIN="/usr/local/bin/xray"
-  elif [[ -x /usr/bin/xray ]]; then
-    XRAY_BIN="/usr/bin/xray"
-  fi
-}
-
-resolve_cloudflared_bin() {
-  CLOUDFLARED_BIN=""
-
-  if [[ -x "$MANAGED_CLOUDFLARED_BIN" ]]; then
-    CLOUDFLARED_BIN="$MANAGED_CLOUDFLARED_BIN"
-  elif command -v cloudflared >/dev/null 2>&1; then
-    CLOUDFLARED_BIN="$(command -v cloudflared)"
-  elif [[ -x /usr/local/bin/cloudflared ]]; then
-    CLOUDFLARED_BIN="/usr/local/bin/cloudflared"
-  fi
-}
-
-resolve_wgcf_bin() {
-  WGCF_BIN=""
-
-  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
-    WGCF_BIN="$MANAGED_WGCF_BIN"
-  elif command -v wgcf >/dev/null 2>&1; then
-    WGCF_BIN="$(command -v wgcf)"
-  elif [[ -x /usr/local/bin/wgcf ]]; then
-    WGCF_BIN="/usr/local/bin/wgcf"
-  fi
-}
-
-safe_download() {
-  local url="$1"
-  local output="$2"
-
-  ensure_download_tool
-
-  if command -v curl >/dev/null 2>&1; then
-    curl \
-      --proto '=https' \
-      --tlsv1.2 \
-      --user-agent "zdd-argo/${SCRIPT_VERSION}" \
-      -fL \
-      --retry 4 \
-      --retry-all-errors \
-      --connect-timeout 15 \
-      --max-time 300 \
-      "$url" \
-      -o "$output"
-  elif wget_is_usable; then
-    wget \
-      --https-only \
-      --secure-protocol=TLSv1_2 \
-      --user-agent="zdd-argo/${SCRIPT_VERSION}" \
-      --tries=5 \
-      --timeout=300 \
-      -O "$output" \
-      "$url"
-  else
-    die "未检测到可用的 curl 或 GNU wget，无法下载：${url}"
-  fi
-}
-
-safe_download_github_api() {
-  local url="$1"
-  local output="$2"
-
-  ensure_download_tool
-
-  if command -v curl >/dev/null 2>&1; then
-    curl \
-      --proto '=https' \
-      --tlsv1.2 \
-      --user-agent "zdd-argo/${SCRIPT_VERSION}" \
-      -H 'Accept: application/vnd.github+json' \
-      -H 'X-GitHub-Api-Version: 2022-11-28' \
-      -fL \
-      --retry 4 \
-      --retry-all-errors \
-      --connect-timeout 15 \
-      --max-time 120 \
-      "$url" \
-      -o "$output"
-  elif wget_is_usable; then
-    wget \
-      --https-only \
-      --secure-protocol=TLSv1_2 \
-      --user-agent="zdd-argo/${SCRIPT_VERSION}" \
-      --header='Accept: application/vnd.github+json' \
-      --header='X-GitHub-Api-Version: 2022-11-28' \
-      --tries=5 \
-      --timeout=120 \
-      -O "$output" \
-      "$url"
-  else
-    die "未检测到可用的 curl 或 GNU wget，无法读取 GitHub API：${url}"
-  fi
-}
-
-github_latest_asset_info() {
-  local repo="$1"
-  local asset_regex="$2"
-  local api_file=""
-  local result=""
-
-  api_file="$(mktemp)"
-
-  if ! safe_download_github_api \
-      "${GITHUB_API_BASE}/repos/${repo}/releases/latest" \
-      "$api_file"; then
-    rm -f "$api_file"
-
-    die "$(printf '%s' "无法读取 ${repo} 的 GitHub 最新稳定版信息。")"
-  fi
-
-  if ! jq -e '
-      type == "object"
-      and (.tag_name | type == "string")
-      and (.assets | type == "array")
-    ' \
-    "$api_file" \
-    >/dev/null 2>&1; then
-
-    rm -f "$api_file"
-
-    die "$(printf '%s' "${repo} 的 GitHub Release 响应格式异常。")"
-  fi
-
-  if ! result="$(
-    jq -er \
-      --arg re "$asset_regex" \
-      '
-        [.assets[] | select(.name | test($re))] as $matches
-        | if ($matches | length) == 1 then
-            [
-              $matches[0].name,
-              $matches[0].browser_download_url,
-              ($matches[0].digest // ""),
-              .tag_name
-            ]
-            | @tsv
-          else
-            error("matching asset count: \($matches | length)")
-          end
-      ' \
-      "$api_file" \
-      2>/dev/null
-  )"; then
-    rm -f "$api_file"
-
-    die "$(printf '%s' "${repo} 最新稳定版中未找到唯一匹配的安装文件。")"
-  fi
-
-  rm -f "$api_file"
-  printf '%s\n' "$result"
-}
-
-verify_github_asset() {
-  local repo="$1"
-  local asset_name="$2"
-  local asset_url="$3"
-  local digest="$4"
-  local file="$5"
-  local expected=""
-  local actual=""
-
-  case "$asset_url" in
-    "https://github.com/${repo}/releases/download/"*)
-      ;;
-    *)
-      die "$(printf '%s' "GitHub 资源下载地址异常，已拒绝安装：${asset_url}")"
-      ;;
-  esac
-
-  [[ "$digest" =~ ^sha256:[0-9a-fA-F]{64}$ ]] \
-    || die "$(printf '%s' "${asset_name} 没有可用的 GitHub SHA-256 摘要，已拒绝无校验安装。")"
-
-  expected="${digest#sha256:}"
-  expected="${expected,,}"
-
-  actual="$(
-    sha256sum "$file" \
-      | awk '{print tolower($1)}'
-  )"
-
-  [[ "$actual" == "$expected" ]] \
-    || die "$(printf '%s' "${asset_name} 的 SHA-256 校验失败，已拒绝安装。")"
-}
-
-write_release_metadata() {
-  local output="$1"
-  local repo="$2"
-  local tag="$3"
-  local asset="$4"
-  local digest="$5"
-  local tmp=""
-
-  mkdir -p "$BIN_DIR" || return 1
-
-  tmp="$(
-    mktemp "${BIN_DIR}/.release.XXXXXX"
-  )" || return 1
-
-  if ! jq -n \
-      --arg repo "$repo" \
-      --arg tag "$tag" \
-      --arg asset "$asset" \
-      --arg digest "$digest" \
-      --arg installed_at \
-        "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-      '{
-        repository: $repo,
-        tag: $tag,
-        asset: $asset,
-        digest: $digest,
-        installed_at: $installed_at
-      }' \
-      > "$tmp"; then
-
-    rm -f "$tmp"
     return 1
-  fi
-
-  if ! chmod 0644 "$tmp" \
-      || ! mv -f "$tmp" "$output"; then
-
-    rm -f "$tmp"
-    return 1
-  fi
 }
 
-install_or_update_singbox() {
-  local arch=""
-  local asset_regex=""
-  local info_line=""
-  local asset_name=""
-  local asset_url=""
-  local digest=""
-  local release_tag=""
-  local work=""
-  local archive=""
-  local extract_dir=""
-  local list_file=""
-  local candidate=""
-  local new_binary=""
-  local backup=""
-  local before=""
-  local after=""
-  local meta_backup=""
-  local had_managed=0
-  local had_unit=0
-  local was_active=0
-  local config_refresh=0
-  local -a sb_candidates=()
+function is_alpine_system() {
+    local os_id=""
+    os_id=$(get_os_id 2>/dev/null || true)
+    [[ "$os_id" == "alpine" ]] && return 0
+    command -v apk >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1
+}
 
-  if singbox_config_needs_refresh; then
-    config_refresh=1
-  fi
+function write_install_runtime_kind() {
+    local kind="$1"
+    (
+        umask 077
+        printf '%s\n' "$kind" > "$SERVICE_KIND_FILE"
+    )
+}
 
-  arch="$(uname -m)"
-
-  case "$arch" in
-    x86_64|amd64)
-      asset_regex='^sing-box-.*-linux-amd64\.tar\.gz$'
-      ;;
-
-    aarch64|arm64)
-      asset_regex='^sing-box-.*-linux-arm64\.tar\.gz$'
-      ;;
-
-    *)
-      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；当前脚本支持 amd64 与 arm64。")"
-      ;;
-  esac
-
-  resolve_singbox_bin
-
-  before="$(printf '%s' "未安装")"
-
-  if [[ -n "$SINGBOX_BIN" ]]; then
-    before="$(
-      "$SINGBOX_BIN" version \
-        2>/dev/null \
-        | head -n 1 \
-        || true
-    )"
-  fi
-
-  info "$(printf '%s' "查询 sing-box 官方 GitHub 最新稳定版……")"
-
-  info_line="$(
-    github_latest_asset_info \
-      "SagerNet/sing-box" \
-      "$asset_regex"
-  )"
-
-  IFS=$'\t' read -r \
-    asset_name \
-    asset_url \
-    digest \
-    release_tag \
-    <<< "$info_line"
-
-  [[ -n "$asset_name" \
-    && -n "$asset_url" \
-    && -n "$release_tag" ]] \
-    || die "$(printf '%s' "sing-box Release 信息不完整。")"
-
-  work="$(mktemp -d)"
-  archive="${work}/${asset_name}"
-  extract_dir="${work}/extract"
-
-  mkdir -p "$extract_dir"
-
-  if ! safe_download \
-      "$asset_url" \
-      "$archive"; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "sing-box 安装包下载失败。")"
-  fi
-
-  verify_github_asset \
-    "SagerNet/sing-box" \
-    "$asset_name" \
-    "$asset_url" \
-    "$digest" \
-    "$archive"
-
-  list_file="${work}/archive.list"
-
-  if ! tar -tzf \
-      "$archive" \
-      > "$list_file"; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "无法读取 sing-box 压缩包目录。")"
-  fi
-
-  if grep -Eq \
-      '(^/|(^|/)\.\.(/|$))' \
-      "$list_file"; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "sing-box 压缩包包含不安全路径，已拒绝解压。")"
-  fi
-
-  if ! tar -xzf \
-      "$archive" \
-      -C "$extract_dir"; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "sing-box 压缩包解压失败。")"
-  fi
-
-  mapfile -t sb_candidates < <(
-    find \
-      "$extract_dir" \
-      -type f \
-      -name sing-box \
-      -print
-  )
-
-  if [[ ${#sb_candidates[@]} -ne 1 ]]; then
-    rm -rf "$work"
-
-    die "$(printf '%s' "sing-box 压缩包内未找到唯一可执行文件。")"
-  fi
-
-  candidate="${sb_candidates[0]}"
-  chmod 0755 "$candidate"
-
-  if ! singbox_version_ok "$candidate"; then
-    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      ensure_alpine_binary_compat || true
-    fi
-  fi
-
-  if ! singbox_version_ok "$candidate"; then
-    print_binary_run_error "$candidate" version
-    rm -rf "$work"
-
-    die "$(printf '%s' "sing-box 新二进制无法通过版本自检。")"
-  fi
-
-  if [[ -f "$SINGBOX_CONFIG" ]] \
-      && ! "$candidate" check \
-        -c "$SINGBOX_CONFIG"; then
-    if [[ $config_refresh -eq 1 ]]; then
-      warn "检测到旧版或不完整的 sing-box 配置；更新后将自动重建为当前类型化 DNS 与 WireGuard Endpoint 语法。"
-    else
-      rm -rf "$work"
-      die "$(printf '%s' "新版 sing-box 无法通过现有 zdd-argo 配置校验，未执行更新。")"
-    fi
-  fi
-
-  mkdir -p "$BIN_DIR"
-  chmod 0755 "$BIN_DIR"
-
-  new_binary="${MANAGED_SINGBOX_BIN}.new.$$"
-  backup="${MANAGED_SINGBOX_BIN}.backup.$$"
-
-  if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
-    cp -a \
-      "$MANAGED_SINGBOX_BIN" \
-      "$backup"
-
-    had_managed=1
-  fi
-
-  if [[ -f "$SINGBOX_RELEASE_META" ]]; then
-    meta_backup="${SINGBOX_RELEASE_META}.backup.$$"
-
-    cp -a \
-      "$SINGBOX_RELEASE_META" \
-      "$meta_backup"
-  fi
-
-  if [[ -f "$SINGBOX_UNIT" ]]; then
-    had_unit=1
-  fi
-
-  if service_is_active; then
-    was_active=1
-  fi
-
-  install -m 0755 \
-    "$candidate" \
-    "$new_binary"
-
-  mv -f \
-    "$new_binary" \
-    "$MANAGED_SINGBOX_BIN"
-
-  if ! write_release_metadata \
-      "$SINGBOX_RELEASE_META" \
-      "SagerNet/sing-box" \
-      "$release_tag" \
-      "$asset_name" \
-      "$digest"; then
-
-    warn "$(printf '%s' "sing-box 元数据写入失败，正在回滚……")"
-
-    if [[ $had_managed -eq 1 \
-        && -f "$backup" ]]; then
-      mv -f \
-        "$backup" \
-        "$MANAGED_SINGBOX_BIN"
-    else
-      rm -f "$MANAGED_SINGBOX_BIN"
+function get_install_runtime_kind() {
+    local recorded_kind=""
+    if [[ -f "$SERVICE_KIND_FILE" ]]; then
+        recorded_kind=$(head -n 1 "$SERVICE_KIND_FILE" 2>/dev/null || true)
+        case "$recorded_kind" in
+            alpine-ss2022|alpine-xray-vlessenc)
+                if is_alpine_system; then
+                    printf '%s\n' "$recorded_kind"
+                    return 0
+                fi
+                echo -e "${YELLOW}警告：记录的 Alpine 安装类型与当前系统不匹配，将改用实际文件和服务探测。${NC}" >&2
+                ;;
+            xray)
+                if ! is_alpine_system; then
+                    printf '%s\n' "$recorded_kind"
+                    return 0
+                fi
+                echo -e "${YELLOW}警告：记录的 systemd Xray 类型与当前 Alpine / OpenRC 系统不匹配，将改用实际文件和服务探测。${NC}" >&2
+                ;;
+            *)
+                echo -e "${YELLOW}警告：检测到无效的安装类型记录，将改用实际文件和服务探测。${NC}" >&2
+                ;;
+        esac
     fi
 
-    if [[ -n "$meta_backup" \
-        && -f "$meta_backup" ]]; then
-      mv -f \
-        "$meta_backup" \
-        "$SINGBOX_RELEASE_META"
-    else
-      rm -f "$SINGBOX_RELEASE_META"
+    if is_alpine_system && [[ -x "$ALPINE_XRAY_SERVICE_FILE" || ( -x /usr/local/bin/xray && -f "$CONFIG_FILE" ) ]]; then
+        printf '%s\n' 'alpine-xray-vlessenc'
+        return 0
     fi
 
-    rm -rf "$work"
-    hash -r
-    resolve_singbox_bin
-
-    die "$(printf '%s' "sing-box 更新失败，已恢复更新前状态。")"
-  fi
-
-  rm -rf "$work"
-
-  hash -r
-  resolve_singbox_bin
-
-  if [[ "$SINGBOX_BIN" != "$MANAGED_SINGBOX_BIN" ]] \
-      || ! "$MANAGED_SINGBOX_BIN" version \
-        >/dev/null 2>&1; then
-
-    warn "$(printf '%s' "新版 sing-box 安装后校验失败，正在回滚……")"
-
-    if [[ $had_managed -eq 1 \
-        && -f "$backup" ]]; then
-      mv -f \
-        "$backup" \
-        "$MANAGED_SINGBOX_BIN"
-    else
-      rm -f "$MANAGED_SINGBOX_BIN"
+    if is_alpine_system && [[ -f "$ALPINE_SS_CONFIG_FILE" || -x "$ALPINE_SS_SERVICE_FILE" || -x /usr/bin/ssserver ]]; then
+        printf '%s\n' 'alpine-ss2022'
+        return 0
     fi
 
-    if [[ -n "$meta_backup" \
-        && -f "$meta_backup" ]]; then
-      mv -f \
-        "$meta_backup" \
-        "$SINGBOX_RELEASE_META"
-    else
-      rm -f "$SINGBOX_RELEASE_META"
+    if [[ -f "$CONFIG_FILE" || -x /usr/local/bin/xray ]]; then
+        printf '%s\n' 'xray'
+        return 0
     fi
 
-    hash -r
-    resolve_singbox_bin
+    return 1
+}
 
-    die "$(printf '%s' "sing-box 更新失败，已恢复更新前状态。")"
-  fi
+function is_alpine_runtime_present() {
+    case "$(get_install_runtime_kind 2>/dev/null || true)" in
+        alpine-ss2022|alpine-xray-vlessenc)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
 
-  if [[ $had_unit -eq 1 \
-      && -f "$SINGBOX_CONFIG" \
-      && $config_refresh -eq 0 ]]; then
-    write_singbox_service
+function ensure_alpine_supported() {
+    if ! is_alpine_system; then
+        echo -e "${RED}错误：当前系统不是 Alpine / OpenRC，无法执行 Alpine 专用 SS2022 流程。${NC}"
+        return 1
+    fi
+    return 0
+}
 
-    if [[ $was_active -eq 1 ]]; then
-      service_restart || true
+function is_stdin_interactive() {
+    [[ -t 0 ]]
+}
+
+function is_quick_install_noninteractive() {
+    [[ "$QUICK_INSTALL" == "1" ]] && ! is_stdin_interactive
+}
+
+function ensure_systemd_supported() {
+    if ! command -v systemctl >/dev/null 2>&1; then
+        echo -e "${RED}错误：当前系统未检测到 systemd / systemctl，本脚本目前仅支持基于 systemd 的系统。${NC}"
+        return 1
+    fi
+    return 0
+}
+
+function fix_xray_config_permissions() {
+    local service_user=""
+    local service_group=""
+
+    [[ -f "$CONFIG_FILE" ]] || return 1
+
+    service_user=$(systemctl show xray -p User --value 2>/dev/null || true)
+    service_group=$(systemctl show xray -p Group --value 2>/dev/null || true)
+
+    if [[ -z "$service_user" ]]; then
+        service_user=$(systemctl cat xray 2>/dev/null | awk -F= '/^[[:space:]]*User[[:space:]]*=/{gsub(/[[:space:]]/, "", $2); user=$2} END{print user}' || true)
+    fi
+    [[ -n "$service_user" ]] || service_user="root"
+
+    if [[ "$service_user" == "root" ]]; then
+        chmod 700 "$CONFIG_DIR" >/dev/null 2>&1 || return 1
+        chown root:root "$CONFIG_FILE" >/dev/null 2>&1 || return 1
+        chmod 600 "$CONFIG_FILE" || return 1
+        return 0
     fi
 
-    if [[ $was_active -eq 1 ]] \
-        && ! wait_for_singbox_ready; then
+    if ! id "$service_user" >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Xray 服务账户不存在：${service_user}${NC}"
+        return 1
+    fi
 
-      warn "$(printf '%s' "新版 sing-box 启动失败，正在回滚……")"
+    if [[ -z "$service_group" ]]; then
+        service_group=$(id -gn "$service_user" 2>/dev/null || true)
+    fi
+    [[ -n "$service_group" ]] || {
+        echo -e "${RED}  ✗ 无法确定 Xray 服务账户的用户组：${service_user}${NC}"
+        return 1
+    }
 
-      if [[ $had_managed -eq 1 \
-          && -f "$backup" ]]; then
-        mv -f \
-          "$backup" \
-          "$MANAGED_SINGBOX_BIN"
-      else
-        rm -f "$MANAGED_SINGBOX_BIN"
-      fi
+    chown "root:${service_group}" "$CONFIG_DIR" "$CONFIG_FILE" >/dev/null 2>&1 || {
+        echo -e "${RED}  ✗ 无法设置 Xray 配置的服务账户访问权限。${NC}"
+        return 1
+    }
+    chmod 750 "$CONFIG_DIR" || return 1
+    chmod 640 "$CONFIG_FILE" || return 1
+    echo -e "${GREEN}  ✓ 已设置 Xray 配置权限：root:${service_group} / 640${NC}"
+}
 
-      if [[ -n "$meta_backup" \
-          && -f "$meta_backup" ]]; then
-        mv -f \
-          "$meta_backup" \
-          "$SINGBOX_RELEASE_META"
-      else
-        rm -f "$SINGBOX_RELEASE_META"
-      fi
+function json_escape() {
+    if ! command -v jq >/dev/null 2>&1; then
+        echo -e "${RED}错误：缺少 jq，无法安全生成 JSON。${NC}" >&2
+        return 1
+    fi
+    printf '%s' "$1" | jq -R -s -c '.' | sed 's/^"//; s/"$//'
+}
 
-      hash -r
-      resolve_singbox_bin
+function load_sni_pool() {
+    DEST_OPTIONS=()
+    SNI_POOL_SOURCE="default"
 
-      if [[ -n "$SINGBOX_BIN" ]]; then
-        write_singbox_service
-
-        if [[ $was_active -eq 1 ]]; then
-          service_restart || true
+    if [[ -f "$SNI_POOL_FILE" ]]; then
+        while IFS= read -r linebuf; do
+            linebuf=$(printf '%s' "$linebuf" | tr -d '\n')
+            [[ -n "$linebuf" && "$linebuf" =~ ^[A-Za-z0-9._-]+$ ]] && DEST_OPTIONS+=("$linebuf")
+        done < "$SNI_POOL_FILE"
+        if [[ ${#DEST_OPTIONS[@]} -gt 0 ]]; then
+            SNI_POOL_SOURCE="file"
         fi
-      fi
-
-      if [[ $was_active -eq 1 ]] \
-          && ! wait_for_singbox_ready; then
-        service_print_logs 80
-
-        die "$(printf '%s' "新版启动失败，且旧版回滚后也未恢复，请检查日志。")"
-      fi
-
-      service_print_logs 40
-
-      die "$(printf '%s' "sing-box 更新后启动失败，已成功恢复旧版本。")"
     fi
-  fi
 
-  rm -f \
-    "$backup" \
-    "$meta_backup"
-
-  after="$(
-    "$SINGBOX_BIN" version \
-      2>/dev/null \
-      | head -n 1 \
-      || true
-  )"
-
-  print_kv "更新前：" "$before" 14
-  print_kv "更新后：" "${after:-未知}" 14
-
-  ok "$(printf '%s' "sing-box 已通过 GitHub Release SHA-256 摘要校验。")"
+    if [[ ${#DEST_OPTIONS[@]} -eq 0 ]]; then
+        DEST_OPTIONS=("${DEFAULT_DEST_OPTIONS[@]}")
+        SNI_POOL_SOURCE="default"
+    fi
 }
 
-install_singbox_if_needed() {
-  if [[ -x "$MANAGED_SINGBOX_BIN" ]]; then
-    resolve_singbox_bin
-    return 0
-  fi
-
-  info "$(printf '%s' "安装脚本专用 sing-box；不会覆盖系统包管理器维护的版本。")"
-
-  install_or_update_singbox
-}
-
-install_or_update_cloudflared() {
-  local asset_regex=""
-  local arch=""
-  local info_line=""
-  local asset_name=""
-  local asset_url=""
-  local digest=""
-  local release_tag=""
-  local tmp_file=""
-  local new_binary=""
-  local backup=""
-  local meta_backup=""
-  local before=""
-  local after=""
-  local had_managed=0
-
-  arch="$(uname -m)"
-
-  case "$arch" in
-    x86_64|amd64)
-      asset_regex='^cloudflared-linux-amd64$'
-      ;;
-
-    aarch64|arm64)
-      asset_regex='^cloudflared-linux-arm64$'
-      ;;
-
-    *)
-      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；当前脚本支持 amd64 与 arm64。")"
-      ;;
-  esac
-
-  resolve_cloudflared_bin
-
-  before="$(printf '%s' "未安装")"
-
-  if [[ -n "$CLOUDFLARED_BIN" ]]; then
-    before="$(
-      "$CLOUDFLARED_BIN" --version \
-        2>/dev/null \
-        | head -n 1 \
-        || true
-    )"
-  fi
-
-  info "$(printf '%s' "查询 cloudflared 官方 GitHub 最新稳定版……")"
-
-  info_line="$(
-    github_latest_asset_info \
-      "cloudflare/cloudflared" \
-      "$asset_regex"
-  )"
-
-  IFS=$'\t' read -r \
-    asset_name \
-    asset_url \
-    digest \
-    release_tag \
-    <<< "$info_line"
-
-  [[ -n "$asset_name" \
-    && -n "$asset_url" \
-    && -n "$release_tag" ]] \
-    || die "$(printf '%s' "cloudflared Release 信息不完整。")"
-
-  tmp_file="$(mktemp)"
-
-  if ! safe_download \
-      "$asset_url" \
-      "$tmp_file"; then
-    rm -f "$tmp_file"
-
-    die "$(printf '%s' "cloudflared 下载失败。")"
-  fi
-
-  verify_github_asset \
-    "cloudflare/cloudflared" \
-    "$asset_name" \
-    "$asset_url" \
-    "$digest" \
-    "$tmp_file"
-
-  chmod 0755 "$tmp_file"
-
-  if ! cloudflared_version_ok "$tmp_file"; then
-    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      ensure_alpine_binary_compat || true
-    fi
-  fi
-
-  if ! cloudflared_version_ok "$tmp_file"; then
-    print_binary_run_error "$tmp_file" --version
-    rm -f "$tmp_file"
-
-    die "$(printf '%s' "cloudflared 新二进制无法通过版本自检。")"
-  fi
-
-  mkdir -p "$BIN_DIR"
-  chmod 0755 "$BIN_DIR"
-
-  new_binary="${MANAGED_CLOUDFLARED_BIN}.new.$$"
-  backup="${MANAGED_CLOUDFLARED_BIN}.backup.$$"
-  meta_backup="${CLOUDFLARED_RELEASE_META}.backup.$$"
-
-  if [[ -x "$MANAGED_CLOUDFLARED_BIN" ]]; then
-    cp -a \
-      "$MANAGED_CLOUDFLARED_BIN" \
-      "$backup"
-
-    had_managed=1
-  fi
-
-  if [[ -f "$CLOUDFLARED_RELEASE_META" ]]; then
-    cp -a \
-      "$CLOUDFLARED_RELEASE_META" \
-      "$meta_backup"
-  fi
-
-  install -m 0755 \
-    "$tmp_file" \
-    "$new_binary"
-
-  rm -f "$tmp_file"
-
-  mv -f \
-    "$new_binary" \
-    "$MANAGED_CLOUDFLARED_BIN"
-
-  if ! write_release_metadata \
-      "$CLOUDFLARED_RELEASE_META" \
-      "cloudflare/cloudflared" \
-      "$release_tag" \
-      "$asset_name" \
-      "$digest"; then
-
-    warn "$(printf '%s' "cloudflared 元数据写入失败，正在回滚……")"
-
-    if [[ $had_managed -eq 1 \
-        && -f "$backup" ]]; then
-      mv -f \
-        "$backup" \
-        "$MANAGED_CLOUDFLARED_BIN"
+function show_sni_pool_source() {
+    if [[ "$SNI_POOL_SOURCE" == "file" ]]; then
+        echo -e "${CYAN}  当前实际读取: ${SNI_POOL_FILE}${NC}"
     else
-      rm -f "$MANAGED_CLOUDFLARED_BIN"
+        if [[ -f "$SNI_POOL_FILE" ]]; then
+            echo -e "${YELLOW}  当前实际读取: 内置默认候选池（检测到 ${SNI_POOL_FILE}，但内容为空或无有效域名）${NC}"
+        else
+            echo -e "${CYAN}  当前实际读取: 内置默认候选池（当前未检测到 ${SNI_POOL_FILE}）${NC}"
+        fi
     fi
+}
 
-    if [[ -f "$meta_backup" ]]; then
-      mv -f \
-        "$meta_backup" \
-        "$CLOUDFLARED_RELEASE_META"
+function save_sni_pool() {
+    (
+        umask 077
+        printf '%s\n' "${DEST_OPTIONS[@]}" > "$SNI_POOL_FILE"
+    )
+    BEST_DEST=""
+    BEST_DEST_POOL_SIG=""
+}
+
+function is_port_in_use_by_non_xray() {
+    local port="$1"
+    ss -ltnupH 2>/dev/null | awk -v port="$port" '
+        $5 ~ ("(^|:|\\])" port "$") {
+            if ($0 !~ /users:\(\("xray"/) found=1
+        }
+        END { exit(found ? 0 : 1) }
+    '
+}
+
+function get_port_listener_details() {
+    local port="$1"
+    ss -ltnupH 2>/dev/null | awk -v port="$port" '
+        $5 ~ ("(^|:|\\])" port "$") { print }
+    '
+}
+
+function is_port_in_use_by_xray() {
+    local port="$1"
+    get_port_listener_details "$port" | grep -q 'users:(("xray"'
+}
+
+function get_xray_pids_by_port() {
+    local port="$1"
+    get_port_listener_details "$port" | grep -o 'pid=[0-9]\+' | cut -d= -f2 | sort -u
+}
+
+function print_port_listener_details() {
+    local port="$1"
+    local details=""
+    details=$(get_port_listener_details "$port")
+    if [[ -n "$details" ]]; then
+        echo -e "${CYAN}  端口 ${port} 占用详情:${NC}"
+        printf '%s\n' "$details"
     else
-      rm -f "$CLOUDFLARED_RELEASE_META"
+        echo -e "${GREEN}  端口 ${port} 当前未检测到监听${NC}"
+    fi
+}
+
+function stop_alpine_known_service_on_port() {
+    local port="$1"
+    local details=""
+    local pids=""
+    local i=""
+
+    details=$(get_port_listener_details "$port")
+    [[ -n "$details" ]] || return 0
+
+    if printf '%s\n' "$details" | grep -q 'users:(("xray"'; then
+        echo -e "${YELLOW}  检测到端口 ${port} 当前由 xray 占用，正在尝试自动释放...${NC}"
+        rc-service xray stop >/dev/null 2>&1 || true
+        for i in 1 2 3; do
+            sleep 1
+            if ! is_port_in_use "$port"; then
+                return 0
+            fi
+        done
+        pids=$(get_xray_pids_by_port "$port" | tr '\n' ' ' | sed 's/[[:space:]]\+$//')
+        if [[ -n "$pids" ]]; then
+            # shellcheck disable=SC2086 # pids 仅由 ss 输出中的数字 PID 组成，需要拆分为多个参数。
+            kill $pids >/dev/null 2>&1 || true
+            for i in 1 2 3; do
+                sleep 1
+                if ! is_port_in_use "$port"; then
+                    return 0
+                fi
+            done
+        fi
+        return 1
     fi
 
-    die "$(printf '%s' "cloudflared 更新失败，已恢复旧版本。")"
-  fi
-
-  hash -r
-  resolve_cloudflared_bin
-
-  if [[ "$CLOUDFLARED_BIN" != "$MANAGED_CLOUDFLARED_BIN" ]] \
-      || ! "$CLOUDFLARED_BIN" --version \
-        >/dev/null 2>&1; then
-
-    warn "$(printf '%s' "新版 cloudflared 安装后校验失败，正在回滚……")"
-
-    if [[ $had_managed -eq 1 \
-        && -f "$backup" ]]; then
-      mv -f \
-        "$backup" \
-        "$MANAGED_CLOUDFLARED_BIN"
-    else
-      rm -f "$MANAGED_CLOUDFLARED_BIN"
+    if printf '%s\n' "$details" | grep -q 'users:(("ssserver"'; then
+        echo -e "${YELLOW}  检测到端口 ${port} 当前由 ssserver 占用，正在尝试自动释放...${NC}"
+        rc-service ssserver stop >/dev/null 2>&1 || true
+        for i in 1 2 3; do
+            sleep 1
+            if ! is_port_in_use "$port"; then
+                return 0
+            fi
+        done
+        pids=$(printf '%s\n' "$details" | grep -o 'pid=[0-9]\+' | cut -d= -f2 | sort -u | tr '\n' ' ' | sed 's/[[:space:]]\+$//')
+        if [[ -n "$pids" ]]; then
+            # shellcheck disable=SC2086 # pids 仅由 ss 输出中的数字 PID 组成，需要拆分为多个参数。
+            kill $pids >/dev/null 2>&1 || true
+            for i in 1 2 3; do
+                sleep 1
+                if ! is_port_in_use "$port"; then
+                    return 0
+                fi
+            done
+        fi
+        return 1
     fi
 
-    if [[ -f "$meta_backup" ]]; then
-      mv -f \
-        "$meta_backup" \
-        "$CLOUDFLARED_RELEASE_META"
-    else
-      rm -f "$CLOUDFLARED_RELEASE_META"
-    fi
-
-    hash -r
-    resolve_cloudflared_bin
-
-    die "$(printf '%s' "cloudflared 更新失败，已恢复旧版本。")"
-  fi
-
-  rm -f \
-    "$backup" \
-    "$meta_backup"
-
-  after="$(
-    "$CLOUDFLARED_BIN" --version \
-      2>/dev/null \
-      | head -n 1 \
-      || true
-  )"
-
-  print_kv "更新前：" "$before" 14
-  print_kv "更新后：" "${after:-未知}" 14
-
-  ok "$(printf '%s' "cloudflared 已通过 GitHub Release SHA-256 摘要校验。")"
-}
-
-install_cloudflared_if_needed() {
-  if [[ -x "$MANAGED_CLOUDFLARED_BIN" ]]; then
-    resolve_cloudflared_bin
-    return 0
-  fi
-
-  info "$(printf '%s' "安装脚本专用 cloudflared；不会覆盖系统包管理器维护的版本。")"
-
-  install_or_update_cloudflared
-}
-
-install_or_update_wgcf() {
-  local arch=""
-  local asset_regex=""
-  local info_line=""
-  local asset_name=""
-  local asset_url=""
-  local digest=""
-  local release_tag=""
-  local tmp_file=""
-  local new_binary=""
-  local backup=""
-  local meta_backup=""
-  local before="未安装"
-  local after=""
-  local had_managed=0
-
-  arch="$(uname -m)"
-
-  case "$arch" in
-    x86_64|amd64)
-      asset_regex='^wgcf_[0-9][0-9.]*_linux_amd64$'
-      ;;
-
-    aarch64|arm64)
-      asset_regex='^wgcf_[0-9][0-9.]*_linux_arm64$'
-      ;;
-
-    *)
-      die "$(printf '%s' "暂不支持 CPU 架构：${arch}；wgcf 当前仅启用 amd64 与 arm64。")"
-      ;;
-  esac
-
-  resolve_wgcf_bin
-
-  if [[ -f "$WGCF_RELEASE_META" ]]; then
-    before="$(jq -r '.tag // "未知"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "未知")"
-  elif [[ -n "$WGCF_BIN" ]]; then
-    before="已安装（外部版本）"
-  fi
-
-  info "查询 wgcf GitHub 最新稳定版……"
-
-  info_line="$(
-    github_latest_asset_info \
-      "ViRb3/wgcf" \
-      "$asset_regex"
-  )"
-
-  IFS=$'\t' read -r \
-    asset_name \
-    asset_url \
-    digest \
-    release_tag \
-    <<< "$info_line"
-
-  [[ -n "$asset_name" \
-    && -n "$asset_url" \
-    && -n "$release_tag" ]] \
-    || die "wgcf Release 信息不完整。"
-
-  tmp_file="$(mktemp)"
-
-  if ! safe_download "$asset_url" "$tmp_file"; then
-    rm -f "$tmp_file"
-    die "wgcf 下载失败。"
-  fi
-
-  verify_github_asset \
-    "ViRb3/wgcf" \
-    "$asset_name" \
-    "$asset_url" \
-    "$digest" \
-    "$tmp_file"
-
-  chmod 0755 "$tmp_file"
-
-  if ! wgcf_version_ok "$tmp_file"; then
-    if [[ "$INIT_SYSTEM" == "openrc" ]]; then
-      ensure_alpine_binary_compat || true
-    fi
-  fi
-
-  if ! wgcf_version_ok "$tmp_file"; then
-    print_binary_run_error "$tmp_file" --help
-    rm -f "$tmp_file"
-    die "wgcf 新二进制无法通过自检。"
-  fi
-
-  mkdir -p "$BIN_DIR"
-  chmod 0755 "$BIN_DIR"
-
-  new_binary="${MANAGED_WGCF_BIN}.new.$$"
-  backup="${MANAGED_WGCF_BIN}.backup.$$"
-  meta_backup="${WGCF_RELEASE_META}.backup.$$"
-
-  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
-    cp -a "$MANAGED_WGCF_BIN" "$backup"
-    had_managed=1
-  fi
-
-  if [[ -f "$WGCF_RELEASE_META" ]]; then
-    cp -a "$WGCF_RELEASE_META" "$meta_backup"
-  fi
-
-  install -m 0755 "$tmp_file" "$new_binary"
-  rm -f "$tmp_file"
-  mv -f "$new_binary" "$MANAGED_WGCF_BIN"
-
-  if ! write_release_metadata \
-      "$WGCF_RELEASE_META" \
-      "ViRb3/wgcf" \
-      "$release_tag" \
-      "$asset_name" \
-      "$digest"; then
-
-    warn "wgcf 元数据写入失败，正在回滚……"
-
-    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-      mv -f "$backup" "$MANAGED_WGCF_BIN"
-    else
-      rm -f "$MANAGED_WGCF_BIN"
-    fi
-
-    if [[ -f "$meta_backup" ]]; then
-      mv -f "$meta_backup" "$WGCF_RELEASE_META"
-    else
-      rm -f "$WGCF_RELEASE_META"
-    fi
-
-    hash -r
-    resolve_wgcf_bin
-    die "wgcf 更新失败，已恢复旧版本。"
-  fi
-
-  hash -r
-  resolve_wgcf_bin
-
-  if [[ "$WGCF_BIN" != "$MANAGED_WGCF_BIN" ]] \
-      || ! wgcf_version_ok "$MANAGED_WGCF_BIN"; then
-
-    warn "wgcf 安装后校验失败，正在回滚……"
-
-    if [[ $had_managed -eq 1 && -f "$backup" ]]; then
-      mv -f "$backup" "$MANAGED_WGCF_BIN"
-    else
-      rm -f "$MANAGED_WGCF_BIN"
-    fi
-
-    if [[ -f "$meta_backup" ]]; then
-      mv -f "$meta_backup" "$WGCF_RELEASE_META"
-    else
-      rm -f "$WGCF_RELEASE_META"
-    fi
-
-    hash -r
-    resolve_wgcf_bin
-    die "wgcf 更新失败，已恢复旧版本。"
-  fi
-
-  rm -f "$backup" "$meta_backup"
-  after="$release_tag"
-
-  print_kv "更新前：" "$before" 14
-  print_kv "更新后：" "$after" 14
-  ok "wgcf 已通过 GitHub Release SHA-256 摘要校验。"
-}
-
-install_wgcf_if_needed() {
-  if [[ -x "$MANAGED_WGCF_BIN" ]]; then
-    resolve_wgcf_bin
-    return 0
-  fi
-
-  info "安装脚本专用 wgcf；不会覆盖系统中由其他方式安装的同名程序。"
-  install_or_update_wgcf
-}
-
-
-install_or_update_xray() {
-  local arch=""
-  local asset_regex=""
-  local info_line=""
-  local asset_name=""
-  local asset_url=""
-  local digest=""
-  local release_tag=""
-  local work=""
-  local archive=""
-  local extract_dir=""
-  local list_file=""
-  local candidate=""
-  local new_binary=""
-  local backup=""
-  local before=""
-  local after=""
-  local meta_backup=""
-  local had_managed=0
-  local had_unit=0
-  local was_active=0
-  local -a xray_candidates=()
-
-  arch="$(uname -m)"
-
-  case "$arch" in
-    x86_64|amd64)
-      asset_regex='^Xray-linux-64\.zip$'
-      ;;
-    aarch64|arm64)
-      asset_regex='^Xray-linux-arm64-v8a\.zip$'
-      ;;
-    *)
-      die "暂不支持 CPU 架构：${arch}；当前 Xray 临时 Argo 仅支持 amd64 与 arm64。"
-      ;;
-  esac
-
-  resolve_xray_bin
-  before="未安装"
-  if [[ -n "$XRAY_BIN" ]]; then
-    before="$("$XRAY_BIN" version 2>/dev/null | head -n 1 || true)"
-    [[ -n "$before" ]] || before="已安装"
-  fi
-
-  info "查询 XTLS/Xray-core 官方 GitHub 最新稳定版……"
-  info_line="$(github_latest_asset_info "XTLS/Xray-core" "$asset_regex")"
-
-  IFS=$'\t' read -r asset_name asset_url digest release_tag <<< "$info_line"
-  [[ -n "$asset_name" && -n "$asset_url" && -n "$release_tag" ]] \
-    || die "Xray Release 信息不完整。"
-
-  work="$(mktemp -d)"
-  archive="${work}/${asset_name}"
-  extract_dir="${work}/extract"
-  mkdir -p "$extract_dir"
-
-  if ! safe_download "$asset_url" "$archive"; then
-    rm -rf "$work"
-    die "Xray 安装包下载失败。"
-  fi
-
-  verify_github_asset "XTLS/Xray-core" "$asset_name" "$asset_url" "$digest" "$archive"
-
-  list_file="${work}/archive.list"
-  if ! unzip -Z1 "$archive" > "$list_file"; then
-    rm -rf "$work"
-    die "无法读取 Xray zip 目录。"
-  fi
-
-  if grep -Eq '(^/|(^|/)\.\.(/|$))' "$list_file"; then
-    rm -rf "$work"
-    die "Xray zip 包含不安全路径，已拒绝安装。"
-  fi
-
-  if ! unzip -q "$archive" -d "$extract_dir"; then
-    rm -rf "$work"
-    die "Xray 解压失败。"
-  fi
-
-  while IFS= read -r -d '' candidate; do
-    [[ -f "$candidate" ]] || continue
-    chmod 0755 "$candidate" || true
-    if xray_version_ok "$candidate"; then
-      xray_candidates+=("$candidate")
-    fi
-  done < <(find "$extract_dir" -type f -name xray -print0)
-
-  if [[ ${#xray_candidates[@]} -ne 1 ]]; then
-    rm -rf "$work"
-    die "Xray 安装包中未找到唯一可执行核心。"
-  fi
-
-  candidate="${xray_candidates[0]}"
-  new_binary="${MANAGED_XRAY_BIN}.new.$$"
-  mkdir -p "$BIN_DIR"
-  chmod 0755 "$BIN_DIR"
-  install -m 0755 "$candidate" "$new_binary"
-
-  if ! xray_version_ok "$new_binary"; then
-    rm -f "$new_binary"
-    rm -rf "$work"
-    die "下载后的 Xray 无法运行。"
-  fi
-
-  if [[ -f "$XRAY_CONFIG" ]]; then
-    if ! "$new_binary" run -test -config "$XRAY_CONFIG"; then
-      warn "现有 Xray 配置未通过新核心校验；将继续安装核心，重建时会写入新配置。"
-    fi
-  fi
-
-  had_managed=0
-  had_unit=0
-  was_active=0
-  backup="${MANAGED_XRAY_BIN}.backup.$$"
-  meta_backup="${XRAY_RELEASE_META}.backup.$$"
-
-  if [[ -x "$MANAGED_XRAY_BIN" ]]; then
-    had_managed=1
-    cp -a "$MANAGED_XRAY_BIN" "$backup"
-  fi
-  if [[ -f "$XRAY_RELEASE_META" ]]; then
-    cp -a "$XRAY_RELEASE_META" "$meta_backup" || true
-  fi
-  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    had_unit=1
-  fi
-  if xray_service_is_active; then
-    was_active=1
-  fi
-
-  mv -f "$new_binary" "$MANAGED_XRAY_BIN"
-  hash -r
-  resolve_xray_bin
-
-  if [[ $had_unit -eq 1 ]]; then
-    write_xray_service
-  fi
-
-  if [[ $was_active -eq 1 ]]; then
-    if ! xray_service_restart || ! wait_for_xray_ready; then
-      warn "Xray 更新后启动失败，正在回滚旧核心。"
-      [[ $had_managed -eq 1 && -f "$backup" ]] && mv -f "$backup" "$MANAGED_XRAY_BIN"
-      [[ -f "$meta_backup" ]] && mv -f "$meta_backup" "$XRAY_RELEASE_META" || rm -f "$XRAY_RELEASE_META"
-      hash -r
-      resolve_xray_bin
-      xray_service_restart || true
-      rm -rf "$work"
-      die "Xray 更新失败，已恢复旧版本。"
-    fi
-  fi
-
-  if ! write_release_metadata "$XRAY_RELEASE_META" "XTLS/Xray-core" "$release_tag" "$asset_name" "$digest"; then
-    warn "Xray 元数据写入失败，正在回滚。"
-    [[ $had_managed -eq 1 && -f "$backup" ]] && mv -f "$backup" "$MANAGED_XRAY_BIN" || rm -f "$MANAGED_XRAY_BIN"
-    [[ -f "$meta_backup" ]] && mv -f "$meta_backup" "$XRAY_RELEASE_META" || rm -f "$XRAY_RELEASE_META"
-    hash -r
-    resolve_xray_bin
-    rm -rf "$work"
-    die "Xray 更新失败，已恢复旧版本。"
-  fi
-
-  if [[ "$XRAY_BIN" != "$MANAGED_XRAY_BIN" ]] || ! xray_version_ok "$MANAGED_XRAY_BIN"; then
-    warn "Xray 安装后校验失败，正在回滚。"
-    [[ $had_managed -eq 1 && -f "$backup" ]] && mv -f "$backup" "$MANAGED_XRAY_BIN" || rm -f "$MANAGED_XRAY_BIN"
-    [[ -f "$meta_backup" ]] && mv -f "$meta_backup" "$XRAY_RELEASE_META" || rm -f "$XRAY_RELEASE_META"
-    hash -r
-    resolve_xray_bin
-    rm -rf "$work"
-    die "Xray 更新失败，已恢复旧版本。"
-  fi
-
-  rm -f "$backup" "$meta_backup"
-  rm -rf "$work"
-  after="$release_tag"
-  print_kv "更新前：" "$before" 14
-  print_kv "更新后：" "$after" 14
-  ok "Xray 已通过 GitHub Release SHA-256 摘要校验。"
-}
-
-install_xray_if_needed() {
-  if [[ -x "$MANAGED_XRAY_BIN" ]]; then
-    resolve_xray_bin
-    return 0
-  fi
-
-  info "安装脚本专用 Xray；不会覆盖系统中由其他方式安装的同名程序。"
-  install_or_update_xray
-}
-
-valid_uuid() {
-  [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
-}
-
-valid_ws_path() {
-  [[ "$1" =~ ^/[A-Za-z0-9._~-]+$ ]]
-}
-
-valid_argo_host() {
-  [[ -z "$1" \
-    || "$1" =~ ^[a-z0-9-]+\.trycloudflare\.com$ ]]
-}
-
-valid_ipv4() {
-  local value="$1"
-  local a=""
-  local b=""
-  local c=""
-  local d=""
-  local extra=""
-  local part=""
-
-  IFS='.' read -r \
-    a \
-    b \
-    c \
-    d \
-    extra \
-    <<< "$value"
-
-  [[ -z "${extra:-}" \
-    && -n "${a:-}" \
-    && -n "${b:-}" \
-    && -n "${c:-}" \
-    && -n "${d:-}" ]] \
-    || return 1
-
-  for part in "$a" "$b" "$c" "$d"; do
-    [[ "$part" =~ ^[0-9]{1,3}$ ]] || return 1
-    ((10#$part >= 0 && 10#$part <= 255)) || return 1
-  done
-}
-
-valid_ipv6() {
-  local value="$1"
-  local left=""
-  local right=""
-  local compressed=0
-  local units=0
-  local part=""
-  local index=0
-  local -a left_parts=()
-  local -a right_parts=()
-
-  [[ -n "$value" && "$value" == *:* ]] || return 1
-  [[ "$value" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
-  [[ "$value" != *:::* ]] || return 1
-
-  if [[ "$value" == *::* ]]; then
-    compressed=1
-    left="${value%%::*}"
-    right="${value#*::}"
-    [[ "$right" != *::* ]] || return 1
-  else
-    [[ "$value" != :* && "$value" != *: ]] || return 1
-    left="$value"
-  fi
-
-  if [[ -n "$left" ]]; then
-    [[ "$left" != :* && "$left" != *: ]] || return 1
-    IFS=':' read -r -a left_parts <<< "$left"
-  fi
-  if [[ -n "$right" ]]; then
-    [[ "$right" != :* && "$right" != *: ]] || return 1
-    IFS=':' read -r -a right_parts <<< "$right"
-  fi
-
-  for ((index = 0; index < ${#left_parts[@]}; index++)); do
-    part="${left_parts[index]}"
-    [[ -n "$part" ]] || return 1
-
-    if [[ "$part" == *.* ]]; then
-      [[ $compressed -eq 0 && $index -eq $((${#left_parts[@]} - 1)) ]] || return 1
-      valid_ipv4 "$part" || return 1
-      ((units+=2))
-    else
-      [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
-      ((units+=1))
-    fi
-  done
-
-  for ((index = 0; index < ${#right_parts[@]}; index++)); do
-    part="${right_parts[index]}"
-    [[ -n "$part" ]] || return 1
-
-    if [[ "$part" == *.* ]]; then
-      [[ $index -eq $((${#right_parts[@]} - 1)) ]] || return 1
-      valid_ipv4 "$part" || return 1
-      ((units+=2))
-    else
-      [[ "$part" =~ ^[0-9A-Fa-f]{1,4}$ ]] || return 1
-      ((units+=1))
-    fi
-  done
-
-  if [[ $compressed -eq 1 ]]; then
-    ((units < 8))
-  else
-    ((units == 8))
-  fi
-}
-
-
-valid_ipv4_cidr() {
-  local value="$1"
-  local address=""
-  local prefix=""
-
-  [[ "$value" =~ ^([^/]+)/([0-9]{1,2})$ ]] || return 1
-  address="${BASH_REMATCH[1]}"
-  prefix="${BASH_REMATCH[2]}"
-
-  valid_ipv4 "$address" || return 1
-  ((10#$prefix >= 0 && 10#$prefix <= 32))
-}
-
-valid_ipv6_cidr() {
-  local value="$1"
-  local address=""
-  local prefix=""
-
-  [[ "$value" =~ ^([^/]+)/([0-9]{1,3})$ ]] || return 1
-  address="${BASH_REMATCH[1]}"
-  prefix="${BASH_REMATCH[2]}"
-
-  valid_ipv6 "$address" || return 1
-  ((10#$prefix >= 0 && 10#$prefix <= 128))
-}
-
-valid_local_port() {
-  local value="$1"
-  [[ "$value" =~ ^[0-9]{1,5}$ ]] || return 1
-  ((10#$value >= 1024 && 10#$value <= 65535))
-}
-
-valid_node_name() {
-  local value="$1"
-  local width=""
-
-  [[ -n "$value" ]] || return 1
-  text_is_valid_utf8 "$value" || return 1
-
-  [[ ${#value} -le 80 ]] || return 1
-
-  if LC_ALL=C grep -q '[[:cntrl:]]' < <(printf '%s' "$value"); then
     return 1
-  fi
-
-  width="$(text_display_width "$value")"
-  [[ "$width" =~ ^[0-9]+$ && "$width" -le 160 ]] || return 1
-
-  return 0
 }
 
-valid_domain_name() {
-  local value="${1%.}"
-  local label=""
-  local -a labels=()
+function ensure_alpine_install_port_available() {
+    local port="$1"
+    local purpose="$2"
+    local details=""
 
-  [[ -n "$value" \
-    && ${#value} -le 253 \
-    && "$value" == *.* ]] \
-    || return 1
-
-  [[ "$value" =~ ^[A-Za-z0-9.-]+$ ]] \
-    || return 1
-
-  IFS='.' read -r \
-    -a labels \
-    <<< "$value"
-
-  for label in "${labels[@]}"; do
-    [[ -n "$label" \
-      && ${#label} -le 63 ]] \
-      || return 1
-
-    [[ "$label" =~ ^[A-Za-z0-9]([A-Za-z0-9-]*[A-Za-z0-9])?$ ]] \
-      || return 1
-  done
-}
-
-normalize_preferred_endpoint() {
-  local value="$1"
-  local a=""
-  local b=""
-  local c=""
-  local d=""
-
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-
-  if [[ "$value" =~ ^\[(.*)\]$ ]]; then
-    value="${BASH_REMATCH[1]}"
-  fi
-
-  if valid_ipv4 "$value"; then
-    IFS='.' read -r \
-      a \
-      b \
-      c \
-      d \
-      <<< "$value"
-
-    value="$((10#$a)).$((10#$b)).$((10#$c)).$((10#$d))"
-  elif valid_domain_name "$value"; then
-    value="${value%.}"
-    value="${value,,}"
-  fi
-
-  printf '%s' "$value"
-}
-
-valid_preferred_endpoint() {
-  local value="$1"
-
-  [[ -n "$value" \
-    && "$value" != *[[:space:]]* \
-    && ${#value} -le 253 ]] \
-    || return 1
-
-  if [[ "$value" =~ ^[0-9.]+$ ]]; then
-    valid_ipv4 "$value"
-    return
-  fi
-
-  valid_ipv6 "$value" \
-    || valid_domain_name "$value"
-}
-
-valid_feature_flag() {
-  [[ "$1" == "0" || "$1" == "1" ]]
-}
-
-feature_label() {
-  if [[ "${1:-0}" == "1" ]]; then
-    printf '%s' "已启用"
-  else
-    printf '%s' "未启用"
-  fi
-}
-
-normalize_feature_flag() {
-  case "${1,,}" in
-    1|true|yes|y|on|enable|enabled)
-      printf '%s' "1"
-      ;;
-    0|false|no|n|off|disable|disabled)
-      printf '%s' "0"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-read_feature_choice() {
-  local variable_name="$1"
-  local label="$2"
-  local current="$3"
-  local input=""
-  local normalized=""
-  local hint="Y/n"
-
-  [[ "$current" == "1" ]] || hint="y/N"
-
-  while true; do
-    read_interactive input "${label} [${hint}]：" "" || input=""
-
-    if [[ -z "$input" ]]; then
-      printf -v "$variable_name" '%s' "$current"
-      return 0
+    if ! is_port_in_use "$port"; then
+        return 0
     fi
 
-    if normalized="$(normalize_feature_flag "$input" 2>/dev/null)"; then
-      printf -v "$variable_name" '%s' "$normalized"
-      return 0
+    details=$(get_port_listener_details "$port")
+    if printf '%s\n' "$details" | grep -Eq 'users:\(\("(xray|ssserver)"'; then
+        echo -e "${GREEN}  ✓ 端口 ${port} 由当前受管服务占用；将在配置验证通过后切换给 ${purpose}${NC}"
+        return 0
     fi
 
-    warn "请输入 yes/y 或 no/n；直接回车保留当前值。"
-  done
+    echo -e "${RED}  ✗ 端口 ${port} 已被占用，无法用于 ${purpose} 安装。${NC}"
+    print_port_listener_details "$port"
+    return 1
 }
 
-valid_outbound_ip_mode() {
-  [[ "$1" == "ipv4_only" || "$1" == "prefer_ipv4" ]]
+function show_reality_alternate_port_hint() {
+    local port="$1"
+    echo -e "${YELLOW}  提示：手动模式可选择任意 1-65535 的未占用 Reality 端口（${REALITY_GATE_PORT} 除外）。当前冲突端口：${port}${NC}"
 }
 
-normalize_outbound_ip_mode() {
-  case "${1,,}" in
-    ipv4_only|ipv4-only|only_ipv4|only-ipv4|1)
-      printf '%s' "ipv4_only"
-      ;;
-    prefer_ipv4|prefer-ipv4|ipv4_prefer|ipv4-prefer|2)
-      printf '%s' "prefer_ipv4"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
+function generate_short_id() {
+    local sid=""
+    local i
+    for i in {1..60}; do
+        sid=$(openssl rand -hex 4 2>/dev/null || true)
+        if [[ -n "$sid" && "$sid" =~ [0-9] && "$sid" =~ [a-f] ]]; then
+            echo "$sid"
+            return 0
+        fi
+    done
 
-singbox_ip_strategy() {
-  case "$OUTBOUND_IP_MODE" in
-    ipv4_only)
-      printf '%s' "ipv4_only"
-      ;;
-    prefer_ipv4)
-      printf '%s' "prefer_ipv4"
-      ;;
-    *)
-      die "出站策略无效：${OUTBOUND_IP_MODE}"
-      ;;
-  esac
-}
-
-xray_freedom_domain_strategy() {
-  case "$OUTBOUND_IP_MODE" in
-    ipv4_only)
-      printf '%s' "UseIPv4"
-      ;;
-    prefer_ipv4)
-      printf '%s' "UseIPv4v6"
-      ;;
-    *)
-      die "出站策略无效：${OUTBOUND_IP_MODE}"
-      ;;
-  esac
-}
-
-xray_routing_domain_strategy() {
-  printf '%s' "IPOnDemand"
-}
-
-outbound_ip_mode_label() {
-  local mode="${1:-$OUTBOUND_IP_MODE}"
-
-  case "$mode" in
-    ipv4_only)
-      printf '%s' "仅使用 IPv4"
-      ;;
-    prefer_ipv4)
-      printf '%s' "IPv4 优先（可回退 IPv6）"
-      ;;
-    *)
-      printf '%s' "未设置"
-      ;;
-  esac
-}
-
-read_outbound_ip_mode() {
-  local variable_name="$1"
-  local current="$2"
-  local title="${3:-出站策略}"
-  local input=""
-  local normalized=""
-  local current_label=""
-
-  valid_outbound_ip_mode "$current" || current="$DEFAULT_OUTBOUND_IP_MODE"
-  current_label="$(outbound_ip_mode_label "$current")"
-
-  while true; do
-    printf '\n%s\n' "${title}（当前：${current_label}）"
-    printf '%s\n' "1. 仅使用 IPv4"
-    printf '%s\n' "2. IPv4 优先，可回退 IPv6（默认）"
-    read_interactive input \
-      "请选择 [1-2，直接回车保留当前]：" \
-      "" || input=""
-
-    if [[ -z "$input" ]]; then
-      printf -v "$variable_name" '%s' "$current"
-      return 0
-    fi
-
-    if normalized="$(normalize_outbound_ip_mode "$input" 2>/dev/null)"; then
-      printf -v "$variable_name" '%s' "$normalized"
-      return 0
-    fi
-
-    warn "请输入 1（仅使用 IPv4）或 2（IPv4 优先，可回退 IPv6）。"
-  done
-}
-
-infer_legacy_feature_settings() {
-  DOH_ENABLED="0"
-  WARP_ENABLED="0"
-
-  [[ -f "$SINGBOX_CONFIG" ]] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-
-  if jq -e '
-      .dns.servers? // []
-      | any(.tag == "cloudflare-doh" and .type == "https")
-    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
-    DOH_ENABLED="1"
-  fi
-
-  if jq -e '
-      .endpoints? // []
-      | any(.tag == "warp" and .type == "wireguard")
-    ' "$SINGBOX_CONFIG" >/dev/null 2>&1; then
-    WARP_ENABLED="1"
-  fi
-}
-
-load_settings() {
-  local endpoint=""
-  local xray_endpoint=""
-  local port=""
-  local node=""
-  local doh=""
-  local warp=""
-  local ip_mode=""
-  local invalid_file=""
-
-  PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-  XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-  NODE_NAME="$DEFAULT_NODE_NAME"
-  DOH_ENABLED="$DEFAULT_DOH_ENABLED"
-  WARP_ENABLED="$DEFAULT_WARP_ENABLED"
-  OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
-  SETTINGS_CONFIGURED=0
-
-  [[ -e "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]] || return 0
-  command -v jq >/dev/null 2>&1 || return 0
-
-  if [[ ! -f "$SETTINGS_JSON" || -L "$SETTINGS_JSON" ]]; then
-    warn "设置文件不是普通文件或属于符号链接，已忽略并恢复默认设置：${SETTINGS_JSON}"
+    sid=$(printf 'a%06x1' "$(( ($(date +%s 2>/dev/null || echo 0) + $$ + ${RANDOM:-0}) & 0xFFFFFF ))")
+    echo "$sid"
     return 0
-  fi
+}
 
-  if ! jq -e 'type == "object"' "$SETTINGS_JSON" >/dev/null 2>&1; then
-    invalid_file="${SETTINGS_JSON}.invalid.$(date -u +%Y%m%dT%H%M%SZ).$$"
-    if mv -- "$SETTINGS_JSON" "$invalid_file" 2>/dev/null; then
-      chmod 600 "$invalid_file" 2>/dev/null || true
-      warn "设置文件损坏，已隔离到 ${invalid_file}；当前恢复默认设置。"
+function ask_yes_no() {
+    local prompt="$1"
+    local answer=""
+    while true; do
+        if ! read_input -r -p "$prompt [y/n]: " answer; then
+            echo ""
+            if [[ "${QUICK_FORCE:-0}" == "1" ]]; then
+                echo -e "${YELLOW}  检测到非交互输入 / EOF，force 模式下按 y 处理。${NC}"
+                return 0
+            fi
+            echo -e "${YELLOW}  检测到非交互输入 / EOF，按 n 处理。${NC}"
+            return 1
+        fi
+        case "$answer" in
+            [yY])
+                return 0
+                ;;
+            [nN])
+                return 1
+                ;;
+            *)
+                echo -e "${RED}  请输入 y 或 n。${NC}"
+                ;;
+        esac
+    done
+}
+
+function choose_freedom_domain_strategy() {
+    local ds_choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} IPv4 优先（UseIPv4）" >&2
+        echo -e "  ${CYAN}2.${NC} 仅 IPv4（ForceIPv4）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 [1-2/0/b]，默认 1（1=IPv4 优先 / 2=仅 IPv4）: " ds_choice
+        case "${ds_choice:-1}" in
+            1|01)
+                echo "UseIPv4"
+                return 0
+                ;;
+            2|02)
+                echo "ForceIPv4"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function read_manual_sni() {
+    local prompt="$1"
+    local value
+    while true; do
+        read_input -r -p "$prompt" value
+        value=$(printf '%s' "$value" | tr -d '[:space:]')
+        if [[ -z "$value" ]]; then
+            echo -e "${RED}  SNI 不能为空。${NC}" >&2
+            continue
+        fi
+        if [[ ! "$value" =~ ^[A-Za-z0-9._-]+$ ]]; then
+            echo -e "${RED}  SNI 仅允许字母、数字、点、下划线和连字符。${NC}" >&2
+            continue
+        fi
+        echo "$value"
+        return 0
+    done
+}
+
+function read_manual_ss_port() {
+    local prompt="$1"
+    local port
+    while true; do
+        read_input -r -p "$prompt" port
+        if ! [[ "$port" =~ ^[0-9]+$ ]]; then
+            echo -e "${RED}  端口必须是数字。${NC}" >&2
+            continue
+        fi
+        if [[ "$port" -lt 1 || "$port" -gt 65535 ]]; then
+            echo -e "${RED}  端口范围必须在 1-65535。${NC}" >&2
+            continue
+        fi
+        echo "$port"
+        return 0
+    done
+}
+
+function choose_reality_port() {
+    local choice
+    local port
+    while true; do
+        echo -e "  ${CYAN}1.${NC} 443（默认）" >&2
+        echo -e "  ${CYAN}2.${NC} 自定义端口（1-65535）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 Reality 端口 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                echo "443"
+                return 0
+                ;;
+            2|02)
+                port=$(read_manual_ss_port "请输入 Reality 端口: ")
+                if [[ "$port" == "$REALITY_GATE_PORT" ]]; then
+                    echo -e "${RED}  ${REALITY_GATE_PORT} 端口保留给 Reality fallback gate，请换一个端口。${NC}" >&2
+                    continue
+                fi
+                echo "$port"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function choose_ss_method() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} 2022-blake3-aes-128-gcm（默认）" >&2
+        echo -e "  ${CYAN}2.${NC} 2022-blake3-aes-256-gcm" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 SS2022 加密方式 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                echo "2022-blake3-aes-128-gcm"
+                return 0
+                ;;
+            2|02)
+                echo "2022-blake3-aes-256-gcm"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function choose_reality_landing_count() {
+    local choice
+    local custom_count
+    while true; do
+        echo -e "  ${CYAN}1.${NC} 直出（0 个落地）" >&2
+        echo -e "  ${CYAN}2.${NC} 输入落地总数（1-10 个）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择落地数量 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                printf '%s' "0"
+                return 0
+                ;;
+            2|02)
+                while true; do
+                    read_input -r -p "请输入落地总数 [1-10]: " custom_count
+                    if [[ "$custom_count" =~ ^[0-9]+$ ]] && (( custom_count >= 1 && custom_count <= 10 )); then
+                        printf '%s' "$custom_count"
+                        return 0
+                    fi
+                    echo -e "${RED}  请输入 1-10 之间的数字。${NC}" >&2
+                done
+                ;;
+            0|00)
+                printf '%s' '__BACK__'
+                return 0
+                ;;
+            b|B)
+                printf '%s' '__MAIN__'
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function choose_vlessenc_padding_profile() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} 默认（核心自动 padding / delay）" >&2
+        echo -e "  ${CYAN}2.${NC} 温和（轻微增加长度与节奏扰动）" >&2
+        echo -e "  ${CYAN}3.${NC} 激进（更明显的实验性 padding / delay）" >&2
+        echo -e "  ${CYAN}4.${NC} 手动自定义（客户端 / 服务端分别输入）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择实验性 padding / delay 档位 [1-4/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                printf '%s' "off"
+                return 0
+                ;;
+            2|02)
+                printf '%s' "gentle"
+                return 0
+                ;;
+            3|03)
+                printf '%s' "aggressive"
+                return 0
+                ;;
+            4|04)
+                printf '%s' "custom"
+                return 0
+                ;;
+            0|00)
+                printf '%s' '__BACK__'
+                return 0
+                ;;
+            b|B)
+                printf '%s' '__MAIN__'
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1-4、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function get_vlessenc_padding_profile_desc() {
+    case "$1" in
+        off) printf '%s' '默认：不额外追加自定义 padding / delay，保持核心默认行为' ;;
+        gentle) printf '%s' '温和：少量 padding + 轻微 delay，主要做轻量长度与节奏扰动' ;;
+        aggressive) printf '%s' '激进：更多 padding 段与更大 delay 抖动，伪装更强但更影响时延与稳定性' ;;
+        custom) printf '%s' '手动自定义：客户端 / 服务端分别输入规则，适合已理解格式后再改' ;;
+        *) printf '%s' '默认：不额外追加自定义 padding / delay，保持核心默认行为' ;;
+    esac
+}
+
+function get_vlessenc_padding_profile_for_side() {
+    local profile="$1"
+    local side="$2"
+    case "${profile}:${side}" in
+        off:*) printf '%s' '' ;;
+        gentle:client) printf '%s' '100-96-768.60-0-80.40-0-1600' ;;
+        gentle:server) printf '%s' '100-128-1024.70-0-96.45-0-2048' ;;
+        aggressive:client) printf '%s' '100-128-1024.75-0-96.55-0-2400.35-24-320' ;;
+        aggressive:server) printf '%s' '100-160-1536.80-0-128.60-0-3200.40-32-480' ;;
+        custom:*) printf '%s' '' ;;
+        *) printf '%s' '' ;;
+    esac
+}
+
+function validate_vlessenc_padding_profile() {
+    local profile="$1"
+    local -a segments=()
+    local seg prob min max idx
+
+    [[ -n "$profile" ]] || return 1
+    [[ "$profile" != *[[:space:]]* ]] || return 1
+    IFS='.' read -r -a segments <<< "$profile"
+    [[ ${#segments[@]} -ge 1 ]] || return 1
+
+    for idx in "${!segments[@]}"; do
+        seg="${segments[$idx]}"
+        [[ "$seg" =~ ^([0-9]{1,3})-([0-9]+)-([0-9]+)$ ]] || return 1
+        prob="${BASH_REMATCH[1]}"
+        min="${BASH_REMATCH[2]}"
+        max="${BASH_REMATCH[3]}"
+        (( prob >= 0 && prob <= 100 )) || return 1
+        (( max >= min )) || return 1
+        if (( idx == 0 )); then
+            (( prob == 100 )) || return 1
+            (( min >= 35 )) || return 1
+        fi
+    done
+    return 0
+}
+
+function read_manual_vlessenc_padding_profile() {
+    local side_label="$1"
+    local value
+    while true; do
+        echo -e "${CYAN}  请输入 ${side_label}规则，格式示例：100-96-768.60-0-80.40-0-1600${NC}" >&2
+        echo -e "${CYAN}  规范：使用 padding.delay.padding(.delay.padding)... 这种链式格式。${NC}" >&2
+        echo -e "${CYAN}  每段格式：概率-最小值-最大值，示例给了三段${NC}" >&2
+        echo -e "${CYAN}  规则 1：第一段必须是 padding，不是 delay。${NC}" >&2
+        echo -e "${CYAN}  规则 2：第一段概率必须为 100。${NC}" >&2
+        echo -e "${CYAN}  规则 3：第一段最小长度（示例中为96）必须 >= 35，否则 Xray 会直接报错。${NC}" >&2
+        echo -e "${CYAN}  规则 4：每段都必须满足 最大值 >= 最小值。${NC}" >&2
+        echo -e "${CYAN}  说明：首段中的两个数字表示 padding 长度范围；delay 段中的两个数字表示等待时间范围（毫秒）。${NC}" >&2
+        read_input -r -p "请输入 ${side_label} padding / delay: " value
+        value=$(printf '%s' "$value" | tr -d '[:space:]')
+        if validate_vlessenc_padding_profile "$value"; then
+            printf '%s' "$value"
+            return 0
+        fi
+        echo -e "${RED}  格式不符合规范：请确认首段为 100-最小长度-最大长度，且第一段最小长度必须 >= 35。${NC}" >&2
+    done
+}
+
+function rewrite_vlessenc_padding_profile() {
+    local value="$1"
+    local padding_profile="$2"
+    local -a parts=()
+    local block1 old2 old3 auth
+
+    [[ -n "$padding_profile" ]] || {
+        printf '%s' "$value"
+        return 0
+    }
+
+    validate_vlessenc_padding_profile "$padding_profile" || return 1
+    IFS='.' read -r -a parts <<< "$value"
+    [[ ${#parts[@]} -ge 4 ]] || return 1
+
+    block1="${parts[0]}"
+    old2="${parts[1]}"
+    old3="${parts[2]}"
+    auth="${parts[$((${#parts[@]} - 1))]}"
+    [[ -n "$block1" && -n "$old2" && -n "$old3" && -n "$auth" ]] || return 1
+
+    printf '%s.%s.%s.%s.%s' "$block1" "$old2" "$old3" "$padding_profile" "$auth"
+}
+
+function choose_vlessenc_rtt_mode() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} 0rtt（更偏性能 / 重连更快）" >&2
+        echo -e "  ${CYAN}2.${NC} 1rtt（强制完整握手 / 更偏保守）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                echo "0rtt"
+                return 0
+                ;;
+            2|02)
+                echo "1rtt"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function choose_vlessenc_shape_mode() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} xorpub（推荐：原始格式 + 公钥部分混淆）" >&2
+        echo -e "  ${CYAN}2.${NC} native（原始格式）" >&2
+        echo -e "  ${CYAN}3.${NC} random（更随机化的表现形式）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 [1-3/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                echo "xorpub"
+                return 0
+                ;;
+            2|02)
+                echo "native"
+                return 0
+                ;;
+            3|03)
+                echo "random"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、3、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function choose_vlessenc_auth_method() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} x25519（更短；认证不抗量子）" >&2
+        echo -e "  ${CYAN}2.${NC} mlkem768（更长；认证也抗量子）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                echo "x25519"
+                return 0
+                ;;
+            2|02)
+                echo "mlkem768"
+                return 0
+                ;;
+            0|00)
+                echo "__BACK__"
+                return 0
+                ;;
+            b|B)
+                echo "__MAIN__"
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
+}
+
+function url_encode() {
+    local value="$1"
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$value" | jq -sRr @uri
     else
-      warn "设置文件损坏且无法安全隔离；当前忽略该文件并恢复默认设置。"
+        local i ch encoded=""
+        LC_ALL=C
+        for ((i=0; i<${#value}; i++)); do
+            ch=${value:i:1}
+            case "$ch" in
+                [a-zA-Z0-9.~_-])
+                    encoded+="$ch"
+                    ;;
+                *)
+                    printf -v ch '%%%02X' "'$ch"
+                    encoded+="$ch"
+                    ;;
+            esac
+        done
+        printf '%s' "$encoded"
     fi
-    return 0
-  fi
-
-  endpoint="$(jq -r '.preferred_endpoint // ""' "$SETTINGS_JSON")"
-  xray_endpoint="$(jq -r '.xray_preferred_endpoint // .preferred_endpoint // ""' "$SETTINGS_JSON")"
-  port="$(jq -r '.local_port // ""' "$SETTINGS_JSON")"
-  node="$(jq -r '.node_name // ""' "$SETTINGS_JSON")"
-  doh="$(jq -r '.doh_enabled // ""' "$SETTINGS_JSON")"
-  warp="$(jq -r '.warp_enabled // ""' "$SETTINGS_JSON")"
-  ip_mode="$(jq -r '.outbound_ip_mode // ""' "$SETTINGS_JSON")"
-
-  [[ -n "$port" ]] || port="$DEFAULT_LOCAL_PORT"
-  [[ -n "$node" ]] || node="$DEFAULT_NODE_NAME"
-  endpoint="$(normalize_preferred_endpoint "$endpoint")"
-  xray_endpoint="$(normalize_preferred_endpoint "$xray_endpoint")"
-  [[ -n "$ip_mode" ]] || ip_mode="$DEFAULT_OUTBOUND_IP_MODE"
-  ip_mode="$(normalize_outbound_ip_mode "$ip_mode" 2>/dev/null || printf '%s' "invalid")"
-
-  if [[ -z "$doh" || -z "$warp" ]]; then
-    infer_legacy_feature_settings
-    doh="$DOH_ENABLED"
-    warp="$WARP_ENABLED"
-  else
-    doh="$(normalize_feature_flag "$doh" 2>/dev/null || printf '%s' "invalid")"
-    warp="$(normalize_feature_flag "$warp" 2>/dev/null || printf '%s' "invalid")"
-  fi
-
-  if valid_preferred_endpoint "$endpoint" \
-      && valid_preferred_endpoint "$xray_endpoint" \
-      && valid_local_port "$port" \
-      && valid_node_name "$node" \
-      && valid_feature_flag "$doh" \
-      && valid_feature_flag "$warp" \
-      && valid_outbound_ip_mode "$ip_mode"; then
-    PREFERRED_ENDPOINT="$endpoint"
-    XRAY_PREFERRED_ENDPOINT="$xray_endpoint"
-    LOCAL_PORT="$((10#$port))"
-    NODE_NAME="$node"
-    DOH_ENABLED="$doh"
-    WARP_ENABLED="$warp"
-    OUTBOUND_IP_MODE="$ip_mode"
-    SETTINGS_CONFIGURED=1
-  else
-    warn "设置文件内容无效，当前恢复默认设置。"
-  fi
 }
-save_settings() {
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
-  chmod 750 "$DATA_DIR"
 
-  valid_preferred_endpoint "$PREFERRED_ENDPOINT" \
-    || die "sing-box 优选域名/IP 格式无效。"
-  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
-    || die "Xray 优选域名/IP 格式无效。"
-  valid_local_port "$LOCAL_PORT" \
-    || die "sing-box 本地端口无效；只允许 1024–65535。"
-  valid_node_name "$NODE_NAME" \
-    || die "订阅节点名称无效；不能为空、不能包含控制字符，且最多 80 个字符。"
-  valid_feature_flag "$DOH_ENABLED" \
-    || die "DoH 功能开关无效。"
-  valid_feature_flag "$WARP_ENABLED" \
-    || die "WARP 功能开关无效。"
-  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" \
-    || die "出站策略无效。"
+function rewrite_vlessenc_block2_block3() {
+    local value="$1"
+    local block2="$2"
+    local block3="$3"
+    local block1 old2 old3 rest
 
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.settings.json.XXXXXX")"
-
-  jq -n \
-    --argjson schema 5 \
-    --arg preferred_endpoint "$PREFERRED_ENDPOINT" \
-    --arg xray_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
-    --argjson local_port "$LOCAL_PORT" \
-    --arg node_name "$NODE_NAME" \
-    --argjson doh_enabled "$DOH_ENABLED" \
-    --argjson warp_enabled "$WARP_ENABLED" \
-    --arg outbound_ip_mode "$OUTBOUND_IP_MODE" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    '{
-      schema: $schema,
-      preferred_endpoint: $preferred_endpoint,
-      xray_preferred_endpoint: $xray_preferred_endpoint,
-      local_port: $local_port,
-      node_name: $node_name,
-      doh_enabled: $doh_enabled,
-      warp_enabled: $warp_enabled,
-      outbound_ip_mode: $outbound_ip_mode,
-      updated_at: $updated_at
-    }' > "$tmp"
-
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$SETTINGS_JSON"
-  SETTINGS_CONFIGURED=1
-}
-configure_custom_settings() {
-  local input=""
-  local normalized=""
-
-  load_settings
-
-  printf '\n%s\n' "sing-box 自定义部署"
-  printf '%s\n' "直接回车会保留方括号中的当前值。"
-
-  while true; do
-    read_interactive input \
-      "sing-box 优选域名/IP [${PREFERRED_ENDPOINT}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$PREFERRED_ENDPOINT"
-    normalized="$(normalize_preferred_endpoint "$input")"
-
-    if valid_preferred_endpoint "$normalized"; then
-      PREFERRED_ENDPOINT="$normalized"
-      break
+    IFS='.' read -r block1 old2 old3 rest <<< "$value"
+    if [[ -z "$block1" || -z "$rest" ]]; then
+        return 1
     fi
-    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
-  done
 
-  while true; do
-    read_interactive input \
-      "sing-box 本地端口 [${LOCAL_PORT}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$LOCAL_PORT"
-
-    if valid_local_port "$input"; then
-      LOCAL_PORT="$((10#$input))"
-      break
-    fi
-    warn "端口无效，请输入 1024–65535 之间的整数。"
-  done
-
-  while true; do
-    read_interactive input \
-      "sing-box 节点名称 [${NODE_NAME}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$NODE_NAME"
-
-    if valid_node_name "$input"; then
-      NODE_NAME="$input"
-      break
-    fi
-    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
-  done
-
-  printf '\n%s\n' "sing-box 出站模块"
-  read_feature_choice DOH_ENABLED \
-    "启用 Cloudflare DoH（1.1.1.1）" \
-    "$DOH_ENABLED"
-  read_feature_choice WARP_ENABLED \
-    "启用 Cloudflare WARP 出站" \
-    "$WARP_ENABLED"
-
-  if [[ "$WARP_ENABLED" == "1" ]]; then
-    warn "首次启用 WARP 时，脚本会调用第三方 wgcf，并以 --accept-tos 非交互注册 Cloudflare WARP 设备。"
-  fi
-
-  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "sing-box 出站策略"
-
-  save_settings
-  ok "sing-box 自定义设置已保存。"
+    printf '%s.%s.%s.%s' "$block1" "$block2" "$block3" "$rest"
 }
 
-configure_xray_custom_settings() {
-  local input=""
-  local normalized=""
+function get_vlessenc_pair_from_xray() {
+    local auth_method="$1"
+    local raw=""
+    local want=""
+    local decryption=""
+    local encryption=""
 
-  load_settings
-  load_xray_state
+    raw=$(/usr/local/bin/xray vlessenc 2>/dev/null || true)
+    [[ -n "$raw" ]] || return 1
 
-  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  [[ -n "${XRAY_LOCAL_PORT:-}" ]] || XRAY_LOCAL_PORT="$DEFAULT_XRAY_LOCAL_PORT"
-  [[ -n "${XRAY_NODE_NAME:-}" ]] || XRAY_NODE_NAME="$DEFAULT_XRAY_NODE_NAME"
-
-  printf '\n%s\n' "Xray 自定义部署"
-  printf '%s\n' "Xray 当前仅配置 VLESS-ENC / WS / TLS 直出。"
-  printf '%s\n' "直接回车会保留方括号中的当前值。"
-
-  while true; do
-    read_interactive input \
-      "Xray 优选域名/IP [${XRAY_PREFERRED_ENDPOINT}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_PREFERRED_ENDPOINT"
-    normalized="$(normalize_preferred_endpoint "$input")"
-
-    if valid_preferred_endpoint "$normalized"; then
-      XRAY_PREFERRED_ENDPOINT="$normalized"
-      break
-    fi
-    warn "优选地址无效，请输入合法域名、IPv4 或 IPv6 地址。"
-  done
-
-  while true; do
-    read_interactive input \
-      "Xray 本地端口 [${XRAY_LOCAL_PORT}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_LOCAL_PORT"
-
-    if valid_local_port "$input"; then
-      XRAY_LOCAL_PORT="$((10#$input))"
-      break
-    fi
-    warn "端口无效，请输入 1024–65535 之间的整数。"
-  done
-
-  while true; do
-    read_interactive input \
-      "Xray 节点名称 [${XRAY_NODE_NAME}]：" \
-      "" || input=""
-    [[ -n "$input" ]] || input="$XRAY_NODE_NAME"
-
-    if valid_node_name "$input"; then
-      XRAY_NODE_NAME="$input"
-      break
-    fi
-    warn "节点名称不能为空、不能包含控制字符，且最多 80 个字符。"
-  done
-
-  read_outbound_ip_mode OUTBOUND_IP_MODE "$OUTBOUND_IP_MODE" "Xray 出站策略"
-
-  save_settings
-  ok "Xray 自定义设置已保存。"
-}
-migrate_legacy_state() {
-  [[ -f "$LEGACY_STATE_FILE" \
-    && ! -f "$STATE_JSON" ]] \
-    || return 0
-
-  local old_uuid=""
-  local old_path=""
-  local old_host=""
-
-  old_uuid="$(
-    sed -n \
-      "s/^UUID='\([^']*\)'$/\1/p" \
-      "$LEGACY_STATE_FILE" \
-      | head -n 1
-  )"
-
-  old_path="$(
-    sed -n \
-      "s/^WSPATH='\([^']*\)'$/\1/p" \
-      "$LEGACY_STATE_FILE" \
-      | head -n 1
-  )"
-
-  old_host="$(
-    sed -n \
-      "s/^ARGO_HOST='\([^']*\)'$/\1/p" \
-      "$LEGACY_STATE_FILE" \
-      | head -n 1
-  )"
-
-  if valid_uuid "$old_uuid" \
-      && valid_ws_path "$old_path" \
-      && valid_argo_host "$old_host"; then
-
-    UUID="$old_uuid"
-    WSPATH="$old_path"
-    ARGO_HOST="$old_host"
-    CREATED_AT="$(
-      date -u +'%Y-%m-%dT%H:%M:%SZ'
-    )"
-
-    save_state
-
-    mv -f \
-      "$LEGACY_STATE_FILE" \
-      "${LEGACY_STATE_FILE}.migrated"
-
-    ok "$(printf '%s' "已将旧版 state.env 安全迁移为 state.json。")"
-  else
-    warn "$(printf '%s' "发现旧版 state.env，但内容校验失败；不会执行该文件。")"
-
-    mv -f \
-      "$LEGACY_STATE_FILE" \
-      "${LEGACY_STATE_FILE}.invalid"
-  fi
-}
-
-load_state() {
-  UUID=""
-  WSPATH=""
-  ARGO_HOST=""
-  CREATED_AT=""
-
-  migrate_legacy_state
-
-  [[ -f "$STATE_JSON" ]] || return 0
-
-  jq -e \
-    'type == "object"' \
-    "$STATE_JSON" \
-    >/dev/null 2>&1 \
-    || die "$(printf '%s' "状态文件损坏：${STATE_JSON}")"
-
-  UUID="$(
-    jq -r \
-      '.uuid // ""' \
-      "$STATE_JSON"
-  )"
-
-  WSPATH="$(
-    jq -r \
-      '.ws_path // ""' \
-      "$STATE_JSON"
-  )"
-
-  ARGO_HOST="$(
-    jq -r \
-      '.argo_host // ""' \
-      "$STATE_JSON"
-  )"
-
-  CREATED_AT="$(
-    jq -r \
-      '.created_at // ""' \
-      "$STATE_JSON"
-  )"
-
-  valid_uuid "$UUID" \
-    || die "$(printf '%s' "状态文件中的 UUID 无效：${STATE_JSON}")"
-
-  valid_ws_path "$WSPATH" \
-    || die "$(printf '%s' "状态文件中的 WS 路径无效：${STATE_JSON}")"
-
-  valid_argo_host "$ARGO_HOST" \
-    || die "$(printf '%s' "状态文件中的临时域名无效：${STATE_JSON}")"
-}
-
-save_state() {
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
-  chmod 750 "$DATA_DIR"
-
-  if [[ -z "$CREATED_AT" ]]; then
-    CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.state.json.XXXXXX")"
-
-  jq -n \
-    --argjson schema 2 \
-    --arg uuid "$UUID" \
-    --arg ws_path "$WSPATH" \
-    --arg argo_host "$ARGO_HOST" \
-    --arg created_at "$CREATED_AT" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    '{
-      schema: $schema,
-      uuid: $uuid,
-      ws_path: $ws_path,
-      argo_host: $argo_host,
-      created_at: $created_at,
-      updated_at: $updated_at
-    }' > "$tmp"
-
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$STATE_JSON"
-}
-
-generate_uuid_v4() {
-  local hex=""
-
-  if [[ -r /proc/sys/kernel/random/uuid ]]; then
-    cat /proc/sys/kernel/random/uuid
-    return 0
-  fi
-
-  if command -v uuidgen >/dev/null 2>&1; then
-    uuidgen
-    return 0
-  fi
-
-  hex="$(openssl rand -hex 16)"
-
-  [[ ${#hex} -eq 32 ]] || return 1
-
-  printf '%s-%s-4%s-8%s-%s\n' \
-    "${hex:0:8}" \
-    "${hex:8:4}" \
-    "${hex:13:3}" \
-    "${hex:17:3}" \
-    "${hex:20:12}"
-}
-
-generate_identity() {
-  UUID="$(generate_uuid_v4)" \
-    || die "UUID 生成失败。"
-
-  valid_uuid "$UUID" \
-    || die "生成的 UUID 未通过格式校验。"
-
-  WSPATH="/$(openssl rand -hex 16)-vmws"
-  ARGO_HOST=""
-  CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-
-  rm -f "$VMESS_JSON_FILE" "$VMESS_LINK_FILE" "$ECH_NOTE_FILE"
-  save_state
-}
-
-service_marker_is_ours() {
-  local content=""
-  local line_count=""
-
-  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] || return 1
-  [[ "$SERVICE_MARKER" == "${SERVICE_HOME}/.managed-by-zdd-argo" ]] || return 1
-  secure_root_file "$SERVICE_MARKER" || return 1
-
-  IFS= read -r content < "$SERVICE_MARKER" || return 1
-  [[ "$content" == "$SERVICE_MARKER_CONTENT" ]] || return 1
-
-  line_count="$(wc -l < "$SERVICE_MARKER" 2>/dev/null | tr -d '[:space:]' || true)"
-  [[ "$line_count" == "1" ]]
-}
-
-service_marker_is_legacy_ours() {
-  local content=""
-  local line_count=""
-
-  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] || return 1
-  [[ "$SERVICE_MARKER" == "${SERVICE_HOME}/.managed-by-zdd-argo" ]] || return 1
-  secure_root_file "$SERVICE_MARKER" || return 1
-
-  IFS= read -r content < "$SERVICE_MARKER" || return 1
-  [[ "$content" == "zdd-argo 管理的低权限服务账户" ]] || return 1
-
-  line_count="$(wc -l < "$SERVICE_MARKER" 2>/dev/null | tr -d '[:space:]' || true)"
-  [[ "$line_count" == "1" ]]
-}
-
-service_marker_is_recognized() {
-  service_marker_is_ours || service_marker_is_legacy_ours
-}
-
-
-ensure_service_account() {
-  local passwd_line=""
-  local existing_home=""
-  local existing_gid=""
-  local expected_gid=""
-  local existing_shell=""
-  local marker_tmp=""
-  local path=""
-
-  for path in "$SERVICE_HOME" "$CLOUDFLARED_HOME" "$XRAY_CLOUDFLARED_HOME" "$DATA_DIR"; do
-    if [[ -e "$path" || -L "$path" ]]; then
-      [[ -d "$path" && ! -L "$path" ]] \
-        || die "受管目录不是普通目录或属于符号链接，已停止部署：${path}"
-    fi
-  done
-
-  if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    service_marker_is_recognized \
-      || die "系统中已存在同名服务账户 ${SERVICE_USER}，但无法通过完整归属校验，已停止部署。"
-
-    passwd_line="$(getent passwd "$SERVICE_USER")"
-    IFS=':' read -r _ _ _ existing_gid _ existing_home existing_shell <<< "$passwd_line"
-    expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
-
-    [[ "$existing_home" == "$SERVICE_HOME" ]] \
-      || die "服务账户 ${SERVICE_USER} 的主目录异常，已停止部署。"
-    [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
-      || die "服务账户 ${SERVICE_USER} 的主组异常，已停止部署。"
-    [[ "$existing_shell" == "$SERVICE_SHELL" \
-      || "$existing_shell" == "/usr/sbin/nologin" \
-      || "$existing_shell" == "/sbin/nologin" \
-      || "$existing_shell" == "/bin/false" ]] \
-      || die "服务账户 ${SERVICE_USER} 的登录 Shell 异常，已停止部署。"
-  else
-    if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-      service_marker_is_recognized \
-        || die "系统中已存在同名服务组 ${SERVICE_GROUP}，但无法通过完整归属校验，已停止部署。"
+    if [[ "$auth_method" == "x25519" ]]; then
+        want="Authentication: X25519"
     else
-      groupadd --system "$SERVICE_GROUP" \
-        || die "无法创建低权限服务组 ${SERVICE_GROUP}。"
+        want="Authentication: ML-KEM-768"
     fi
 
-    useradd --system \
-      --gid "$SERVICE_GROUP" \
-      --home-dir "$SERVICE_HOME" \
-      --create-home \
-      --shell "$SERVICE_SHELL" \
-      "$SERVICE_USER" \
-      || die "无法创建低权限服务账户 ${SERVICE_USER}。"
-  fi
+    decryption=$(printf '%s\n' "$raw" | awk -v want="$want" '
+        index($0, want) { found=1; next }
+        found && /"decryption":/ {
+            sub(/.*"decryption":[[:space:]]*"/, "")
+            sub(/".*/, "")
+            print $0
+            exit
+        }
+    ')
 
-  mkdir -p "$SERVICE_HOME" "$CLOUDFLARED_HOME" "$XRAY_CLOUDFLARED_HOME" "$DATA_DIR"
-  chown root:root "$SERVICE_HOME"
-  chmod 755 "$SERVICE_HOME"
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$CLOUDFLARED_HOME" "$XRAY_CLOUDFLARED_HOME"
-  chmod 700 "$CLOUDFLARED_HOME" "$XRAY_CLOUDFLARED_HOME"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
+    encryption=$(printf '%s\n' "$raw" | awk -v want="$want" '
+        index($0, want) { found=1; next }
+        found && /"encryption":/ {
+            sub(/.*"encryption":[[:space:]]*"/, "")
+            sub(/".*/, "")
+            print $0
+            exit
+        }
+    ')
 
-  marker_tmp="$(mktemp "${SERVICE_HOME}/.managed-by-zdd-argo.XXXXXX")"
-  printf '%s\n' "$SERVICE_MARKER_CONTENT" > "$marker_tmp"
-  chown root:root "$marker_tmp"
-  chmod 600 "$marker_tmp"
-  mv -f -- "$marker_tmp" "$SERVICE_MARKER"
-
-  service_marker_is_ours \
-    || die "低权限服务账户归属标记写入后校验失败。"
+    [[ -n "$decryption" && -n "$encryption" ]] || return 1
+    printf '%s	%s
+' "$decryption" "$encryption"
 }
 
-valid_warp_account_file() {
-  [[ -f "$WARP_ACCOUNT_FILE" \
-    && ! -L "$WARP_ACCOUNT_FILE" \
-    && -s "$WARP_ACCOUNT_FILE" ]]
+function extract_x25519_private() {
+    awk '/PrivateKey:|Private key:/{print $NF; exit}'
 }
 
-valid_warp_profile_file() {
-  [[ -f "$WARP_PROFILE_FILE" \
-    && ! -L "$WARP_PROFILE_FILE" \
-    && -s "$WARP_PROFILE_FILE" ]] \
-    || return 1
-
-  grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
-    && grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$WARP_PROFILE_FILE" \
-    && grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
-    && grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$WARP_PROFILE_FILE"
+function extract_x25519_public() {
+    awk '/Password \(PublicKey\):|Password:|Public key:/{print $NF; exit}'
 }
 
-ensure_warp_profile() {
-  [[ "$WARP_ENABLED" == "1" ]] || return 0
+function extract_mlkem_seed() {
+    awk '/Seed:/{print $NF; exit}'
+}
 
-  mkdir -p "$WARP_DIR"
-  chown root:root "$WARP_DIR"
-  chmod 700 "$WARP_DIR"
+function extract_mlkem_client() {
+    awk '/Client:/{print $NF; exit}'
+}
 
-  install_wgcf_if_needed
-  [[ -n "$WGCF_BIN" ]] || die "未找到 wgcf。"
+function pick_random_free_port_excluding() {
+    local exclude_a="${1:-0}"
+    local exclude_b="${2:-0}"
+    local exclude_c="${3:-0}"
+    local port=""
+    local i
+    for i in {1..60}; do
+        port=$(shuf -i 40000-65000 -n 1)
+        if [[ "$port" == "$exclude_a" || "$port" == "$exclude_b" || "$port" == "$exclude_c" ]]; then
+            continue
+        fi
+        if ! is_port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+    return 1
+}
 
-  if ! valid_warp_account_file; then
-    rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
-    warn "正在注册新的 Cloudflare WARP 设备；wgcf 是第三方非官方工具。"
+function install_deps() {
+    echo -e "${YELLOW}  安装依赖组件...${NC}"
 
-    if ! "$WGCF_BIN" \
-        --config "$WARP_ACCOUNT_FILE" \
-        register \
-        --accept-tos; then
-      rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
-      die "Cloudflare WARP 设备注册失败。"
+    if command -v apt-get &>/dev/null; then
+        if command -v fuser >/dev/null 2>&1; then
+            local lock_waited=0
+            while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
+                  fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
+                  fuser /var/lib/apt/lists/lock >/dev/null 2>&1 || \
+                  fuser /var/cache/apt/archives/lock >/dev/null 2>&1; do
+                if [[ $lock_waited -eq 0 ]]; then
+                    echo -e "${YELLOW}  等待 dpkg/apt 锁释放（后台可能有自动更新在运行）...${NC}"
+                fi
+                lock_waited=$((lock_waited + 1))
+                if [[ $lock_waited -ge 60 ]]; then
+                    echo -e "${RED}  ✗ 等待 dpkg/apt 锁超过 3 分钟，已停止等待。${NC}"
+                    echo -e "${YELLOW}  请确认后台更新没有卡住，稍后重新执行安装。${NC}"
+                    return 1
+                fi
+                sleep 3
+            done
+        fi
+        apt-get update -y || return 1
+        DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget jq openssl coreutils procps psmisc ca-certificates iproute2 || return 1
+    elif command -v dnf &>/dev/null; then
+        dnf install -y curl wget jq openssl coreutils procps-ng psmisc ca-certificates iproute || return 1
+    elif command -v yum &>/dev/null; then
+        yum install -y curl wget jq openssl coreutils procps-ng psmisc ca-certificates iproute || return 1
+    elif command -v pacman &>/dev/null; then
+        pacman -Sy --noconfirm curl wget jq openssl coreutils procps-ng psmisc ca-certificates iproute2 || return 1
+    else
+        echo -e "${RED}未找到受支持的包管理器，请手动安装依赖后重试。${NC}"
+        return 1
     fi
-  fi
-
-  local profile_tmp=""
-  profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
-
-  if ! "$WGCF_BIN" \
-      --config "$WARP_ACCOUNT_FILE" \
-      generate \
-      --profile "$profile_tmp"; then
-    rm -f "$profile_tmp"
-    die "Cloudflare WARP WireGuard 配置生成失败。"
-  fi
-
-  chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
-
-  if ! valid_warp_account_file; then
-    rm -f "$profile_tmp"
-    die "wgcf 未生成有效的 WARP 账户文件。"
-  fi
-
-  if ! grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$profile_tmp" \
-      || ! grep -Eq '^[[:space:]]*Address[[:space:]]*=' "$profile_tmp" \
-      || ! grep -Eq '^[[:space:]]*PublicKey[[:space:]]*=' "$profile_tmp" \
-      || ! grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$profile_tmp"; then
-    rm -f "$profile_tmp"
-    die "wgcf 未生成有效的 WireGuard 配置。"
-  fi
-
-  mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
-  chmod 600 "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"
-  ok "Cloudflare WARP 设备与 WireGuard 配置已重新生成并覆盖。"
 }
 
-strip_ini_value() {
-  local value="$1"
-  value="${value#"${value%%[![:space:]]*}"}"
-  value="${value%"${value##*[![:space:]]}"}"
-  printf '%s' "$value"
-}
+function check_bbr() {
+    echo -e "${YELLOW}  检测并配置 BBR + FQ...${NC}"
 
-warp_profile_value() {
-  local key="$1"
-  local value=""
+    local current_cc current_qdisc
+    current_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)
+    current_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || true)
 
-  value="$(
-    awk -F '=' -v wanted="$key" '
-      $1 ~ "^[[:space:]]*" wanted "[[:space:]]*$" {
-        sub(/^[^=]*=/, "")
-        print
-        exit
-      }
-    ' "$WARP_PROFILE_FILE"
-  )"
+    echo -e "  拥塞控制  : ${CYAN}${current_cc:-未知}${NC}"
+    echo -e "  队列调度  : ${CYAN}${current_qdisc:-未知}${NC}"
 
-  strip_ini_value "$value"
-}
-
-load_warp_profile_parameters() {
-  local address_line=""
-  local item=""
-  local endpoint=""
-  local endpoint_host=""
-  local mtu=""
-  local checked_endpoint=""
-  local checked_port=""
-
-  ensure_warp_profile
-  valid_warp_profile_file || die "WARP WireGuard 配置不存在或格式不完整。"
-
-  WARP_PRIVATE_KEY="$(warp_profile_value PrivateKey)"
-  WARP_PEER_PUBLIC_KEY="$(warp_profile_value PublicKey)"
-  address_line="$(warp_profile_value Address)"
-  endpoint="$(warp_profile_value Endpoint)"
-  mtu="$(warp_profile_value MTU)"
-
-  WARP_IPV4=""
-  WARP_IPV6=""
-  WARP_ENDPOINT_ADDRESS=""
-
-  while IFS= read -r item; do
-    item="$(strip_ini_value "$item")"
-    [[ -n "$item" ]] || continue
-
-    if [[ "$item" == *.*/* ]]; then
-      WARP_IPV4="$item"
-    elif [[ "$item" == *:*/* ]]; then
-      WARP_IPV6="$item"
+    if ! modprobe tcp_bbr 2>/dev/null && \
+       ! grep -q "bbr" /proc/sys/net/ipv4/tcp_available_congestion_control 2>/dev/null; then
+        echo -e "${RED}  ✗ 当前内核不支持 BBR（内核版本需 ≥ 4.9），跳过。${NC}"
+        return 1
     fi
-  done < <(printf '%s\n' "$address_line" | tr ',' '\n')
 
-  [[ "$WARP_PRIVATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
-    || die "WARP 私钥格式无效。"
-  [[ "$WARP_PEER_PUBLIC_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]] \
-    || die "WARP 对端公钥格式无效。"
-  valid_ipv4_cidr "$WARP_IPV4" \
-    || die "WARP IPv4 地址格式无效。"
-  valid_ipv6_cidr "$WARP_IPV6" \
-    || die "WARP IPv6 地址格式无效。"
-
-  if [[ "$endpoint" =~ ^\[([^]]+)\]:([0-9]{1,5})$ ]]; then
-    endpoint_host="${BASH_REMATCH[1]}"
-    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
-  elif [[ "$endpoint" =~ ^([^:]+):([0-9]{1,5})$ ]]; then
-    endpoint_host="${BASH_REMATCH[1]}"
-    WARP_PROFILE_ENDPOINT_PORT="${BASH_REMATCH[2]}"
-  else
-    die "WARP Endpoint 格式无效：${endpoint}"
-  fi
-
-  ((10#$WARP_PROFILE_ENDPOINT_PORT >= 1 && 10#$WARP_PROFILE_ENDPOINT_PORT <= 65535)) \
-    || die "WARP Endpoint 端口无效。"
-
-  WARP_PROFILE_ENDPOINT_PORT="$((10#$WARP_PROFILE_ENDPOINT_PORT))"
-  WARP_ENDPOINT_PORT="$WARP_PROFILE_ENDPOINT_PORT"
-
-  if ! valid_ipv4 "$endpoint_host" \
-      && ! valid_ipv6 "$endpoint_host" \
-      && ! valid_domain_name "$endpoint_host"; then
-    die "WARP Endpoint 地址无效：${endpoint_host}"
-  fi
-
-  WARP_ENDPOINT_ADDRESS="${endpoint_host%.}"
-  WARP_ENDPOINT_ADDRESS="${WARP_ENDPOINT_ADDRESS,,}"
-
-  if [[ -f "$WARP_CHECK_FILE" && ! -L "$WARP_CHECK_FILE" ]]; then
-    checked_endpoint="$(jq -r '.endpoint // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
-    checked_port="$(jq -r '.port // empty' "$WARP_CHECK_FILE" 2>/dev/null || true)"
-
-    if [[ "${checked_endpoint,,}" == "$WARP_ENDPOINT_ADDRESS" \
-        && "$checked_port" =~ ^[0-9]{1,5}$ ]] \
-        && ((10#$checked_port >= 1 && 10#$checked_port <= 65535)); then
-      WARP_ENDPOINT_PORT="$((10#$checked_port))"
+    if [[ "$current_cc" == "bbr" && "$current_qdisc" == "fq" ]]; then
+        echo -e "${GREEN}  ✓ BBR + FQ 已启用，无需操作${NC}"
+        return 0
     fi
-  fi
 
-  if [[ "$mtu" =~ ^[0-9]{3,5}$ ]] \
-      && ((10#$mtu >= 576 && 10#$mtu <= 9000)); then
-    WARP_MTU="$((10#$mtu))"
-  else
-    WARP_MTU="1280"
-  fi
-}
-
-singbox_template_base() {
-  jq -n \
-    --arg name "$NODE_NAME" \
-    --arg uuid "$UUID" \
-    --arg path "$WSPATH" \
-    --arg ip_strategy "$(singbox_ip_strategy)" \
-    --argjson port "$LOCAL_PORT" \
-    '{
-      log: {
-        level: "info",
-        timestamp: true
-      },
-      inbounds: [
-        {
-          type: "vmess",
-          tag: "vmess-ws-in",
-          listen: "127.0.0.1",
-          listen_port: $port,
-          users: [
-            {
-              name: $name,
-              uuid: $uuid,
-              alterId: 0
+    echo -e "${YELLOW}  BBR 或 FQ 未完全启用，正在写入配置...${NC}"
+    if [[ -f "$SYSCTL_BBR_FILE" ]] && ! grep -q '^# BBR + FQ' "$SYSCTL_BBR_FILE"; then
+        if [[ ! -f "$SYSCTL_BBR_BACKUP_FILE" ]]; then
+            cp -a -- "$SYSCTL_BBR_FILE" "$SYSCTL_BBR_BACKUP_FILE" || {
+                echo -e "${RED}  ✗ 无法备份已有 ${SYSCTL_BBR_FILE}，为避免覆盖用户配置，已跳过写入。${NC}"
+                return 1
             }
-          ],
-          transport: {
-            type: "ws",
-            path: $path
-          }
+            echo -e "${CYAN}  已备份原有 BBR 配置，卸载时会尝试恢复。${NC}"
+        fi
+    fi
+
+    if ! cat > "$SYSCTL_BBR_FILE" <<EOF2
+# BBR + FQ — 由 Xray 管理脚本自动写入
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF2
+    then
+        echo -e "${RED}  ✗ 写入 ${SYSCTL_BBR_FILE} 失败。${NC}"
+        return 1
+    fi
+
+    sysctl -p "$SYSCTL_BBR_FILE" >/dev/null 2>&1 || true
+
+    local new_cc new_qdisc
+    new_cc=$(sysctl -n net.ipv4.tcp_congestion_control 2>/dev/null || true)
+    new_qdisc=$(sysctl -n net.core.default_qdisc 2>/dev/null || true)
+
+    if [[ "$new_cc" == "bbr" && "$new_qdisc" == "fq" ]]; then
+        echo -e "${GREEN}  ✓ BBR + FQ 已成功启用${NC}"
+        echo -e "  配置已写入: ${CYAN}${SYSCTL_BBR_FILE}${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ 已写入配置，但当前未完全生效（cc=${new_cc:-unknown}, qdisc=${new_qdisc:-unknown}）。${NC}"
+    return 1
+}
+
+function maybe_configure_bbr() {
+    if ! is_stdin_interactive; then
+        check_bbr || true
+        return 0
+    fi
+    if ask_yes_no "  是否检测并配置 BBR + FQ"; then
+        check_bbr || true
+    else
+        echo -e "${CYAN}  已按选择跳过 BBR + FQ 配置。${NC}"
+    fi
+    return 0
+}
+
+function get_alpine_repo_branch() {
+    local release_line=""
+    release_line=$(cat /etc/alpine-release 2>/dev/null || true)
+    if [[ "$release_line" =~ ^([0-9]+)\.([0-9]+) ]]; then
+        printf 'v%s.%s\n' "${BASH_REMATCH[1]}" "${BASH_REMATCH[2]}"
+        return 0
+    fi
+    echo -e "${RED}  ✗ 无法识别 Alpine 版本，拒绝自动混用 edge 仓库。${NC}" >&2
+    return 1
+}
+
+function ensure_alpine_community_repo() {
+    local repo_file="/etc/apk/repositories"
+    local repo_branch community_line
+
+    [[ -f "$repo_file" ]] || {
+        echo -e "${RED}  ✗ 未找到 ${repo_file}${NC}"
+        return 1
+    }
+
+    if grep -Eq '^[[:space:]]*https?://.*/community([[:space:]]|$)' "$repo_file"; then
+        echo -e "${GREEN}  ✓ Alpine community 仓库已启用${NC}"
+        return 0
+    fi
+
+    repo_branch=$(get_alpine_repo_branch) || return 1
+    community_line="https://dl-cdn.alpinelinux.org/alpine/${repo_branch}/community"
+    if [[ ! -f "$ALPINE_REPO_BACKUP_FILE" ]]; then
+        cp -a -- "$repo_file" "$ALPINE_REPO_BACKUP_FILE" || {
+            echo -e "${RED}  ✗ Alpine 仓库文件备份失败，拒绝修改。${NC}"
+            return 1
         }
-      ],
-      dns: {
-        servers: [
+        chmod 600 "$ALPINE_REPO_BACKUP_FILE" >/dev/null 2>&1 || true
+        echo -e "${CYAN}  已备份 Alpine 仓库配置：${ALPINE_REPO_BACKUP_FILE}${NC}"
+    fi
+    echo -e "${YELLOW}  未检测到 community 仓库，正在追加：${community_line}${NC}"
+    printf '%s\n' "$community_line" >> "$repo_file" || return 1
+    echo -e "${GREEN}  ✓ 已追加 Alpine community 仓库${NC}"
+    return 0
+}
+
+function is_alpine_ss_runtime_ready() {
+    command -v ssserver >/dev/null 2>&1 && command -v ssservice >/dev/null 2>&1
+}
+
+function install_alpine_shadowsocks_rust_package() {
+    echo -e "${YELLOW}  安装 shadowsocks-rust 运行组件...${NC}"
+    apk add shadowsocks-rust mimalloc || return 1
+    return 0
+}
+
+function ensure_alpine_ss_runtime_ready() {
+    if is_alpine_ss_runtime_ready; then
+        return 0
+    fi
+
+    echo -e "${YELLOW}  当前未检测到 shadowsocks-rust 运行组件。${NC}"
+    if ask_yes_no "  是否现在继续安装 shadowsocks-rust"; then
+        install_alpine_shadowsocks_rust_package || return 1
+        if is_alpine_ss_runtime_ready; then
+            return 0
+        fi
+        echo -e "${RED}  ✗ 安装后仍未检测到 ssserver / ssservice。${NC}"
+        return 1
+    fi
+
+    echo -e "${RED}  已取消：SS2022 流程必须依赖 shadowsocks-rust。${NC}"
+    return 1
+}
+
+function install_alpine_runtime_deps() {
+    echo -e "${YELLOW}  安装 Alpine 运行依赖...${NC}"
+    apk update || return 1
+    apk add curl wget jq openssl coreutils procps ca-certificates iproute2 || return 1
+
+    if is_alpine_ss_runtime_ready; then
+        echo -e "${GREEN}  ✓ 已检测到 shadowsocks-rust 运行组件${NC}"
+        return 0
+    fi
+
+    if install_alpine_shadowsocks_rust_package; then
+        echo -e "${GREEN}  ✓ shadowsocks-rust 已安装完成${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  ⚠ shadowsocks-rust 安装失败。${NC}"
+    if ask_yes_no "  是否继续完成其余环境准备"; then
+        return 0
+    fi
+    return 1
+}
+
+function backup_file_if_exists() {
+    local file_path="$1"
+    local backup_path=""
+    if [[ -f "$file_path" ]]; then
+        backup_path="${file_path}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -a -- "$file_path" "$backup_path" || return 1
+        echo -e "${YELLOW}  已备份旧文件: ${backup_path}${NC}"
+    fi
+}
+
+function base64_encode_urlsafe_nopad() {
+    printf '%s' "$1" | base64 | tr -d '\r\n=' | tr '+/' '-_'
+}
+
+function build_ss2022_uri() {
+    local host="$1"
+    local port="$2"
+    local method="$3"
+    local password="$4"
+    local tag="$5"
+    local userinfo uri_host
+
+    userinfo=$(base64_encode_urlsafe_nopad "${method}:${password}")
+    uri_host=$(format_host_for_uri "$host")
+    printf 'ss://%s@%s:%s#%s\n' "$userinfo" "$uri_host" "$port" "$(url_encode "$tag")"
+}
+
+function get_alpine_ss_port_from_config() {
+    if [[ -f "$ALPINE_SS_CONFIG_FILE" ]]; then
+        if command -v jq >/dev/null 2>&1; then
+            jq -r '.server_port // empty' "$ALPINE_SS_CONFIG_FILE" 2>/dev/null || true
+        else
+            awk -F: '/"server_port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}' "$ALPINE_SS_CONFIG_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+function write_alpine_ssserver_config() {
+    local port="$1"
+    local method="$2"
+    local password="$3"
+
+    mkdir -p "$ALPINE_SS_CONFIG_DIR" || return 1
+    backup_file_if_exists "$ALPINE_SS_CONFIG_FILE" || return 1
+    cat > "$ALPINE_SS_CONFIG_FILE" <<CFG_EOF || return 1
+{
+  "server": "::",
+  "server_port": ${port},
+  "password": "$(json_escape "$password")",
+  "method": "$(json_escape "$method")",
+  "mode": "tcp_and_udp",
+  "timeout": 300
+}
+CFG_EOF
+    chmod 600 "$ALPINE_SS_CONFIG_FILE" || return 1
+}
+
+function write_alpine_openrc_service() {
+    backup_file_if_exists "$ALPINE_SS_SERVICE_FILE" || return 1
+    cat > "$ALPINE_SS_SERVICE_FILE" <<'SERVICE_EOF' || return 1
+#!/sbin/openrc-run
+
+name="shadowsocks-rust server"
+description="Shadowsocks Rust Server"
+
+command="/usr/bin/ssserver"
+command_args="-c /etc/shadowsocks-rust/ssserver.json"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
+
+depend() {
+    need net
+}
+SERVICE_EOF
+    chmod +x "$ALPINE_SS_SERVICE_FILE" >/dev/null 2>&1 || return 1
+    validate_alpine_openrc_service_script "$ALPINE_SS_SERVICE_FILE" "SS2022"
+}
+
+function validate_alpine_ss_config() {
+    if [[ ! -f "$ALPINE_SS_CONFIG_FILE" ]]; then
+        echo -e "${RED}  ✗ 未找到配置文件：${ALPINE_SS_CONFIG_FILE}${NC}"
+        return 1
+    fi
+
+    if ! command -v jq >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ 未检测到 jq，无法安全验证 SS2022 配置。${NC}"
+        return 1
+    fi
+
+    if ! jq empty "$ALPINE_SS_CONFIG_FILE" >/dev/null 2>&1; then
+        cp -f -- "$ALPINE_SS_CONFIG_FILE" "${DATA_DIR}/last_failed_ssserver.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ SS2022 配置 JSON 语法验证失败。${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_ssserver.json${NC}"
+        return 1
+    fi
+
+    echo -e "${GREEN}  ✓ SS2022 配置 JSON 语法验证通过${NC}"
+    return 0
+}
+
+function validate_alpine_ssserver_foreground() {
+    echo -e "${YELLOW}  正在以前台方式短时验证 ssserver 配置...${NC}"
+    validate_alpine_ss_config || return 1
+
+    local fg_log=""
+    local fg_ret=0
+    fg_log=$(mktemp /tmp/ssserver-foreground.XXXXXX.log) || {
+        echo -e "${RED}  ✗ 无法创建前台验证日志文件。${NC}"
+        return 1
+    }
+    add_tmp_file "$fg_log"
+
+    timeout 3 ssserver -c "$ALPINE_SS_CONFIG_FILE" -v >"$fg_log" 2>&1
+    fg_ret=$?
+
+    case "$fg_ret" in
+        124|137|143)
+            echo -e "${GREEN}  ✓ 前台短时验证通过（进程按预期持续运行，已自动结束测试）。${NC}"
+            return 0
+            ;;
+        *)
+            cp -f -- "$fg_log" "${DATA_DIR}/last_failed_ssserver_foreground.log" 2>/dev/null || true
+            echo -e "${RED}  ✗ 前台验证失败，请先修正后再写入 OpenRC 自启。${NC}"
+            if [[ -s "$fg_log" ]]; then
+                echo -e "${CYAN}  最近输出:${NC}"
+                sed -n '1,20p' "$fg_log"
+            fi
+            echo -e "${YELLOW}  已保留失败日志: ${DATA_DIR}/last_failed_ssserver_foreground.log${NC}"
+            return 1
+            ;;
+    esac
+}
+
+function restart_alpine_ssservice() {
+    line
+    echo -e "${YELLOW}  重启 Alpine SS2022 服务...${NC}"
+    ensure_alpine_supported || return 1
+    validate_alpine_ss_config || { line; return 1; }
+
+    if ! validate_alpine_openrc_service_script "$ALPINE_SS_SERVICE_FILE" "SS2022"; then
+        echo -e "${YELLOW}  正在重新生成 SS2022 OpenRC 服务文件...${NC}"
+        write_alpine_openrc_service || { line; return 1; }
+    fi
+
+    rc-service ssserver restart >/dev/null 2>&1 || rc-service ssserver start >/dev/null 2>&1 || {
+        echo -e "${RED}  ✗ SS2022 服务启动失败。${NC}"
+        echo -e "${YELLOW}  正在补做一次前台验证，用于区分是配置问题还是 OpenRC / 机器环境问题...${NC}"
+        validate_alpine_ssserver_foreground || true
+        rc-service ssserver status || true
+        line
+        return 1
+    }
+
+    sleep 2
+    if rc-service ssserver status >/dev/null 2>&1; then
+        echo -e "${GREEN}  ✓ SS2022 服务已启动${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ OpenRC 未明确返回运行中，请继续检查监听端口。${NC}"
+    fi
+
+    local listen_port=""
+    listen_port=$(get_alpine_ss_port_from_config)
+    if [[ -n "$listen_port" ]]; then
+        if ss -ltnup 2>/dev/null | grep -q ":${listen_port}\b"; then
+            echo -e "${GREEN}  ✓ 已检测到 ${listen_port} 端口监听${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ 未明确检测到 ${listen_port} 端口监听，请手动检查：ss -ltnup | grep :${listen_port}${NC}"
+        fi
+    fi
+    line
+}
+
+function update_alpine_ssservice() {
+    line
+    echo -e "${YELLOW}  更新 Alpine SS2022（shadowsocks-rust）...${NC}"
+    ensure_alpine_supported || return 1
+    ensure_alpine_community_repo || { line; return 1; }
+
+    apk update || { line; return 1; }
+    apk add --upgrade shadowsocks-rust mimalloc curl wget jq openssl coreutils procps ca-certificates iproute2 || {
+        echo -e "${RED}  ✗ 更新失败，请检查网络或仓库状态。${NC}"
+        line
+        return 1
+    }
+
+    echo -e "${GREEN}  ✓ shadowsocks-rust 已更新完成${NC}"
+    if [[ -f "$ALPINE_SS_CONFIG_FILE" && -x "$ALPINE_SS_SERVICE_FILE" ]]; then
+        restart_alpine_ssservice || return 1
+        return 0
+    fi
+    line
+}
+
+function show_alpine_ss_status() {
+    line
+    center_echo "Alpine SS2022 服务状态" "${CYAN}${BOLD}"
+    line
+    ensure_alpine_supported || return 1
+
+    if [[ -x "$ALPINE_SS_SERVICE_FILE" ]]; then
+        rc-service ssserver status || true
+    else
+        echo -e "${YELLOW}  未找到 OpenRC 服务文件：${ALPINE_SS_SERVICE_FILE}${NC}"
+    fi
+
+    echo ""
+    local listen_port=""
+    listen_port=$(get_alpine_ss_port_from_config)
+    if [[ -n "$listen_port" ]]; then
+        center_echo "监听检查" "${CYAN}${BOLD}"
+        ss -ltnup 2>/dev/null | grep ":${listen_port}\b" || echo -e "${YELLOW}  未检测到 ${listen_port} 端口监听${NC}"
+        echo ""
+    fi
+
+    center_echo "日志提示" "${CYAN}${BOLD}"
+    echo -e "${YELLOW}  OpenRC 默认没有 journalctl 风格统一日志。${NC}"
+    echo -e "${CYAN}  如需看启动报错，可执行：${NC}"
+    echo -e "${CYAN}    rc-service ssserver restart${NC}"
+    echo -e "${CYAN}    ssserver -c ${ALPINE_SS_CONFIG_FILE} -v${NC}"
+    line
+}
+
+function edit_alpine_ss_config() {
+    while true; do
+        line
+        center_echo "修改配置文件" "${CYAN}${BOLD}"
+        line
+        echo -e "${CYAN}  路径: ${ALPINE_SS_CONFIG_FILE}${NC}"
+        echo -e "${YELLOW}  仅建议熟悉 SS2022 配置者使用。${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} 编辑当前配置"
+        echo -e "  ${CYAN}2.${NC} 清空配置（高风险）"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " EDIT_CHOICE
+
+        if [[ ! -f "$ALPINE_SS_CONFIG_FILE" ]]; then
+            echo -e "${RED}  未找到配置文件，请先执行 Alpine SS2022 安装。${NC}"
+            line
+            return 1
+        fi
+
+        case "$EDIT_CHOICE" in
+            1|01)
+                echo ""
+                if [[ -n "${EDITOR:-}" ]] && command -v "${EDITOR}" >/dev/null 2>&1; then
+                    "${EDITOR}" "$ALPINE_SS_CONFIG_FILE"
+                elif command -v nano >/dev/null 2>&1; then
+                    nano "$ALPINE_SS_CONFIG_FILE"
+                elif command -v vim >/dev/null 2>&1; then
+                    vim "$ALPINE_SS_CONFIG_FILE"
+                elif command -v vi >/dev/null 2>&1; then
+                    vi "$ALPINE_SS_CONFIG_FILE"
+                else
+                    echo -e "${RED}  未找到可用编辑器（nano/vim/vi）。${NC}"
+                    line
+                    return 1
+                fi
+
+                echo ""
+                if command -v jq >/dev/null 2>&1; then
+                    if jq empty "$ALPINE_SS_CONFIG_FILE" >/dev/null 2>&1; then
+                        echo -e "${GREEN}  ✓ JSON 语法校验通过。${NC}"
+                    else
+                        cp -f -- "$ALPINE_SS_CONFIG_FILE" "${DATA_DIR}/last_failed_ssserver.json" 2>/dev/null || true
+                        echo -e "${RED}  ✗ 当前文件不是合法 JSON，请修正后再重启服务。${NC}"
+                        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_ssserver.json${NC}"
+                    fi
+                fi
+                echo -e "${YELLOW}  已退出编辑器。请回主菜单执行「重启当前服务」。${NC}"
+                line
+                return 0
+                ;;
+            2|02)
+                echo ""
+                echo -e "${RED}${BOLD}  此操作会将当前配置清空为 0 字节。${NC}"
+                echo -e "${YELLOW}  清空前会自动备份。${NC}"
+                echo -e "${YELLOW}  未重新写入合法 JSON 前，服务无法重启。${NC}"
+                if ! ask_yes_no "  确认清空 ${ALPINE_SS_CONFIG_FILE}"; then
+                    echo -e "${YELLOW}  已取消。${NC}"
+                    sleep 1
+                    continue
+                fi
+
+                local manual_backup
+                manual_backup="${ALPINE_SS_CONFIG_FILE}.bak.manual-clear.$(date +%Y%m%d-%H%M%S)"
+                cp -a -- "$ALPINE_SS_CONFIG_FILE" "$manual_backup" || {
+                    echo -e "${RED}  备份失败，已取消清空。${NC}"
+                    line
+                    return 1
+                }
+
+                truncate -s 0 "$ALPINE_SS_CONFIG_FILE" || {
+                    echo -e "${RED}  清空失败，请手动检查权限或磁盘状态。${NC}"
+                    line
+                    return 1
+                }
+
+                echo -e "${GREEN}  ✓ 配置文件已清空。${NC}"
+                echo -e "${CYAN}  备份文件: ${manual_backup}${NC}"
+                echo -e "${YELLOW}  请先写入合法配置，再执行「重启当前服务」。${NC}"
+                line
+                return 0
+                ;;
+            "")
+                continue
+                ;;
+            0|00)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  无效输入，请输入 0、1 或 2。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+function uninstall_alpine_ss_and_delete_self() {
+    line
+    center_echo "完整卸载 SS2022" "${RED}${BOLD}"
+    line
+    echo -e "${RED}  - 卸载 shadowsocks-rust（Alpine）${NC}"
+    echo -e "${RED}  - 删除 SS2022 配置、服务文件与生成目录${NC}"
+    echo -e "${RED}  - 删除 zxray 启动命令${NC}"
+    echo -e "${RED}  - 删除脚本源文件、临时文件、日志与 txt 文件${NC}"
+    line
+    if ! ask_yes_no "  确认完整卸载"; then
+        echo -e "${YELLOW}已取消。${NC}"
+        return 0
+    fi
+
+    cleanup_alpine_ss_artifacts
+    cleanup_alpine_service_backups
+
+    cleanup_doudou_runtime
+
+    echo -e "${GREEN}  ✓ 卸载与清理已完成。${NC}"
+    line
+    exit 0
+}
+
+function _install_alpine_ss2022_impl() {
+    line
+    echo -e "${GREEN}${BOLD}  Alpine 专用 SS2022 安装${NC}"
+    line
+
+    echo -e "
+${CYAN}[Step 1/7] 系统环境预检${NC}"
+    ensure_alpine_supported || return 1
+
+    echo -e "
+${CYAN}[Step 2/7] 检查 Alpine 仓库与依赖${NC}"
+    ensure_alpine_community_repo || return 1
+    install_alpine_runtime_deps || return 1
+    maybe_configure_bbr
+
+    echo -e "
+${CYAN}[Step 3/7] 手动选择 SS2022 参数${NC}"
+    local ss_method=""
+    local ss_port=""
+    ss_method=$(choose_ss_method) || return 1
+    case "$ss_method" in
+        __BACK__|__MAIN__)
+            return 0
+            ;;
+    esac
+    while true; do
+        ss_port=$(read_manual_ss_port "请输入 SS2022 监听端口: ") || return 1
+        ensure_alpine_install_port_available "$ss_port" "Alpine SS2022" || return 1
+        break
+    done
+
+    echo -e "
+${CYAN}[Step 4/7] 生成密钥与写入配置${NC}"
+    ensure_alpine_ss_runtime_ready || return 1
+    local ss_password=""
+    ss_password=$(ssservice genkey -m "$ss_method" 2>/dev/null | tr -d '\n')
+    if [[ -z "$ss_password" ]]; then
+        echo -e "${RED}  ✗ 生成 SS2022 密钥失败，请检查 shadowsocks-rust 是否安装完整。${NC}"
+        return 1
+    fi
+    write_alpine_ssserver_config "$ss_port" "$ss_method" "$ss_password" || return 1
+
+    echo -e "
+${CYAN}[Step 5/7] 前台短时验证配置${NC}"
+    if is_port_in_use "$ss_port"; then
+        stop_alpine_known_service_on_port "$ss_port" || {
+            echo -e "${RED}  ✗ 无法在最终验证前释放端口 ${ss_port}。${NC}"
+            return 1
+        }
+    fi
+    validate_alpine_ssserver_foreground || return 1
+
+    echo -e "
+${CYAN}[Step 6/7] 写入 OpenRC 并启动服务${NC}"
+    write_alpine_openrc_service || return 1
+    rc-update add ssserver default >/dev/null 2>&1 || true
+    restart_alpine_ssservice || return 1
+
+    echo -e "
+${CYAN}[Step 7/7] 生成节点信息${NC}"
+    local public_ip_v4=""
+    local public_ip_v6=""
+    local ss_link_v4=""
+    local ss_link_v6=""
+    local sub_text=""
+    local ports_text=""
+
+    public_ip_v4=$(get_public_ip_v4 || true)
+    public_ip_v6=$(get_public_ip_v6 || true)
+
+    if [[ -n "$public_ip_v4" ]]; then
+        ss_link_v4=$(build_ss2022_uri "$public_ip_v4" "$ss_port" "$ss_method" "$ss_password" "SS2022-Alpine-${ss_port}")
+    fi
+    if [[ -n "$public_ip_v6" ]]; then
+        ss_link_v6=$(build_ss2022_uri "$public_ip_v6" "$ss_port" "$ss_method" "$ss_password" "SS2022-Alpine-IPv6-${ss_port}")
+    fi
+
+    sub_text="订阅:
+SS2022:
+"
+    if [[ -n "$ss_link_v4" ]]; then
+        sub_text+="  ${ss_link_v4}
+"
+    else
+        sub_text+="  （未获取到公网 IPv4，请手动替换为你的服务器地址）
+"
+    fi
+    if [[ -n "$ss_link_v6" ]]; then
+        sub_text+="
+SS2022 (IPv6):
+${ss_link_v6}
+"
+    fi
+
+    ports_text="端口:
+  SS2022 :     ${ss_port}"
+    write_dynamic_result_files "$sub_text" "$ports_text"
+    write_install_runtime_kind "alpine-ss2022"
+    render_saved_node_info "配置完成" || {
+        echo -e "${RED}  节点信息写入失败，请检查 ${INFO_FILE}${NC}"
+        return 1
+    }
+}
+
+function get_public_ip_v4() {
+    local ip=""
+    local endpoint
+    for endpoint in "https://api.ipify.org" "https://ifconfig.me" "https://ip.sb" "https://ipinfo.io/ip"; do
+        ip=$(curl -4 -fsS --max-time 5 "$endpoint" 2>/dev/null || true)
+        if [[ "$ip" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
+function get_public_ip_v6() {
+    local ip=""
+    local endpoint
+    for endpoint in "https://api64.ipify.org" "https://ifconfig.me" "https://ip.sb"; do
+        ip=$(curl -6 -fsS --max-time 5 "$endpoint" 2>/dev/null || true)
+        if [[ "$ip" =~ : ]]; then
+            echo "$ip"
+            return 0
+        fi
+    done
+    return 1
+}
+
+function format_host_for_uri() {
+    local host="$1"
+    if [[ "$host" == *:* && "$host" != \[*\] ]]; then
+        echo "[$host]"
+    else
+        echo "$host"
+    fi
+}
+
+function is_port_in_use() {
+    local port="$1"
+    ss -ltnup 2>/dev/null | awk '{print $5}' | grep -Eq "(^|:|\])${port}$"
+}
+
+function pick_random_free_port() {
+    local port=""
+    local i
+    for i in {1..30}; do
+        port=$(shuf -i 40000-65000 -n 1)
+        if ! is_port_in_use "$port"; then
+            echo "$port"
+            return 0
+        fi
+    done
+    return 1
+}
+
+function backup_existing_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        local backup_file
+        backup_file="${CONFIG_FILE}.bak.$(date +%Y%m%d-%H%M%S)"
+        cp -a -- "$CONFIG_FILE" "$backup_file" || return 1
+        echo -e "${YELLOW}  已备份旧配置: ${backup_file}${NC}"
+    fi
+}
+
+function ensure_sni_benchmark_ready() {
+    local missing=()
+    local ts_probe=""
+
+    command -v openssl >/dev/null 2>&1 || missing+=("openssl")
+    command -v timeout >/dev/null 2>&1 || missing+=("timeout")
+    if command -v openssl >/dev/null 2>&1 && ! openssl s_client -help 2>&1 | grep -q -- '-verify_hostname'; then
+        missing+=("openssl-verify_hostname")
+    fi
+    ts_probe=$(date +%s%3N 2>/dev/null || true)
+    [[ "$ts_probe" =~ ^[0-9]+$ ]] || missing+=("gnu-date")
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    echo -e "${RED}  ✗ 当前环境缺少 SNI 测速所需依赖。${NC}"
+    echo -e "${YELLOW}  缺失项: ${missing[*]}${NC}"
+    if is_alpine_system; then
+        echo -e "${CYAN}  建议：先执行覆盖安装选择 Alpine SS2022，或手动安装：apk add openssl coreutils${NC}"
+    else
+        echo -e "${CYAN}  建议：先执行主菜单 1，或手动安装 openssl / coreutils 后再测速。${NC}"
+    fi
+    return 1
+}
+
+function get_loaded_sni_pool_signature() {
+    printf '%s\n' "${DEST_OPTIONS[@]}" | cksum | awk '{print $1 ":" $2}'
+}
+
+function benchmark_dest() {
+    ensure_sni_benchmark_ready || return 1
+    load_sni_pool
+    line
+    echo -e "${CYAN}${BOLD}  REALITY SNI 延迟测试（每个域名测试 3 次 TLS 握手）${NC}"
+    line
+    show_sni_pool_source
+
+    local best_median=99999999
+    local best_success=0
+    BEST_DEST=""
+    BEST_DEST_POOL_SIG=""
+
+    local domain_col_width=40
+    local domain_len=0
+    local d
+    local candidate_index=0
+    local candidate_total=${#DEST_OPTIONS[@]}
+    for d in "${DEST_OPTIONS[@]}"; do
+        domain_len=${#d}
+        if (( domain_len > domain_col_width )); then
+            domain_col_width=$domain_len
+        fi
+    done
+
+    for d in "${DEST_OPTIONS[@]}"; do
+        candidate_index=$((candidate_index + 1))
+        local times=()
+        local success=0
+        local i
+
+        printf '  [%d/%d] ' "$candidate_index" "$candidate_total"
+
+        for i in 1 2 3; do
+            local t1 t2 elapsed
+            t1=$(date +%s%3N 2>/dev/null || echo 0)
+            if timeout 3 openssl s_client \
+                -connect "${d}:443" \
+                -servername "${d}" \
+                -verify_hostname "${d}" \
+                -verify_return_error \
+                </dev/null &>/dev/null; then
+                t2=$(date +%s%3N 2>/dev/null || echo 0)
+                elapsed=$((t2 - t1))
+                [[ $elapsed -lt 0 ]] && elapsed=0
+                times+=("${elapsed}")
+                success=$((success + 1))
+            else
+                times+=("超时")
+            fi
+        done
+
+        local median_str="N/A"
+        local median_val=99999999
+        local -a successful_times=()
+        local -a sorted_times=()
+        local sample=""
+        for sample in "${times[@]}"; do
+            [[ "$sample" =~ ^[0-9]+$ ]] && successful_times+=("$sample")
+        done
+        if [[ $success -ge 2 ]]; then
+            mapfile -t sorted_times < <(printf '%s\n' "${successful_times[@]}" | sort -n)
+            if [[ $success -eq 2 ]]; then
+                median_val=$(( (sorted_times[0] + sorted_times[1]) / 2 ))
+            else
+                median_val="${sorted_times[1]}"
+            fi
+            median_str="${median_val} ms"
+        fi
+
+        local col1="${times[0]}" col2="${times[1]}" col3="${times[2]}"
+        [[ "$col1" != "超时" ]] && col1="${col1} ms"
+        [[ "$col2" != "超时" ]] && col2="${col2} ms"
+        [[ "$col3" != "超时" ]] && col3="${col3} ms"
+
+        local cell1="" cell2="" cell3="" median_cell=""
+        if [[ "$col1" == "超时" ]]; then cell1="   超时"; else printf -v cell1 "%7s" "$col1"; fi
+        if [[ "$col2" == "超时" ]]; then cell2="   超时"; else printf -v cell2 "%7s" "$col2"; fi
+        if [[ "$col3" == "超时" ]]; then cell3="   超时"; else printf -v cell3 "%7s" "$col3"; fi
+        printf -v median_cell "%8s" "$median_str"
+
+        if [[ $success -ge 2 ]] && { [[ $success -gt $best_success ]] || { [[ $success -eq $best_success ]] && [[ $median_val -lt $best_median ]]; }; }; then
+            best_success=$success
+            best_median=$median_val
+            BEST_DEST="$d"
+            printf "${GREEN}%-${domain_col_width}s %s %s %s %s  %d/3 ★${NC}\n" "$d" "$cell1" "$cell2" "$cell3" "$median_cell" "$success"
+        else
+            printf "%-${domain_col_width}s %s %s %s %s  %d/3\n" "$d" "$cell1" "$cell2" "$cell3" "$median_cell" "$success"
+        fi
+    done
+
+    echo ""
+    if [[ -z "$BEST_DEST" ]]; then
+        echo -e "${RED}  ✗ 所有候选 SNI 均无法完成 TLS 握手，安装已中止。${NC}"
+        echo -e "${YELLOW}  请调整 ${SNI_POOL_FILE} 候选池后重试；候选域名至少需成功 2/3 次。${NC}"
+        line
+        return 1
+    fi
+
+    BEST_DEST_POOL_SIG=$(get_loaded_sni_pool_signature)
+    echo -e "${GREEN}  ✓ 自动锚定最优 SNI：${BOLD}${BEST_DEST}${NC}${GREEN}（成功 ${best_success}/3，中位数 ${best_median} ms）${NC}"
+    line
+    return 0
+}
+
+
+function print_download_error_reason() {
+    local curl_code="$1"
+    local err_file="$2"
+    local raw_msg=""
+    raw_msg=$(tail -n 1 "$err_file" 2>/dev/null | tr -d '\n')
+
+    case "$curl_code" in
+        6)
+            echo -e "${YELLOW}    原因：域名解析失败。${NC}"
+            echo -e "${YELLOW}    判断：当前机器 DNS 可能异常，或临时无法解析目标域名。${NC}"
+            ;;
+        7)
+            echo -e "${YELLOW}    原因：无法建立 TCP 连接。${NC}"
+            echo -e "${YELLOW}    判断：可能是目标站点不可达、防火墙限制、网络中断，或中间链路异常。${NC}"
+            ;;
+        22)
+            if grep -Eq 'error: 50[234]|HTTP/[0-9.]+ 50[234]' "$err_file"; then
+                echo -e "${YELLOW}    原因：远端服务器返回 HTTP 502/503/504。${NC}"
+                echo -e "${YELLOW}    判断：通常不是脚本语法问题，而是下载源或网络链路临时异常。${NC}"
+            else
+                echo -e "${YELLOW}    原因：远端返回了 HTTP 错误状态码。${NC}"
+                echo -e "${YELLOW}    判断：通常是下载源异常、访问受限，或中间层返回了错误页面。${NC}"
+            fi
+            ;;
+        28)
+            echo -e "${YELLOW}    原因：连接超时或响应超时。${NC}"
+            echo -e "${YELLOW}    判断：通常是 VPS 到下载源网络不稳定，或目标站点响应过慢。${NC}"
+            ;;
+        35)
+            echo -e "${YELLOW}    原因：TLS 握手失败。${NC}"
+            echo -e "${YELLOW}    判断：可能是中间链路干扰、TLS 协商异常，或目标站点临时故障。${NC}"
+            ;;
+        60)
+            echo -e "${YELLOW}    原因：TLS/证书校验失败。${NC}"
+            echo -e "${YELLOW}    判断：可能是系统 CA 证书异常、系统时间不准，或链路被干扰。${NC}"
+            ;;
+        *)
+            echo -e "${YELLOW}    原因：下载命令执行失败（curl exit code: ${curl_code}）。${NC}"
+            echo -e "${YELLOW}    判断：更像是外部下载源或网络链路异常，不是当前菜单逻辑错误。${NC}"
+            ;;
+    esac
+
+    if [[ -n "$raw_msg" ]]; then
+        echo -e "${CYAN}    原始信息：${raw_msg}${NC}"
+    fi
+}
+
+function patch_xray_installer_missing_stop() {
+    local installer="$1"
+    local runner="$2"
+    local stop_block=""
+    local exit_count=0
+
+    stop_block=$(sed -n '/^stop_xray()/,/^}/p' "$installer")
+    if [[ -z "$stop_block" ]] || ! printf '%s\n' "$stop_block" | grep -Fq 'error: Stopping the Xray service failed.'; then
+        echo -e "${RED}  ✗ Xray 安装器的 stop_xray 结构与预期不符，拒绝修补。${NC}"
+        return 1
+    fi
+    exit_count=$(printf '%s\n' "$stop_block" | grep -Ec '^[[:space:]]*exit 1[[:space:]]*$' || true)
+    if [[ "$exit_count" -ne 1 ]]; then
+        echo -e "${RED}  ✗ stop_xray 中 exit 1 数量异常（${exit_count}），拒绝修补。${NC}"
+        return 1
+    fi
+
+    if ! sed -i \
+        -e '/^stop_xray()/,/^}/ s/error: Stopping the Xray service failed./warning: Xray service was not loaded; continuing installation./' \
+        -e '/^stop_xray()/,/^}/ s/exit 1/return 0/' \
+        "$installer"; then
+        echo -e "${RED}  ✗ 无法修补 Xray 安装器的旧服务停止处理。${NC}"
+        return 1
+    fi
+
+    if ! sed -n '/^stop_xray()/,/^}/p' "$installer" | grep -F 'return 0' >/dev/null 2>&1 \
+        || ! "$runner" -n "$installer" >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ Xray 安装器结构与预期不符，未执行修补。${NC}"
+        return 1
+    fi
+    return 0
+}
+
+function validate_xray_installer() {
+    local runner="$1"
+    local installer="$2"
+    local installer_size=""
+
+    [[ -f "$installer" && ! -L "$installer" ]] || return 1
+    installer_size=$(wc -c < "$installer" 2>/dev/null | tr -d '[:space:]')
+    if ! [[ "$installer_size" =~ ^[0-9]+$ ]] || (( installer_size < 3000 || installer_size > 1000000 )); then
+        echo -e "${RED}  ✗ 官方安装器大小异常：${installer_size:-unknown} 字节。${NC}"
+        return 1
+    fi
+    if ! "$runner" -n "$installer" >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ 官方安装器未通过 ${runner} -n 语法检查。${NC}"
+        return 1
+    fi
+    if ! grep -Fq 'XTLS/Xray-install' "$installer" \
+        || ! grep -Fq '/usr/local/bin/xray' "$installer" \
+        || ! grep -Eq 'Xray-core|XRAY|xray' "$installer"; then
+        echo -e "${RED}  ✗ 官方安装器未通过固定身份标记检查。${NC}"
+        return 1
+    fi
+    verify_optional_pinned_sha256 "$installer" "${DOUDOU_XRAY_INSTALLER_SHA256:-}" "Xray 官方安装器" || return 1
+    return 0
+}
+
+function run_xray_official_install_with_recovery() {
+    local runner="$1"
+    local installer="$2"
+    local run_log=""
+    local installer_ret=1
+    local retry_ret=1
+
+    run_log=$(mktemp /tmp/xray-installer-run.XXXXXX.log 2>/dev/null) || true
+    if [[ -z "$run_log" ]]; then
+        echo -e "${YELLOW}  ⚠ 无法创建安装日志，将直接执行官方安装器。${NC}"
+        "$runner" "$installer" install
+        return $?
+    fi
+    add_tmp_file "$run_log"
+
+    set +o pipefail
+    "$runner" "$installer" install 2>&1 | tee "$run_log"
+    installer_ret=${PIPESTATUS[0]}
+    set -o pipefail
+    [[ "$installer_ret" -eq 0 ]] && return 0
+
+    if ! grep -Fq 'Unit xray.service not loaded' "$run_log"; then
+        return "$installer_ret"
+    fi
+
+    echo -e "${YELLOW}  ⚠ 检测到旧版安装器停止未加载的 xray.service，准备兼容重试。${NC}"
+    if ! patch_xray_installer_missing_stop "$installer" "$runner"; then
+        return "$installer_ret"
+    fi
+
+    : > "$run_log"
+    echo -e "${CYAN}  正在跳过不存在的旧服务并重试安装...${NC}"
+    set +o pipefail
+    "$runner" "$installer" install 2>&1 | tee "$run_log"
+    retry_ret=${PIPESTATUS[0]}
+    set -o pipefail
+    return "$retry_ret"
+}
+
+function download_and_run_xray_installer() {
+    local action="$1"
+    local installer curl_err url max_retry retry sleep_seconds curl_ret runner installer_sha
+    installer=$(mktemp /tmp/xray-install.XXXXXX.sh) || {
+        echo -e "${RED}  ✗ 无法创建 Xray 安装临时文件。${NC}"
+        return 1
+    }
+    curl_err=$(mktemp /tmp/xray-install-curl.XXXXXX.log) || {
+        rm -f -- "$installer" >/dev/null 2>&1 || true
+        echo -e "${RED}  ✗ 无法创建 Xray 安装错误日志临时文件。${NC}"
+        return 1
+    }
+    add_tmp_file "$installer"
+    add_tmp_file "$curl_err"
+
+    if is_alpine_system; then
+        url="https://github.com/XTLS/Xray-install/raw/main/alpinelinux/install-release.sh"
+        runner="ash"
+    else
+        url="https://github.com/XTLS/Xray-install/raw/main/install-release.sh"
+        runner="bash"
+    fi
+    max_retry=3
+    sleep_seconds=10
+
+    echo -e "${YELLOW}  正在下载 Xray 官方安装脚本...${NC}"
+    echo -e "${CYAN}  下载源: ${url}${NC}"
+
+    for retry in $(seq 1 "$max_retry"); do
+        : > "$curl_err"
+        rm -f -- "$installer"
+
+        echo -e "${CYAN}  第 ${retry}/${max_retry} 次尝试...${NC}"
+        if curl --proto '=https' --proto-redir '=https' --tlsv1.2 -fsSL --connect-timeout 10 --max-time 60 -o "$installer" "$url" 2>"$curl_err"; then
+            echo -e "${GREEN}  ✓ 下载成功${NC}"
+            break
+        else
+            curl_ret=$?
+            echo -e "${RED}  ✗ 第 ${retry}/${max_retry} 次下载失败${NC}"
+            print_download_error_reason "$curl_ret" "$curl_err"
+
+            if [[ "$retry" -lt "$max_retry" ]]; then
+                echo -e "${YELLOW}    处理：${sleep_seconds} 秒后自动重试...${NC}"
+                sleep "$sleep_seconds"
+            else
+                echo -e "${RED}  ✗ 官方安装脚本下载失败，已达到最大重试次数。${NC}"
+                echo -e "${YELLOW}    结论：更像是外部下载源或网络链路异常，不是当前管理脚本菜单逻辑错误。${NC}"
+                echo -e "${YELLOW}    建议：稍后重试，或手动检查 GitHub / DNS / 出站网络。${NC}"
+                return 1
+            fi
+        fi
+    done
+
+    if ! validate_xray_installer "$runner" "$installer"; then
+        echo -e "${RED}  ✗ 下载内容校验失败，已拒绝执行。${NC}"
+        echo -e "${YELLOW}    判断：内容未通过大小、语法和项目身份标记检查，可能是下载异常、错误页或上游结构发生变化。${NC}"
+        return 1
+    fi
+    installer_sha=$(get_file_sha256 "$installer" 2>/dev/null || true)
+    [[ -n "$installer_sha" ]] && echo -e "${CYAN}  安装器 SHA-256: ${installer_sha}${NC}"
+
+    chmod +x "$installer" || return 1
+
+    case "$action" in
+        install)
+            run_xray_official_install_with_recovery "$runner" "$installer"
+            ;;
+        remove)
+            "$runner" "$installer" remove --purge
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+function detect_xray_bind_warnings() {
+    local reality_port="$1"
+    local ss_port="$2"
+    echo -e "${YELLOW}  端口监听检查...${NC}"
+
+    if ss -ltnup 2>/dev/null | grep -Eq "(^|[[:space:]])(\*|0\.0\.0\.0|::|\[::\]):${reality_port}[[:space:]]"; then
+        echo -e "${GREEN}  ✓ 已检测到 ${reality_port} 端口监听${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 未明确检测到 ${reality_port} 端口监听，请手动检查：ss -ltnup | grep :${reality_port}${NC}"
+    fi
+
+    if ss -ltnup 2>/dev/null | grep -Eq "(^|[[:space:]])(\*|0\.0\.0\.0|::|\[::\]):${ss_port}[[:space:]]"; then
+        echo -e "${GREEN}  ✓ 已检测到 ${ss_port} 端口监听${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 未明确检测到 ${ss_port} 端口监听，请手动检查：ss -ltnup | grep :${ss_port}${NC}"
+    fi
+}
+
+function detect_port_bind_warning() {
+    local label="$1"
+    local port="$2"
+
+    [[ -n "$port" ]] || return 0
+    if is_port_in_use "$port"; then
+        echo -e "${GREEN}  ✓ 已检测到 ${label} 端口监听：${port}${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 未明确检测到 ${label} 端口监听，请手动检查：ss -ltnup | grep :${port}${NC}"
+    fi
+}
+
+
+
+function write_subscription_files() {
+    local reality_link="$1"
+    local enc_link="$2"
+    local ss_link="$3"
+    local reality_port="$4"
+    local enc_port="$5"
+    local ss_port="$6"
+    local reality_link_v6="${7:-}"
+    local enc_link_v6="${8:-}"
+    local ss_link_v6="${9:-}"
+    local now_time
+    now_time=$(date '+%Y-%m-%d %H:%M:%S')
+
+    (
+        umask 077
+        cat > "$INFO_FILE" <<INFOEOF
+作者    : ${AUTHOR_NAME}
+版本    : ${SCRIPT_VERSION}
+生成时间: ${now_time}
+
+订阅:
+REALITY:
+${reality_link}
+
+Vless-Enc:
+${enc_link}
+
+SS2022:
+${ss_link}
+INFOEOF
+
+        if [[ -n "$reality_link_v6" && -n "$ss_link_v6" ]]; then
+            cat >> "$INFO_FILE" <<INFOEOF
+
+REALITY (IPv6):
+${reality_link_v6}
+INFOEOF
+            if [[ -n "$enc_link_v6" ]]; then
+                cat >> "$INFO_FILE" <<INFOEOF
+
+Vless-Enc (IPv6):
+${enc_link_v6}
+INFOEOF
+            fi
+            cat >> "$INFO_FILE" <<INFOEOF
+
+SS2022 (IPv6):
+${ss_link_v6}
+INFOEOF
+        fi
+
+        cat >> "$INFO_FILE" <<INFOEOF
+
+端口:
+  REALITY:     ${reality_port}
+  Vless-Enc:   ${enc_port}
+  SS2022 :     ${ss_port}
+INFOEOF
+
+        cat > "$SUB_FILE" <<SUBEOF
+版本    : ${SCRIPT_VERSION}
+生成时间: ${now_time}
+
+订阅:
+REALITY:
+${reality_link}
+
+Vless-Enc:
+${enc_link}
+
+SS2022:
+${ss_link}
+SUBEOF
+
+        if [[ -n "$reality_link_v6" && -n "$ss_link_v6" ]]; then
+            cat >> "$SUB_FILE" <<SUBEOF
+
+REALITY (IPv6):
+${reality_link_v6}
+SUBEOF
+            if [[ -n "$enc_link_v6" ]]; then
+                cat >> "$SUB_FILE" <<SUBEOF
+
+Vless-Enc (IPv6):
+${enc_link_v6}
+SUBEOF
+            fi
+            cat >> "$SUB_FILE" <<SUBEOF
+
+SS2022 (IPv6):
+${ss_link_v6}
+SUBEOF
+        fi
+    )
+
+    chmod 600 "$INFO_FILE" "$SUB_FILE" >/dev/null 2>&1 || true
+}
+
+
+function get_saved_generate_time() {
+    local file_path="$1"
+    awk -F': ' '/^生成时间: /{print $2; exit}' "$file_path" 2>/dev/null || true
+}
+
+function print_saved_txt_files() {
+    echo -e "${CYAN}  文本文件:${NC}"
+    echo -e "${CYAN}    - ${INFO_FILE}${NC}"
+    echo -e "${CYAN}    - ${SUB_FILE}${NC}"
+}
+
+function print_quick_command() {
+    center_echo "输入 zxray 可重新唤醒菜单" "${CYAN}"
+}
+
+function render_saved_meta_block() {
+    local saved_time="$1"
+    echo -e "${GREEN}作者    : ${AUTHOR_NAME}${NC}"
+    echo -e "${GREEN}版本    : ${SCRIPT_VERSION}${NC}"
+    echo -e "${CYAN}生成时间: ${saved_time}${NC}"
+}
+
+function render_saved_node_info() {
+    local title="$1"
+    local saved_time=""
+
+    if [[ ! -f "$INFO_FILE" ]]; then
+        return 1
+    fi
+
+    saved_time=$(get_saved_generate_time "$INFO_FILE")
+    [[ -n "$saved_time" ]] || saved_time="未知"
+
+    line
+    center_echo "$title" "${GREEN}${BOLD}"
+    echo ""
+    render_saved_meta_block "$saved_time"
+    echo ""
+    sed -e '/^作者    : /d' -e '/^版本    : /d' -e '/^生成时间: /d' "$INFO_FILE"
+    echo ""
+    print_quick_command
+    print_saved_txt_files
+    line
+    return 0
+}
+
+
+function manage_sni() {
+    load_sni_pool
+    while true; do
+        line
+        echo -e "${CYAN}${BOLD}  SNI 管理 & 测速${NC}"
+        line
+        show_sni_pool_source
+        echo -e "${CYAN}  当前候选池（共 ${#DEST_OPTIONS[@]} 个）：${NC}"
+        local idx=1 d
+        for d in "${DEST_OPTIONS[@]}"; do
+            printf "    ${CYAN}%2d.${NC} %s\n" "$idx" "$d"
+            idx=$((idx + 1))
+        done
+        echo ""
+        echo -e "     ${CYAN}a.${NC} 新增域名"
+        echo -e "     ${CYAN}d.${NC} 删除域名"
+        echo -e "     ${CYAN}r.${NC} 恢复内置默认候选池"
+        echo -e "     ${CYAN}t.${NC} 立即对当前候选池测速"
+        echo -e "     ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "请选择 [a/d/r/t/0]: " SNI_CHOICE
+
+        case "$SNI_CHOICE" in
+            "")
+                continue
+                ;;
+            a|A)
+                read_input -r -p "新增域名: " NEW_DOMAIN
+                NEW_DOMAIN=$(printf '%s' "$NEW_DOMAIN" | tr -d '[:space:]')
+                if [[ -z "$NEW_DOMAIN" ]]; then
+                    echo -e "${RED}  域名不能为空。${NC}"
+                elif [[ ! "$NEW_DOMAIN" =~ ^[A-Za-z0-9._-]+$ ]]; then
+                    echo -e "${RED}  域名仅允许字母、数字、点、下划线和连字符。${NC}"
+                elif printf '%s\n' "${DEST_OPTIONS[@]}" | grep -Fxq "$NEW_DOMAIN"; then
+                    echo -e "${YELLOW}  该域名已存在，无需重复添加。${NC}"
+                else
+                    DEST_OPTIONS+=("$NEW_DOMAIN")
+                    save_sni_pool
+                    echo -e "${GREEN}  ✓ 已添加：${NEW_DOMAIN}${NC}"
+                fi
+                sleep 1
+                ;;
+            d|D)
+                if [[ ${#DEST_OPTIONS[@]} -le 1 ]]; then
+                    echo -e "${RED}  候选池至少需保留 1 个域名，无法删除。${NC}"
+                    sleep 1
+                    continue
+                fi
+                read_input -r -p "删除序号 (1-${#DEST_OPTIONS[@]}): " DEL_IDX
+                if [[ "$DEL_IDX" =~ ^[0-9]+$ ]] && [[ $DEL_IDX -ge 1 ]] && [[ $DEL_IDX -le ${#DEST_OPTIONS[@]} ]]; then
+                    local DEL_NAME="${DEST_OPTIONS[$((DEL_IDX-1))]}"
+                    if ask_yes_no "  确认删除候选域名 ${DEL_NAME}"; then
+                        DEST_OPTIONS=("${DEST_OPTIONS[@]:0:$((DEL_IDX-1))}" "${DEST_OPTIONS[@]:$DEL_IDX}")
+                        save_sni_pool
+                        echo -e "${GREEN}  ✓ 已删除：${DEL_NAME}${NC}"
+                    else
+                        echo -e "${YELLOW}  已取消。${NC}"
+                    fi
+                else
+                    echo -e "${RED}  无效序号。${NC}"
+                fi
+                sleep 1
+                ;;
+            r|R)
+                if ask_yes_no "  确认恢复默认候选池"; then
+                    DEST_OPTIONS=("${DEFAULT_DEST_OPTIONS[@]}")
+                    save_sni_pool
+                    echo -e "${GREEN}  ✓ 已恢复内置默认候选池（${#DEST_OPTIONS[@]} 个域名）${NC}"
+                else
+                    echo -e "${YELLOW}  已取消。${NC}"
+                fi
+                sleep 1
+                ;;
+            t|T)
+                benchmark_dest
+                echo -e "${CYAN}  提示：返回后重新运行主菜单 1，若候选池未变，将直接应用本次测速得到的最优 SNI。${NC}"
+                read_input -r -p "按 Enter 继续..." _
+                ;;
+            0)
+                return
+                ;;
+            *)
+                echo -e "${RED}  无效输入。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+
+function uri_decode() {
+    local data="$1"
+    data="${data//+/ }"
+    printf '%b' "${data//%/\\x}"
+}
+
+function get_query_param() {
+    local query="$1"
+    local key="$2"
+    local pair k v had_noglob=0
+    local IFS='&'
+
+    case "$-" in
+        *f*) had_noglob=1 ;;
+    esac
+    set -f
+
+    for pair in $query; do
+        k="${pair%%=*}"
+        v="${pair#*=}"
+        if [[ "$k" == "$key" ]]; then
+            if [[ $had_noglob -eq 0 ]]; then
+                set +f
+            fi
+            uri_decode "$v"
+            return 0
+        fi
+    done
+
+    if [[ $had_noglob -eq 0 ]]; then
+        set +f
+    fi
+    return 1
+}
+
+function base64_decode_relaxed() {
+    local s="$1"
+    s="${s//-/+}"
+    s="${s//_/\/}"
+    case $((${#s} % 4)) in
+        2) s+="==" ;;
+        3) s+="=" ;;
+        1) s+="===" ;;
+    esac
+    printf '%s' "$s" | base64 -d 2>/dev/null
+}
+
+PARSED_HOST=""
+PARSED_PORT=""
+PARSED_LINK_KIND=""
+PARSED_LINK_LABEL=""
+PARSED_OUTBOUND_JSON=""
+PARSED_USER_ID=""
+PARSED_ENCRYPTION=""
+PARSED_FLOW=""
+PARSED_SECURITY=""
+PARSED_TRANSPORT=""
+PARSED_METHOD=""
+
+function normalize_share_link() {
+    local raw="$1"
+    printf '%s' "$raw" | tr -d '\r[:space:]'
+}
+
+function preview_short_value() {
+    local value="$1"
+    local limit="${2:-48}"
+    if [[ ${#value} -le $limit ]]; then
+        printf '%s' "$value"
+    else
+        printf '%s...' "${value:0:$limit}"
+    fi
+}
+
+function print_parsed_outbound_preview() {
+    echo -e "${CYAN}  解析预览:${NC}" >&2
+    echo -e "${CYAN}    kind     : ${PARSED_LINK_KIND}${NC}" >&2
+    echo -e "${CYAN}    address  : ${PARSED_HOST}${NC}" >&2
+    echo -e "${CYAN}    port     : ${PARSED_PORT}${NC}" >&2
+    [[ -n "$PARSED_LINK_LABEL" ]] && echo -e "${CYAN}    label    : ${PARSED_LINK_LABEL}${NC}" >&2
+    if [[ "$PARSED_LINK_KIND" == "vless" ]]; then
+        [[ -n "$PARSED_USER_ID" ]] && echo -e "${CYAN}    uuid     : $(preview_short_value "$PARSED_USER_ID" 12)${NC}" >&2
+        [[ -n "$PARSED_ENCRYPTION" ]] && echo -e "${CYAN}    encrypt  : $(preview_short_value "$PARSED_ENCRYPTION" 72)${NC}" >&2
+        [[ -n "$PARSED_FLOW" ]] && echo -e "${CYAN}    flow     : ${PARSED_FLOW}${NC}" >&2
+        [[ -n "$PARSED_SECURITY" ]] && echo -e "${CYAN}    security : ${PARSED_SECURITY}${NC}" >&2
+        [[ -n "$PARSED_TRANSPORT" ]] && echo -e "${CYAN}    network  : ${PARSED_TRANSPORT}${NC}" >&2
+    elif [[ "$PARSED_LINK_KIND" == "ss" ]]; then
+        [[ -n "$PARSED_METHOD" ]] && echo -e "${CYAN}    method   : ${PARSED_METHOD}${NC}" >&2
+    fi
+}
+
+function parse_host_port() {
+    local hostport="$1"
+    local port_number=0
+    if [[ "$hostport" =~ ^\[(.*)\]:(.*)$ ]]; then
+        PARSED_HOST="${BASH_REMATCH[1]}"
+        PARSED_PORT="${BASH_REMATCH[2]}"
+    elif [[ "$hostport" == *:* ]]; then
+        PARSED_HOST="${hostport%:*}"
+        PARSED_PORT="${hostport##*:}"
+    else
+        return 1
+    fi
+    [[ -n "$PARSED_HOST" && "$PARSED_PORT" =~ ^[0-9]+$ && ${#PARSED_PORT} -le 5 ]] || return 1
+    port_number=$((10#$PARSED_PORT))
+    (( port_number >= 1 && port_number <= 65535 )) || {
+        echo -e "${RED}  落地链接端口必须在 1-65535 范围内。${NC}" >&2
+        return 1
+    }
+    PARSED_PORT="$port_number"
+}
+
+function parse_ss_link_to_outbound() {
+    local link="$1"
+    local tag="$2"
+    local body main fragment left right creds hostport decoded method password
+    local main_no_query="" query=""
+
+    body="${link#ss://}"
+    main="${body%%#*}"
+    fragment=""
+    if [[ "$body" == *#* ]]; then
+        fragment="${body#*#}"
+    fi
+
+    main_no_query="${main%%\?*}"
+    if [[ "$main" == *\?* ]]; then
+        query="${main#*\?}"
+    fi
+
+    if [[ -n "$query" ]]; then
+        echo -e "${RED}  当前不支持带 plugin / query 参数的 SS 落地链接，已严格拒绝。${NC}" >&2
+        return 1
+    fi
+
+    if [[ "$main_no_query" == *"@"* ]]; then
+        left="${main_no_query%@*}"
+        right="${main_no_query#*@}"
+        left=$(uri_decode "$left")
+        right=$(uri_decode "$right")
+        hostport="${right%/}"
+        if [[ "$left" == *:* ]]; then
+            creds="$left"
+        else
+            creds=$(base64_decode_relaxed "$left") || return 1
+        fi
+    else
+        decoded=$(base64_decode_relaxed "$(uri_decode "$main_no_query")") || return 1
+        decoded=$(uri_decode "$decoded")
+        creds="${decoded%@*}"
+        hostport="${decoded#*@}"
+        hostport="${hostport%/}"
+    fi
+
+    [[ -n "$creds" && -n "$hostport" ]] || return 1
+    [[ "$creds" == *:* ]] || return 1
+    method="${creds%%:*}"
+    password="${creds#*:}"
+    parse_host_port "$hostport" || return 1
+
+    PARSED_LINK_KIND="ss"
+    PARSED_LINK_LABEL=$(uri_decode "$fragment")
+    [[ -n "$PARSED_LINK_LABEL" ]] || PARSED_LINK_LABEL="SS 落地"
+    PARSED_METHOD="$method"
+
+    PARSED_OUTBOUND_JSON=$(cat <<EOF
+    {
+      "tag": "${tag}",
+      "protocol": "shadowsocks",
+      "settings": {
+        "servers": [
           {
-            type: "local",
-            tag: "local-dns"
+            "address": "$(json_escape "$PARSED_HOST")",
+            "port": ${PARSED_PORT},
+            "method": "$(json_escape "$method")",
+            "password": "$(json_escape "$password")"
           }
+        ]
+      }
+    }
+EOF
+)
+}
+
+function validate_vless_query_keys() {
+    local query="$1"
+    local pair=""
+    local key=""
+    local -a pairs=()
+
+    [[ -n "$query" ]] || return 0
+    IFS='&' read -r -a pairs <<< "$query"
+    for pair in "${pairs[@]}"; do
+        key="${pair%%=*}"
+        case "$key" in
+            security|encryption|flow|type|sni|serverName|pbk|publicKey|sid|shortId|fp|fingerprint|spx|spiderX|headerType)
+                ;;
+            *)
+                echo -e "${RED}  VLESS 落地链接包含当前未实现的参数：${key}，已严格拒绝。${NC}" >&2
+                return 1
+                ;;
+        esac
+    done
+}
+
+function parse_vless_link_to_outbound() {
+    local link="$1"
+    local tag="$2"
+    local body main fragment uuid rest hostport query
+    local security encryption flow transport sni pbk sid fp spx header_type
+    local user_flow_json stream_json label_dec
+    local uuid_dec="" hostport_dec="" fingerprint_json="" shortid_json=""
+
+    body="${link#vless://}"
+    main="${body%%#*}"
+    fragment=""
+    if [[ "$body" == *#* ]]; then
+        fragment="${body#*#}"
+    fi
+
+    uuid="${main%%@*}"
+    rest="${main#*@}"
+    [[ -n "$uuid" && "$rest" != "$main" ]] || return 1
+
+    if [[ "$rest" == *\?* ]]; then
+        hostport="${rest%%\?*}"
+        query="${rest#*\?}"
+    else
+        hostport="$rest"
+        query=""
+    fi
+    uuid_dec=$(uri_decode "$uuid")
+    hostport_dec=$(uri_decode "$hostport")
+    hostport_dec="${hostport_dec%/}"
+    parse_host_port "$hostport_dec" || return 1
+
+    security=$(get_query_param "$query" "security" || true)
+    encryption=$(get_query_param "$query" "encryption" || true)
+    flow=$(get_query_param "$query" "flow" || true)
+    transport=$(get_query_param "$query" "type" || true)
+    sni=$(get_query_param "$query" "sni" || true)
+    [[ -n "$sni" ]] || sni=$(get_query_param "$query" "serverName" || true)
+    pbk=$(get_query_param "$query" "pbk" || true)
+    [[ -n "$pbk" ]] || pbk=$(get_query_param "$query" "publicKey" || true)
+    sid=$(get_query_param "$query" "sid" || true)
+    [[ -n "$sid" ]] || sid=$(get_query_param "$query" "shortId" || true)
+    fp=$(get_query_param "$query" "fp" || true)
+    [[ -n "$fp" ]] || fp=$(get_query_param "$query" "fingerprint" || true)
+    spx=$(get_query_param "$query" "spx" || true)
+    [[ -n "$spx" ]] || spx=$(get_query_param "$query" "spiderX" || true)
+    header_type=$(get_query_param "$query" "headerType" || true)
+    [[ -n "$transport" ]] || transport="tcp"
+    [[ "$transport" == "raw" ]] && transport="tcp"
+
+    if [[ "$transport" != "tcp" ]]; then
+        echo -e "${RED}  当前只支持 TCP 类型的 VLESS 落地链接；${transport} 的附加参数无法完整生成，已严格拒绝。${NC}" >&2
+        return 1
+    fi
+    validate_vless_query_keys "$query" || return 1
+    case "$security" in
+        ""|none|reality)
+            ;;
+        *)
+            echo -e "${RED}  当前只支持 security=none 或 security=reality 的 VLESS TCP 落地链接，已严格拒绝 security=${security}。${NC}" >&2
+            return 1
+            ;;
+    esac
+    if [[ "$security" == "reality" && -n "$encryption" && "$encryption" != "none" ]]; then
+        echo -e "${RED}  当前不支持同时携带 REALITY 与 VLESS-ENC encryption 的落地链接，已严格拒绝。${NC}" >&2
+        return 1
+    fi
+    if [[ -n "$header_type" && "$header_type" != "none" ]]; then
+        echo -e "${RED}  当前只支持 headerType=none 的 VLESS TCP 落地链接，已严格拒绝。${NC}" >&2
+        return 1
+    fi
+    if [[ -n "$spx" && "$spx" != "/" ]]; then
+        echo -e "${RED}  当前无法无损保留自定义 spiderX，已严格拒绝该 VLESS 落地链接。${NC}" >&2
+        return 1
+    fi
+    if [[ "$security" != "reality" && ( -n "$sni" || -n "$pbk" || -n "$sid" || -n "$fp" || -n "$spx" ) ]]; then
+        echo -e "${RED}  非 REALITY 落地链接携带了 REALITY 专用参数，已严格拒绝。${NC}" >&2
+        return 1
+    fi
+
+    user_flow_json=""
+    if [[ -n "$flow" ]]; then
+        user_flow_json=', "flow": "'"$(json_escape "$flow")"'"'
+    fi
+
+    if [[ "$security" == "reality" ]]; then
+        [[ -n "$sni" && -n "$pbk" ]] || return 1
+        [[ -n "$fp" ]] || fp="firefox"
+
+        fingerprint_json=''
+        if [[ -n "$fp" ]]; then
+            fingerprint_json=$'
+          "fingerprint": "'"$(json_escape "$fp")"'",'
+        fi
+
+        shortid_json=''
+        if [[ -n "$sid" ]]; then
+            shortid_json=$'
+          "shortId": "'"$(json_escape "$sid")"'",'
+        fi
+
+        stream_json=$(cat <<EOF
+,
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "$(json_escape "$sni")",
+          "publicKey": "$(json_escape "$pbk")",${shortid_json}${fingerprint_json}
+          "spiderX": "/"
+        }
+      }
+EOF
+)
+    else
+        stream_json=$(cat <<EOF
+,
+      "streamSettings": {
+        "network": "${transport}"
+      }
+EOF
+)
+    fi
+
+    label_dec=$(uri_decode "$fragment")
+    if [[ -n "$encryption" && "$encryption" != "none" ]]; then
+        [[ -n "$label_dec" ]] || label_dec="Vless-Enc 落地"
+    elif [[ "$security" == "reality" ]]; then
+        [[ -n "$label_dec" ]] || label_dec="VLESS Reality 落地"
+    else
+        [[ -n "$label_dec" ]] || label_dec="VLESS 落地"
+    fi
+
+    [[ -n "$encryption" ]] || encryption="none"
+    PARSED_LINK_KIND="vless"
+    PARSED_LINK_LABEL="$label_dec"
+    PARSED_USER_ID="$uuid_dec"
+    PARSED_ENCRYPTION="$encryption"
+    PARSED_FLOW="$flow"
+    PARSED_SECURITY="$security"
+    PARSED_TRANSPORT="$transport"
+    PARSED_OUTBOUND_JSON=$(cat <<EOF
+    {
+      "tag": "${tag}",
+      "protocol": "vless",
+      "settings": {
+        "vnext": [
+          {
+            "address": "$(json_escape "$PARSED_HOST")",
+            "port": ${PARSED_PORT},
+            "users": [
+              {
+                "id": "$(json_escape "$uuid_dec")",
+                "encryption": "$(json_escape "$encryption")"${user_flow_json}
+              }
+            ]
+          }
+        ]
+      }${stream_json}
+    }
+EOF
+)
+}
+
+function build_outbound_from_link() {
+    local link="$1"
+    local tag="$2"
+    PARSED_HOST=""
+    PARSED_PORT=""
+    PARSED_LINK_KIND=""
+    PARSED_LINK_LABEL=""
+    PARSED_OUTBOUND_JSON=""
+    PARSED_USER_ID=""
+    PARSED_ENCRYPTION=""
+    PARSED_FLOW=""
+    PARSED_SECURITY=""
+    PARSED_TRANSPORT=""
+    PARSED_METHOD=""
+    case "$link" in
+        ss://*) parse_ss_link_to_outbound "$link" "$tag" ;;
+        vless://*) parse_vless_link_to_outbound "$link" "$tag" ;;
+        *) return 1 ;;
+    esac
+}
+
+function get_common_block_rules_json() {
+cat <<'EOF'
+      {
+        "type": "field",
+        "domain": [
+          "full:localhost",
+          "full:localhost.localdomain"
         ],
-        final: "local-dns",
-        strategy: $ip_strategy
+        "outboundTag": "blocked"
       },
-      outbounds: [
+      {
+        "type": "field",
+        "network": "udp",
+        "port": "53,853",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "53,853",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "network": "tcp",
+        "port": "25,465,587,2525",
+        "outboundTag": "blocked"
+      },
+      {
+        "type": "field",
+        "ip": [
+          "geoip:private",
+          "0.0.0.0/8",
+          "10.0.0.0/8",
+          "100.64.0.0/10",
+          "127.0.0.0/8",
+          "169.254.0.0/16",
+          "169.254.169.254/32",
+          "172.16.0.0/12",
+          "192.0.0.0/24",
+          "192.0.2.0/24",
+          "192.168.0.0/16",
+          "198.18.0.0/15",
+          "198.51.100.0/24",
+          "203.0.113.0/24",
+          "224.0.0.0/4",
+          "240.0.0.0/4",
+          "255.255.255.255/32",
+          "::/128",
+          "::1/128",
+          "fc00::/7",
+          "fe80::/10",
+          "ff00::/8",
+          "2001:db8::/32"
+        ],
+        "outboundTag": "blocked"
+      },
+EOF
+}
+
+function normalize_block_spacing() {
+    awk '
+        NR == 1 {
+            print
+            prev_blank = ($0 == "")
+            next
+        }
         {
-          type: "direct",
-          tag: "direct"
-        }
-      ],
-      route: {
-        rules: [
-          {
-            inbound: ["vmess-ws-in"],
-            action: "resolve",
-            strategy: $ip_strategy
-          },
-          {
-            ip_is_private: true,
-            action: "reject",
-            method: "drop"
-          },
-          {
-            ip_cidr: [
-              "169.254.169.254/32",
-              "100.100.100.200/32"
-            ],
-            action: "reject",
-            method: "drop"
-          }
-        ],
-        final: "direct",
-        default_domain_resolver: {
-          server: "local-dns",
-          strategy: $ip_strategy
-        }
-      }
-    }'
-}
-
-singbox_template_direct() {
-  singbox_template_base
-}
-
-singbox_template_doh() {
-  singbox_template_base \
-    | jq --arg ip_strategy "$(singbox_ip_strategy)" '
-      .dns = {
-        servers: [
-          {
-            type: "https",
-            tag: "cloudflare-doh",
-            server: "1.1.1.1",
-            server_port: 443,
-            path: "/dns-query",
-            tls: {
-              enabled: true,
-              server_name: "cloudflare-dns.com"
+            is_top = ($0 != "" && $0 !~ /^[[:space:]]/)
+            if (is_top && !prev_blank) {
+                print ""
             }
-          }
-        ],
-        final: "cloudflare-doh",
-        strategy: $ip_strategy
-      }
-      | .route.default_domain_resolver = {
-          server: "cloudflare-doh",
-          strategy: $ip_strategy
+            print
+            prev_blank = ($0 == "")
         }
     '
 }
 
-singbox_template_warp() {
-  singbox_template_base \
-    | jq \
-      --arg ip_strategy "$(singbox_ip_strategy)" \
-      --arg private_key "$WARP_PRIVATE_KEY" \
-      --arg ipv4 "$WARP_IPV4" \
-      --arg ipv6 "$WARP_IPV6" \
-      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
-      --argjson peer_port "$WARP_ENDPOINT_PORT" \
-      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
-      --argjson mtu "$WARP_MTU" \
-      '
-        .dns = {
-          servers: [
-            {
-              type: "local",
-              tag: "local-dns",
-              prefer_go: true
-            },
-            {
-              type: "https",
-              tag: "warp-bootstrap-doh",
-              server: "1.1.1.1",
-              server_port: 443,
-              path: "/dns-query",
-              tls: {
-                enabled: true,
-                server_name: "cloudflare-dns.com"
-              }
-            }
-          ],
-          final: "local-dns",
-          strategy: $ip_strategy
-        }
-        | .endpoints = [
-            {
-              type: "wireguard",
-              tag: "warp",
-              system: false,
-              mtu: $mtu,
-              address: [$ipv4, $ipv6],
-              private_key: $private_key,
-              peers: [
-                {
-                  address: $peer_address,
-                  port: $peer_port,
-                  public_key: $public_key,
-                  allowed_ips: ["0.0.0.0/0", "::/0"],
-                  persistent_keepalive_interval: 30
-                }
-              ],
-              udp_timeout: "5m",
-              connect_timeout: "10s",
-              domain_resolver: {
-                server: "warp-bootstrap-doh",
-                strategy: $ip_strategy
-              }
-            }
-          ]
-        | .route.default_domain_resolver = {
-            server: "local-dns",
-            strategy: $ip_strategy
-          }
-        | .route.final = "warp"
-      '
+function sanitize_public_subscription_text() {
+    awk '
+        /原始.*链接/ { next }
+        { print }
+    '
 }
 
-singbox_template_doh_warp() {
-  singbox_template_base \
-    | jq \
-      --arg ip_strategy "$(singbox_ip_strategy)" \
-      --arg private_key "$WARP_PRIVATE_KEY" \
-      --arg ipv4 "$WARP_IPV4" \
-      --arg ipv6 "$WARP_IPV6" \
-      --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
-      --argjson peer_port "$WARP_ENDPOINT_PORT" \
-      --arg public_key "$WARP_PEER_PUBLIC_KEY" \
-      --argjson mtu "$WARP_MTU" \
-      '
-        .dns = {
-          servers: [
-            {
-              type: "https",
-              tag: "warp-bootstrap-doh",
-              server: "1.1.1.1",
-              server_port: 443,
-              path: "/dns-query",
-              tls: {
-                enabled: true,
-                server_name: "cloudflare-dns.com"
-              }
-            },
-            {
-              type: "https",
-              tag: "cloudflare-doh",
-              server: "1.1.1.1",
-              server_port: 443,
-              path: "/dns-query",
-              tls: {
-                enabled: true,
-                server_name: "cloudflare-dns.com"
-              },
-              detour: "warp"
-            }
-          ],
-          final: "cloudflare-doh",
-          strategy: $ip_strategy
-        }
-        | .endpoints = [
-            {
-              type: "wireguard",
-              tag: "warp",
-              system: false,
-              mtu: $mtu,
-              address: [$ipv4, $ipv6],
-              private_key: $private_key,
-              peers: [
-                {
-                  address: $peer_address,
-                  port: $peer_port,
-                  public_key: $public_key,
-                  allowed_ips: ["0.0.0.0/0", "::/0"],
-                  persistent_keepalive_interval: 30
-                }
-              ],
-              udp_timeout: "5m",
-              connect_timeout: "10s",
-              domain_resolver: {
-                server: "warp-bootstrap-doh",
-                strategy: $ip_strategy
-              }
-            }
-          ]
-        | .route.default_domain_resolver = {
-            server: "cloudflare-doh",
-            strategy: $ip_strategy
-          }
-        | .route.final = "warp"
-      '
-}
+function write_dynamic_result_files() {
+    local sub_text="$1"
+    local ports_text="$2"
+    local now_time
+    local normalized_sub_text=""
+    local public_sub_text=""
+    local normalized_public_sub_text=""
+    local normalized_ports_text=""
+    now_time=$(date '+%Y-%m-%d %H:%M:%S')
 
-write_singbox_config() {
-  [[ -n "$SINGBOX_BIN" ]] || resolve_singbox_bin
-  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box。"
-
-  valid_uuid "$UUID" || die "UUID 为空或格式错误。"
-  valid_ws_path "$WSPATH" || die "WS 路径为空或格式错误。"
-  valid_local_port "$LOCAL_PORT" || die "本地监听端口无效。"
-  valid_node_name "$NODE_NAME" || die "节点名称无效。"
-  valid_feature_flag "$DOH_ENABLED" || die "DoH 功能开关无效。"
-  valid_feature_flag "$WARP_ENABLED" || die "WARP 功能开关无效。"
-  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站策略无效。"
-
-  if [[ "$WARP_ENABLED" == "1" ]]; then
-    load_warp_profile_parameters
-  else
-    rm -f "$WARP_CHECK_FILE"
-  fi
-
-  local tmp=""
-  local expected_sha=""
-  local actual_sha=""
-  local expected_ip_strategy=""
-  tmp="$(mktemp "${DATA_DIR}/.sing-box.json.XXXXXX")"
-  expected_ip_strategy="$(singbox_ip_strategy)"
-
-  case "${DOH_ENABLED}:${WARP_ENABLED}" in
-    0:0)
-      singbox_template_direct > "$tmp"
-      ;;
-    1:0)
-      singbox_template_doh > "$tmp"
-      ;;
-    0:1)
-      singbox_template_warp > "$tmp"
-      ;;
-    1:1)
-      singbox_template_doh_warp > "$tmp"
-      ;;
-    *)
-      rm -f "$tmp"
-      die "无法选择 sing-box 配置模板。"
-      ;;
-  esac
-
-  jq -e \
-    --arg name "$NODE_NAME" \
-    --arg uuid "$UUID" \
-    --arg path "$WSPATH" \
-    --arg ip_strategy "$expected_ip_strategy" \
-    --argjson port "$LOCAL_PORT" \
-    '(.inbounds | type == "array" and length == 1)
-      and (.inbounds[0].type == "vmess")
-      and (.inbounds[0].tag == "vmess-ws-in")
-      and (.inbounds[0].listen == "127.0.0.1")
-      and (.inbounds[0].listen_port == $port)
-      and (.inbounds[0].users | type == "array" and length == 1)
-      and (.inbounds[0].users[0].name == $name)
-      and (.inbounds[0].users[0].uuid == $uuid)
-      and (.inbounds[0].users[0].alterId == 0)
-      and (.inbounds[0].transport.type == "ws")
-      and (.inbounds[0].transport.path == $path)
-      and any((.outbounds // [])[]?; .type == "direct" and .tag == "direct")
-      and (.dns.strategy == $ip_strategy)
-      and (.route.default_domain_resolver.strategy == $ip_strategy)
-      and any((.route.rules // [])[]?;
-        .action == "resolve"
-        and (.inbound // []) == ["vmess-ws-in"]
-        and .strategy == $ip_strategy)
-      and any((.route.rules // [])[]?;
-        .ip_is_private == true
-        and .action == "reject"
-        and .method == "drop")
-      and any((.route.rules // [])[]?;
-        .action == "reject"
-        and .method == "drop"
-        and ((.ip_cidr // []) | index("169.254.169.254/32") != null)
-        and ((.ip_cidr // []) | index("100.100.100.200/32") != null))
-      and ([.. | objects | select(has("domain_strategy"))] | length == 0)' \
-    "$tmp" >/dev/null \
-    || { rm -f "$tmp"; die "生成的 sing-box 配置未通过通用结构自检。"; }
-
-  case "${DOH_ENABLED}:${WARP_ENABLED}" in
-    0:0)
-      jq -e '
-        (.route.final == "direct")
-        and (.dns.final == "local-dns")
-        and (.route.default_domain_resolver.server == "local-dns")
-        and any((.dns.servers // [])[]?;
-          .tag == "local-dns" and .type == "local")
-        and ((.endpoints // []) | length == 0)
-      ' "$tmp" >/dev/null \
-        || { rm -f "$tmp"; die "直接出站模板写入结果不符合预期。"; }
-      ;;
-    1:0)
-      jq -e '
-        (.route.final == "direct")
-        and (.dns.final == "cloudflare-doh")
-        and (.route.default_domain_resolver.server == "cloudflare-doh")
-        and any((.dns.servers // [])[]?;
-          .tag == "cloudflare-doh"
-          and .type == "https"
-          and .server == "1.1.1.1"
-          and .server_port == 443
-          and .path == "/dns-query"
-          and .tls.enabled == true
-          and .tls.server_name == "cloudflare-dns.com"
-          and (has("detour") | not))
-        and ((.endpoints // []) | length == 0)
-      ' "$tmp" >/dev/null \
-        || { rm -f "$tmp"; die "DoH 模板写入结果不符合预期。"; }
-      ;;
-    0:1)
-      jq -e \
-        --arg private_key "$WARP_PRIVATE_KEY" \
-        --arg ipv4 "$WARP_IPV4" \
-        --arg ipv6 "$WARP_IPV6" \
-        --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
-        --argjson peer_port "$WARP_ENDPOINT_PORT" \
-        --arg public_key "$WARP_PEER_PUBLIC_KEY" \
-        --argjson mtu "$WARP_MTU" \
-        --arg ip_strategy "$expected_ip_strategy" \
-        '(.route.final == "warp")
-          and (.dns.final == "local-dns")
-          and (.route.default_domain_resolver.server == "local-dns")
-          and any((.dns.servers // [])[]?;
-            .tag == "local-dns"
-            and .type == "local"
-            and .prefer_go == true)
-          and any((.dns.servers // [])[]?;
-            .tag == "warp-bootstrap-doh"
-            and .type == "https"
-            and .server == "1.1.1.1"
-            and .server_port == 443
-            and .path == "/dns-query"
-            and .tls.enabled == true
-            and .tls.server_name == "cloudflare-dns.com")
-          and any((.endpoints // [])[]?;
-            .tag == "warp"
-            and .type == "wireguard"
-            and .system == false
-            and .mtu == $mtu
-            and .address == [$ipv4, $ipv6]
-            and .private_key == $private_key
-            and .domain_resolver.server == "warp-bootstrap-doh"
-            and .domain_resolver.strategy == $ip_strategy
-            and any((.peers // [])[]?;
-              .address == $peer_address
-              and .port == $peer_port
-              and .public_key == $public_key
-              and .allowed_ips == ["0.0.0.0/0", "::/0"]
-              and .persistent_keepalive_interval == 30))' \
-        "$tmp" >/dev/null \
-        || { rm -f "$tmp"; die "WARP 模板写入结果不符合预期。"; }
-      ;;
-    1:1)
-      jq -e \
-        --arg private_key "$WARP_PRIVATE_KEY" \
-        --arg ipv4 "$WARP_IPV4" \
-        --arg ipv6 "$WARP_IPV6" \
-        --arg peer_address "$WARP_ENDPOINT_ADDRESS" \
-        --argjson peer_port "$WARP_ENDPOINT_PORT" \
-        --arg public_key "$WARP_PEER_PUBLIC_KEY" \
-        --argjson mtu "$WARP_MTU" \
-        --arg ip_strategy "$expected_ip_strategy" \
-        '(.route.final == "warp")
-          and (.dns.final == "cloudflare-doh")
-          and (.route.default_domain_resolver.server == "cloudflare-doh")
-          and any((.dns.servers // [])[]?;
-            .tag == "warp-bootstrap-doh"
-            and .type == "https"
-            and .server == "1.1.1.1"
-            and .server_port == 443
-            and .path == "/dns-query"
-            and .tls.enabled == true
-            and .tls.server_name == "cloudflare-dns.com"
-            and (has("detour") | not))
-          and any((.dns.servers // [])[]?;
-            .tag == "cloudflare-doh"
-            and .type == "https"
-            and .server == "1.1.1.1"
-            and .server_port == 443
-            and .path == "/dns-query"
-            and .tls.enabled == true
-            and .tls.server_name == "cloudflare-dns.com"
-            and .detour == "warp")
-          and any((.endpoints // [])[]?;
-            .tag == "warp"
-            and .type == "wireguard"
-            and .system == false
-            and .mtu == $mtu
-            and .address == [$ipv4, $ipv6]
-            and .private_key == $private_key
-            and .domain_resolver.server == "warp-bootstrap-doh"
-            and .domain_resolver.strategy == $ip_strategy
-            and any((.peers // [])[]?;
-              .address == $peer_address
-              and .port == $peer_port
-              and .public_key == $public_key
-              and .allowed_ips == ["0.0.0.0/0", "::/0"]
-              and .persistent_keepalive_interval == 30))' \
-        "$tmp" >/dev/null \
-        || { rm -f "$tmp"; die "DoH + WARP 模板写入结果不符合预期。"; }
-      ;;
-  esac
-
-  chmod 640 "$tmp"
-  chown root:"$SERVICE_GROUP" "$tmp"
-
-  if ! "$SINGBOX_BIN" check -c "$tmp"; then
-    rm -f "$tmp"
-
-    if [[ "$DOH_ENABLED" == "1" || "$WARP_ENABLED" == "1" ]]; then
-      die "新 sing-box 配置校验失败；请先通过菜单 6 更新组件，再重试 DoH/WARP 部署。"
+    normalized_sub_text=$(printf '%b\n' "$sub_text" | normalize_block_spacing)
+    public_sub_text=$(printf '%b\n' "$sub_text" | sanitize_public_subscription_text)
+    normalized_public_sub_text=$(printf '%s\n' "$public_sub_text" | normalize_block_spacing)
+    if [[ -n "$ports_text" ]]; then
+        normalized_ports_text=$(printf '%b\n' "$ports_text" | normalize_block_spacing)
     fi
 
-    die "新 sing-box 配置校验失败。"
-  fi
+    (
+        umask 077
+        {
+            printf '作者    : %s\n' "$AUTHOR_NAME"
+            printf '版本    : %s\n' "$SCRIPT_VERSION"
+            printf '生成时间: %s\n\n' "$now_time"
+            printf '%s\n' "$normalized_sub_text"
+            if [[ -n "$normalized_ports_text" ]]; then
+                printf '\n%s\n' "$normalized_ports_text"
+            fi
+        } > "$INFO_FILE"
 
-  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
+        {
+            printf '版本    : %s\n' "$SCRIPT_VERSION"
+            printf '生成时间: %s\n\n' "$now_time"
+            printf '%s\n' "$normalized_public_sub_text"
+        } > "$SUB_FILE"
+    )
 
-  mv -f "$tmp" "$SINGBOX_CONFIG"
-  chmod 640 "$SINGBOX_CONFIG"
-  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
-
-  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
-  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] \
-    || die "sing-box 配置覆盖后摘要不一致。"
-
-  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" \
-    || die "已覆盖的 sing-box 配置未通过二次校验。"
+    chmod 600 "$INFO_FILE" "$SUB_FILE" >/dev/null 2>&1 || true
 }
 
-singbox_config_needs_refresh() {
-  [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
-  command -v jq >/dev/null 2>&1 || return 1
 
-  jq -e \
-    '([.. | objects | select(has("domain_strategy"))] | length > 0)
-      or ((.dns // null) == null)
-      or ((.route.default_domain_resolver // null) == null)
-      or ([.route.rules[]? | select(.action == "resolve")] | length == 0)
-      or any((.outbounds // [])[]?; .type == "wireguard")' \
-    "$SINGBOX_CONFIG" >/dev/null 2>&1
-}
-
-find_free_loopback_port() {
-  local port=0
-
-  for ((port = 18080; port <= 18179; port++)); do
-    if ! ss -ltn 2>/dev/null \
-        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${port}([[:space:]]|$)"; then
-      printf '%s\n' "$port"
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-stop_checked_process() {
-  local pid="$1"
-  local recorded_start="$2"
-  local actual_start=""
-  local i=0
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 0
-  [[ "$recorded_start" =~ ^[0-9]+$ ]] || return 0
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  [[ "$actual_start" == "$recorded_start" ]] || return 0
-
-  kill -TERM "$pid" 2>/dev/null || true
-
-  for ((i = 0; i < 5; i++)); do
-    actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-    if [[ "$actual_start" != "$recorded_start" ]]; then
-      wait "$pid" 2>/dev/null || true
-      return 0
-    fi
-    sleep 1
-  done
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  if [[ "$actual_start" == "$recorded_start" ]]; then
-    kill -KILL "$pid" 2>/dev/null || true
-  fi
-  wait "$pid" 2>/dev/null || true
-}
-
-valid_warp_port() {
-  local port="$1"
-  [[ "$port" =~ ^[0-9]{1,5}$ ]] || return 1
-  ((10#$port >= 1 && 10#$port <= 65535))
-}
-
-warp_candidate_ports() {
-  local port=""
-  local seen=""
-
-  for port in \
-    "$WARP_ENDPOINT_PORT" \
-    "$WARP_PROFILE_ENDPOINT_PORT" \
-    2408 \
-    500 \
-    1701 \
-    4500
-  do
-    valid_warp_port "$port" || continue
-    port="$((10#$port))"
-
-    case " ${seen} " in
-      *" ${port} "*)
-        continue
-        ;;
+function get_install_scenario_label() {
+    case "$1" in
+        1) printf '%s' 'Reality 直出 / 多落地' ;;
+        2) printf '%s' '单 SS 直出' ;;
+        3) printf '%s' '单 Vless-Enc 直出' ;;
+        4) printf '%s' 'Reality Vless-Enc SS 三入站直出' ;;
+        5) printf '%s' 'SS 入站 + 多出口（0-10 个落地）' ;;
+        6) printf '%s' 'Vless-Enc 入站 + 多出口（0-10 个落地）' ;;
+        7) printf '%s' 'XHTTP + Reality 直出 / 多落地' ;;
+        8) printf '%s' 'XHTTP + Vless-Enc 上下行分离（高风险慎用）' ;;
+        *) printf '%s' '未知模板' ;;
     esac
-
-    printf '%s\n' "$((10#$port))"
-    seen="${seen} ${port}"
-  done
 }
 
-set_warp_peer_port() {
-  local port="$1"
-  local tmp=""
-  local expected_sha=""
-  local actual_sha=""
-
-  valid_warp_port "$port" || return 1
-  [[ -f "$SINGBOX_CONFIG" && ! -L "$SINGBOX_CONFIG" ]] || return 1
-  [[ -n "$SINGBOX_BIN" ]] || return 1
-
-  tmp="$(mktemp "${DATA_DIR}/.sing-box-port.json.XXXXXX")"
-
-  if ! jq \
-      --argjson port "$((10#$port))" \
-      '
-        (.endpoints[] | select(.type == "wireguard" and .tag == "warp") | .peers[0].port) = $port
-      ' \
-      "$SINGBOX_CONFIG" \
-      > "$tmp"; then
-    rm -f "$tmp"
-    return 1
-  fi
-
-  chmod 640 "$tmp"
-  chown root:"$SERVICE_GROUP" "$tmp"
-
-  if ! "$SINGBOX_BIN" check -c "$tmp"; then
-    rm -f "$tmp"
-    return 1
-  fi
-
-  if ! jq -e \
-      --argjson port "$((10#$port))" \
-      '
-        (.endpoints // [])
-        | any(
-            .type == "wireguard"
-            and .tag == "warp"
-            and .peers[0].port == $port
-          )
-      ' \
-      "$tmp" \
-      >/dev/null; then
-    rm -f "$tmp"
-    return 1
-  fi
-
-  expected_sha="$(sha256sum "$tmp" | awk '{print $1}')"
-
-  mv -f "$tmp" "$SINGBOX_CONFIG"
-  chmod 640 "$SINGBOX_CONFIG"
-  chown root:"$SERVICE_GROUP" "$SINGBOX_CONFIG"
-
-  actual_sha="$(sha256sum "$SINGBOX_CONFIG" | awk '{print $1}')"
-  [[ -n "$expected_sha" && "$actual_sha" == "$expected_sha" ]] || return 1
-
-  "$SINGBOX_BIN" check -c "$SINGBOX_CONFIG" || return 1
-
-  WARP_ENDPOINT_PORT="$((10#$port))"
-  return 0
-}
-
-verify_warp_runtime() {
-  [[ "$WARP_ENABLED" == "1" ]] || return 0
-
-  local test_port=""
-  local test_config=""
-  local test_log=""
-  local test_pid=""
-  local test_start=""
-  local response=""
-  local warp_state=""
-  local exit_ip=""
-  local colo=""
-  local selected_port=""
-  local attempted_ports=""
-  local chain_label="VMess/WS → WARP"
-  local port=""
-  local i=0
-  local -a candidate_ports=()
-
-  if [[ "$DOH_ENABLED" == "1" ]]; then
-    chain_label="VMess/WS → DoH → WARP"
-  fi
-
-  service_is_active \
-    || die "WARP 自检前发现 sing-box 服务未运行。"
-  listener_exact_loopback \
-    || die "WARP 自检前发现 127.0.0.1:${LOCAL_PORT} 未监听。"
-
-  mapfile -t candidate_ports < <(warp_candidate_ports)
-  ((${#candidate_ports[@]} > 0)) \
-    || die "没有可用于 WARP 自检的 Endpoint UDP 端口。"
-
-  test_port="$(find_free_loopback_port)" \
-    || die "无法找到用于 WARP 本机自检的空闲回环端口。"
-
-  test_config="$(mktemp "${DATA_DIR}/.warp-client-check.json.XXXXXX")"
-  test_log="$(mktemp "${DATA_DIR}/.warp-client-check.log.XXXXXX")"
-
-  jq -n \
-    --arg uuid "$UUID" \
-    --arg path "$WSPATH" \
-    --argjson server_port "$LOCAL_PORT" \
-    --argjson listen_port "$test_port" \
-    '{
-      log: {
-        level: "debug",
-        timestamp: true
-      },
-      inbounds: [
-        {
-          type: "mixed",
-          tag: "warp-check-in",
-          listen: "127.0.0.1",
-          listen_port: $listen_port
-        }
-      ],
-      outbounds: [
-        {
-          type: "vmess",
-          tag: "local-vmess-check",
-          server: "127.0.0.1",
-          server_port: $server_port,
-          uuid: $uuid,
-          security: "auto",
-          alter_id: 0,
-          transport: {
-            type: "ws",
-            path: $path
-          }
-        }
-      ],
-      route: {
-        final: "local-vmess-check"
-      }
-    }' > "$test_config"
-
-  chmod 600 "$test_config"
-
-  "$SINGBOX_BIN" check -c "$test_config" \
-    || {
-      rm -f "$test_config" "$test_log"
-      die "WARP 自检客户端配置未通过 sing-box 校验。"
-    }
-
-  "$SINGBOX_BIN" run -c "$test_config" \
-    > "$test_log" 2>&1 &
-  test_pid=$!
-  test_start="$(process_start_time "$test_pid" 2>/dev/null || true)"
-
-  if [[ ! "$test_start" =~ ^[0-9]+$ ]]; then
-    kill -TERM "$test_pid" 2>/dev/null || true
-    wait "$test_pid" 2>/dev/null || true
-    rm -f "$test_config" "$test_log"
-    die "无法确认 WARP 自检客户端进程身份。"
-  fi
-
-  for ((i = 1; i <= 15; i++)); do
-    if ss -ltn 2>/dev/null \
-        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
-      break
-    fi
-
-    if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]]; then
-      break
-    fi
-
-    sleep 1
-  done
-
-  if [[ "$(process_start_time "$test_pid" 2>/dev/null || true)" != "$test_start" ]] \
-      || ! ss -ltn 2>/dev/null \
-        | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${test_port}([[:space:]]|$)"; then
-    warn "WARP 自检客户端未能正常启动，日志如下："
-    tail -n 100 "$test_log" >&2 || true
-    stop_checked_process "$test_pid" "$test_start"
-    rm -f "$test_config" "$test_log"
-    die "WARP 运行时自检客户端启动失败。"
-  fi
-
-  for port in "${candidate_ports[@]}"; do
-    if [[ -n "$attempted_ports" ]]; then
-      attempted_ports="${attempted_ports},${port}"
-    else
-      attempted_ports="$port"
-    fi
-
-    printf '\n===== WARP Endpoint UDP %s =====\n' "$port" >> "$test_log"
-    info "正在测试 WARP Endpoint：${WARP_ENDPOINT_ADDRESS}:${port}/UDP"
-
-    if ! set_warp_peer_port "$port"; then
-      warn "无法将 WARP Endpoint 端口切换为 UDP ${port}，跳过该端口。"
-      continue
-    fi
-
-    if ! service_restart; then
-      warn "切换到 UDP ${port} 后 sing-box 重启失败，跳过该端口。"
-      service_print_logs 40
-      continue
-    fi
-
-    if ! wait_for_singbox_ready; then
-      warn "切换到 UDP ${port} 后 sing-box 未能正常监听，跳过该端口。"
-      service_print_logs 40
-      continue
-    fi
-
-    response=""
-    warp_state=""
-    exit_ip=""
-    colo=""
-
-    for ((i = 1; i <= 2; i++)); do
-      response="$(
-        curl \
-          --silent \
-          --show-error \
-          --max-time 15 \
-          --connect-timeout 5 \
-          --proxy "socks5h://127.0.0.1:${test_port}" \
-          https://www.cloudflare.com/cdn-cgi/trace \
-          2>> "$test_log" \
-          || true
-      )"
-
-      warp_state="$(
-        printf '%s\n' "$response" \
-          | tr -d '\r' \
-          | awk -F= '$1 == "warp" {print $2; exit}'
-      )"
-
-      if [[ "$warp_state" == "on" || "$warp_state" == "plus" ]]; then
-        selected_port="$port"
-        break
-      fi
-
-      sleep 1
+function choose_unified_chain_entry() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} SS 入站" >&2
+        echo -e "  ${CYAN}2.${NC} Vless-Enc 入站" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择入站协议 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01) printf '%s' 'ss'; return 0 ;;
+            2|02) printf '%s' 'vlessenc'; return 0 ;;
+            0|00) printf '%s' '__BACK__'; return 0 ;;
+            b|B) printf '%s' '__MAIN__'; return 0 ;;
+            *) echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2 ;;
+        esac
     done
-
-    if [[ -n "$selected_port" ]]; then
-      exit_ip="$(
-        printf '%s\n' "$response" \
-          | tr -d '\r' \
-          | awk -F= '$1 == "ip" {print $2; exit}'
-      )"
-      colo="$(
-        printf '%s\n' "$response" \
-          | tr -d '\r' \
-          | awk -F= '$1 == "colo" {print $2; exit}'
-      )"
-      break
-    fi
-
-    warn "WARP Endpoint UDP ${port} 未通过实际链路自检。"
-  done
-
-  stop_checked_process "$test_pid" "$test_start"
-  rm -f "$test_config"
-
-  if [[ -z "$selected_port" ]]; then
-    warn "已依次测试 WARP WireGuard 的配置端口及 Cloudflare 官方回退端口，均未确认隧道可用。"
-    printf '\n%s\n' "WARP 自检客户端日志：" >&2
-    tail -n 200 "$test_log" >&2 || true
-    printf '\n%s\n' "当前 sing-box 服务日志：" >&2
-    service_print_logs 160
-    rm -f "$test_log" "$WARP_CHECK_FILE"
-    die "WARP 实际链路不可用；常见原因是 VPS 提供商阻断 UDP 2408/500/1701/4500、到 Cloudflare WARP 网段路由异常，或该网络限制 WireGuard。"
-  fi
-
-  rm -f "$test_log"
-
-  jq -n \
-    --arg checked_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-    --arg warp "$warp_state" \
-    --arg ip "$exit_ip" \
-    --arg colo "$colo" \
-    --arg endpoint "$WARP_ENDPOINT_ADDRESS" \
-    --arg attempted_ports "$attempted_ports" \
-    --argjson port "$selected_port" \
-    --argjson profile_port "$WARP_PROFILE_ENDPOINT_PORT" \
-    '{
-      checked_at: $checked_at,
-      warp: $warp,
-      exit_ip: $ip,
-      colo: $colo,
-      endpoint: $endpoint,
-      port: $port,
-      profile_port: $profile_port,
-      attempted_ports: $attempted_ports
-    }' > "$WARP_CHECK_FILE"
-
-  chmod 600 "$WARP_CHECK_FILE"
-  WARP_ENDPOINT_PORT="$selected_port"
-  ok "WARP 实际链路自检通过：${chain_label}，Endpoint=${WARP_ENDPOINT_ADDRESS}:${selected_port}/UDP，warp=${warp_state}，出口=${exit_ip:-未知}，机房=${colo:-未知}。"
 }
 
-singbox_unit_is_ours() {
-  [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      grep -Fqx "Description=zdd-argo dedicated sing-box service managed-v0.1.0" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "User=${SERVICE_USER}" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "Group=${SERVICE_GROUP}" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
-      ;;
-    openrc)
-      grep -Fqx 'zdd_argo_managed="0.1.0"' "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$SINGBOX_UNIT" 2>/dev/null
-      ;;
-    *)
-      return 1
-      ;;
-  esac
+function render_install_context() {
+    local template_label="$1"
+    local install_mode="$2"
+    local install_mode_label=""
+    case "$install_mode" in
+        auto) install_mode_label="自动模式" ;;
+        manual) install_mode_label="手动模式" ;;
+        *) install_mode_label="$install_mode" ;;
+    esac
+    echo -e "${CYAN}  当前模板: ${template_label}${NC}"
+    echo -e "${CYAN}  安装模式: ${install_mode_label}${NC}"
 }
 
-singbox_unit_is_legacy_ours() {
-  [[ -f "$SINGBOX_UNIT" && ! -L "$SINGBOX_UNIT" ]] || return 1
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      grep -Fq "zdd-argo" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "User=${SERVICE_USER}" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "Group=${SERVICE_GROUP}" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}" "$SINGBOX_UNIT" 2>/dev/null
-      ;;
-    openrc)
-      grep -Fq "zdd-argo" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command=\"${MANAGED_SINGBOX_BIN}\"" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command_args=\"run -c ${SINGBOX_CONFIG}\"" "$SINGBOX_UNIT" 2>/dev/null \
-        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$SINGBOX_UNIT" 2>/dev/null
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-write_singbox_service() {
-  [[ -n "$SINGBOX_BIN" ]] || die "未找到 sing-box 可执行文件。"
-  [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]] \
-    || die "当前 sing-box 不是脚本专用二进制，拒绝写入受管服务。"
-  ensure_service_account
-
-  if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
-    singbox_unit_is_ours || singbox_unit_is_legacy_ours \
-      || die "服务路径已被其他程序占用：${SINGBOX_UNIT}"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp)"
-
-  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    cat > "$tmp" <<EOF
-[Unit]
-Description=zdd-argo dedicated sing-box service managed-v0.1.0
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_GROUP}
-ExecStart=${MANAGED_SINGBOX_BIN} run -c ${SINGBOX_CONFIG}
-Restart=on-failure
-RestartSec=3s
-LimitNOFILE=1048576
-NoNewPrivileges=true
-UMask=0077
-CapabilityBoundingSet=
-AmbientCapabilities=
-PrivateTmp=true
-PrivateDevices=true
-ProtectHome=true
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-LockPersonality=true
-RestrictSUIDSGID=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-SystemCallArchitectures=native
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-    install -m 0644 "$tmp" "$SINGBOX_UNIT"
-  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
-    cat >> "$tmp" <<EOF
-zdd_argo_managed="0.1.0"
-name="zdd-argo 专用 sing-box 服务"
-description="zdd-argo dedicated sing-box service"
-command="${MANAGED_SINGBOX_BIN}"
-command_args="run -c ${SINGBOX_CONFIG}"
-command_user="${SERVICE_USER}:${SERVICE_GROUP}"
-pidfile="/run/${SERVICE_NAME}.pid"
-supervisor="supervise-daemon"
-respawn_delay=3
-respawn_max=0
-output_log="${SINGBOX_LOG_FILE}"
-error_log="${SINGBOX_LOG_FILE}"
-
-depend() {
-  use net
-}
-
-start_pre() {
-  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
-  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${SINGBOX_CONFIG}"
-  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${SINGBOX_LOG_FILE}"
-}
-EOF
-
-    install -m 0755 "$tmp" "$SINGBOX_UNIT"
-  else
-    rm -f "$tmp"
-    die "无法识别服务管理器，不能写入服务文件。"
-  fi
-
-  rm -f "$tmp"
-  service_daemon_reload
-}
-
-render_logrotate_config() {
-  cat <<EOF
-${LOG_FILE} ${XRAY_LOG_FILE} ${SINGBOX_LOG_FILE} ${XRAY_CORE_LOG_FILE} {
-    size 5M
-    rotate 3
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-    su root root
-}
-EOF
-}
-
-logrotate_config_is_ours() {
-  local expected=""
-  local actual=""
-
-  [[ -f "$LOGROTATE_CONFIG" && ! -L "$LOGROTATE_CONFIG" ]] || return 1
-  expected="$(render_logrotate_config)"
-  actual="$(cat "$LOGROTATE_CONFIG" 2>/dev/null || true)"
-  [[ "$actual" == "$expected" ]]
-}
-
-logrotate_config_is_legacy_ours() {
-  local actual=""
-  local legacy=""
-
-  [[ -f "$LOGROTATE_CONFIG" && ! -L "$LOGROTATE_CONFIG" ]] || return 1
-
-  actual="$(cat "$LOGROTATE_CONFIG" 2>/dev/null || true)"
-  legacy="$(cat <<EOF
-${LOG_FILE} ${SINGBOX_LOG_FILE} {
-    size 5M
-    rotate 3
-    compress
-    delaycompress
-    missingok
-    notifempty
-    copytruncate
-    su root root
-}
-EOF
-)"
-
-  [[ "$actual" == "$legacy" ]] && return 0
-
-  grep -Fqx '# 由 zdd-argo v0.1.0 管理' "$LOGROTATE_CONFIG" 2>/dev/null \
-    && { \
-      grep -Fqx "${LOG_FILE} ${XRAY_LOG_FILE} ${SINGBOX_LOG_FILE} ${XRAY_CORE_LOG_FILE} {" "$LOGROTATE_CONFIG" 2>/dev/null \
-        || grep -Fqx "${LOG_FILE} ${SINGBOX_LOG_FILE} {" "$LOGROTATE_CONFIG" 2>/dev/null; \
-    } \
-    && grep -Fqx "    copytruncate" "$LOGROTATE_CONFIG" 2>/dev/null
-}
-
-write_logrotate_config() {
-  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    logrotate_config_is_ours || logrotate_config_is_legacy_ours \
-      || die "日志轮转配置路径已被其他程序占用：${LOGROTATE_CONFIG}"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp)"
-  mkdir -p "$(dirname -- "$LOGROTATE_CONFIG")"
-
-  render_logrotate_config > "$tmp"
-
-  install -m 0644 "$tmp" "$LOGROTATE_CONFIG"
-  rm -f "$tmp"
-}
-
-ss_listen_tcp_lines() {
-  ss -ltn \
-    2>/dev/null
-}
-
-ss_listen_tcp_process_lines() {
-  ss -ltnp \
-    2>/dev/null
-}
-
-listener_on_local_port() {
-  ss_listen_tcp_lines \
-    | grep -Eq "(^|[[:space:]])[^[:space:]]*:${LOCAL_PORT}([[:space:]]|$)"
-}
-
-listener_exact_loopback() {
-  ss_listen_tcp_lines \
-    | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)"
-}
-
-listener_exact_loopback_pid() {
-  local line=""
-  local pid=""
-
-  line="$(
-    ss_listen_tcp_process_lines \
-      | grep -E "(^|[[:space:]])127[.]0[.]0[.]1:${LOCAL_PORT}([[:space:]]|$)" \
-      | head -n 1 \
-      || true
-  )"
-
-  [[ -n "$line" ]] || return 1
-
-  pid="$(
-    printf '%s\n' "$line" \
-      | grep -Eo 'pid=[0-9]+' \
-      | head -n 1 \
-      | cut -d= -f2 \
-      || true
-  )"
-
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-  printf '%s\n' "$pid"
-}
-
-listener_process_matches_singbox() {
-  local pid=""
-  local cmdline=""
-
-  pid="$(listener_exact_loopback_pid 2>/dev/null || true)"
-  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
-
-  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
-  [[ -n "$cmdline" ]] || return 1
-
-  [[ "$cmdline" == *"${SINGBOX_CONFIG}"* ]] || return 1
-
-  [[ "$cmdline" == *"sing-box"* \
-    || ( -n "$SINGBOX_BIN" && "$cmdline" == *"${SINGBOX_BIN}"* ) \
-    || "$cmdline" == *"${MANAGED_SINGBOX_BIN}"* ]]
-}
-
-wait_for_singbox_ready() {
-  local i=0
-
-  for ((i = 1; i <= 15; i++)); do
-    if service_is_active \
-        && listener_exact_loopback; then
-      return 0
-    fi
-
-    if [[ "$INIT_SYSTEM" == "openrc" ]] \
-        && listener_exact_loopback; then
-      return 0
-    fi
-
-    sleep 1
-  done
-
-  return 1
-}
-
-ensure_singbox_running() {
-  if listener_on_local_port \
-      && ! service_is_active; then
-
-    if [[ "$INIT_SYSTEM" == "openrc" ]] \
-        && listener_exact_loopback \
-        && listener_process_matches_singbox; then
-
-      service_enable \
-        || warn "$(printf '%s' "OpenRC 状态未同步，且暂时无法启用 ${SERVICE_NAME}；继续使用当前已监听的 sing-box。")"
-
-      warn "$(printf '%s' "检测到 sing-box 已监听 127.0.0.1:${LOCAL_PORT}，但 OpenRC 状态尚未同步；按已就绪处理。")"
-      return 0
-    fi
-
-    warn "$(printf '%s' "端口 ${LOCAL_PORT} 已被其他进程占用：")"
-
-    ss_listen_tcp_process_lines \
-      | grep -E \
-        "(^|:)${LOCAL_PORT}[[:space:]]" \
-      || true
-
-    die "$(printf '%s' "为避免覆盖其他服务，已停止部署。")"
-  fi
-
-  service_enable \
-    || die "$(printf '%s' "无法启用 ${SERVICE_NAME}。")"
-
-  service_restart \
-    || die "$(printf '%s' "无法重启 ${SERVICE_NAME}，拒绝继续使用可能仍在运行的旧配置。")"
-
-  if ! wait_for_singbox_ready; then
-    service_print_logs 80
-
-    die "$(printf '%s' "${SERVICE_NAME} 未能在 15 秒内进入正常状态，或本机未监听 127.0.0.1:${LOCAL_PORT}；这不是 NAT 外部端口占用问题。")"
-  fi
-}
-
-write_cloudflared_runner() {
-  [[ -n "$CLOUDFLARED_BIN" ]] || die "未找到 cloudflared。"
-  ensure_service_account
-
-  local service_uid=""
-  local service_gid=""
-  local tmp=""
-
-  service_uid="$(id -u "$SERVICE_USER")"
-  service_gid="$(id -g "$SERVICE_USER")"
-  [[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]] \
-    || die "无法读取低权限服务账户的 UID/GID。"
-
-  tmp="$(mktemp)"
-
-  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
-  cat >> "$tmp" <<EOF
-set -Eeuo pipefail
-IFS=\$'\\n\\t'
-umask 077
-
-export HOME="${CLOUDFLARED_HOME}"
-CF_PID=""
-CF_START=""
-
-process_start_time() {
-  local pid="\$1"
-  local stat_line=""
-  local remainder=""
-  local start_time=""
-  local -a fields=()
-
-  [[ "\$pid" =~ ^[0-9]+\$ ]] || return 1
-  [[ -r "/proc/\${pid}/stat" ]] || return 1
-  IFS= read -r stat_line < "/proc/\${pid}/stat" || return 1
-  [[ "\$stat_line" == *") "* ]] || return 1
-  remainder="\${stat_line##*) }"
-  IFS=' ' read -r -a fields <<< "\$remainder"
-  [[ \${#fields[@]} -ge 20 ]] || return 1
-  start_time="\${fields[19]}"
-  [[ "\$start_time" =~ ^[0-9]+\$ ]] || return 1
-  printf '%s\\n' "\$start_time"
-}
-
-identity_matches() {
-  local pid="\$1"
-  local recorded_start="\$2"
-  local actual_start=""
-
-  actual_start="\$(process_start_time "\$pid" 2>/dev/null || true)"
-  [[ -n "\$actual_start" && "\$actual_start" == "\$recorded_start" ]]
-}
-
-signal_verified() {
-  local signal_name="\$1"
-  local pid="\$2"
-  local recorded_start="\$3"
-
-  identity_matches "\$pid" "\$recorded_start" || return 0
-  kill "-\${signal_name}" "\$pid" 2>/dev/null || true
-}
-
-cleanup() {
-  local rc=\$?
-  local i=0
-
-  trap - EXIT HUP INT TERM
-
-  if [[ -n "\${CF_PID}" && -n "\${CF_START}" ]]; then
-    signal_verified TERM "\${CF_PID}" "\${CF_START}"
-
-    for ((i = 0; i < 8; i++)); do
-      identity_matches "\${CF_PID}" "\${CF_START}" || break
-      sleep 1
+function choose_install_scenario() {
+    local choice
+    while true; do
+        line >&2
+        echo -e "${CYAN}${BOLD}  第三层：选择安装模板${NC}" >&2
+        line >&2
+        echo -e "${CYAN}  基础直出:${NC}" >&2
+        echo -e "  ${CYAN}1.${NC} Reality 直出 / 多落地（0-10 个）" >&2
+        echo -e "  ${CYAN}2.${NC} 单 SS 直出" >&2
+        echo -e "  ${CYAN}3.${NC} 单 Vless-Enc 直出" >&2
+        echo -e "  ${CYAN}4.${NC} Reality Vless-Enc SS 三入站直出" >&2
+        echo -e "" >&2
+        echo -e "${CYAN}  进阶链路:${NC}" >&2
+        echo -e "  ${CYAN}5.${NC} XHTTP + Reality 直出 / 多落地（0-10 个）" >&2
+        echo -e "  ${CYAN}6.${NC} XHTTP + Vless-Enc 上下行分离（${YELLOW}高风险慎用${NC}）" >&2
+        echo -e "  ${CYAN}7.${NC} SS / Vless-Enc 入站 + 多出口（0-10 个落地）" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        line >&2
+        read_input -r -p "选择 [1-7/0/b]: " choice
+        case "$choice" in
+            1|2|3|4) printf '%s' "$choice"; return 0 ;;
+            5|05) printf '%s' '7'; return 0 ;;
+            6|06) printf '%s' '8'; return 0 ;;
+            7|07)
+                local chain_entry=""
+                chain_entry=$(choose_unified_chain_entry)
+                case "$chain_entry" in
+                    ss) printf '%s' '__CHAIN_SS__'; return 0 ;;
+                    vlessenc) printf '%s' '__CHAIN_VLESSENC__'; return 0 ;;
+                    __BACK__) printf '%s' '__BACK__'; return 0 ;;
+                    __MAIN__) printf '%s' '__MAIN__'; return 0 ;;
+                esac
+                ;;
+            0|00) printf '%s' '__BACK__'; return 0 ;;
+            b|B) printf '%s' '__MAIN__'; return 0 ;;
+            *) echo -e "${RED}  请输入 1-7、0 或 b。${NC}" >&2 ;;
+        esac
     done
-
-    signal_verified KILL "\${CF_PID}" "\${CF_START}"
-    wait "\${CF_PID}" 2>/dev/null || true
-  fi
-
-  rm -f "${CLOUDFLARED_PID_FILE}"
-  exit "\$rc"
 }
 
-trap cleanup EXIT HUP INT TERM
-
-if [[ "${INIT_SYSTEM}" == "openrc" ]]; then
-  su-exec ${service_uid}:${service_gid} \
-    "${CLOUDFLARED_BIN}" tunnel \
-      --url "http://127.0.0.1:${LOCAL_PORT}" \
-      --protocol http2 \
-      > >(tee -a "${LOG_FILE}") 2>&1 &
-else
-  setpriv \
-    --reuid=${service_uid} \
-    --regid=${service_gid} \
-    --clear-groups \
-    --no-new-privs \
-    -- \
-    "${CLOUDFLARED_BIN}" tunnel \
-      --url "http://127.0.0.1:${LOCAL_PORT}" \
-      --protocol http2 \
-      > >(tee -a "${LOG_FILE}") 2>&1 &
-fi
-
-CF_PID=\$!
-CF_START="\$(process_start_time "\${CF_PID}" 2>/dev/null || true)"
-
-if [[ ! "\${CF_START}" =~ ^[0-9]+\$ ]]; then
-  wait "\${CF_PID}" 2>/dev/null || true
-  exit 1
-fi
-
-printf '%s %s\\n' "\${CF_PID}" "\${CF_START}" > "${CLOUDFLARED_PID_FILE}"
-chmod 600 "${CLOUDFLARED_PID_FILE}"
-wait "\${CF_PID}"
-EOF
-
-  install -m 0700 "$tmp" "$CLOUDFLARED_RUNNER"
-  rm -f "$tmp"
+function choose_xhttp_split_direction() {
+    local choice
+    while true; do
+        echo -e "  ${CYAN}1.${NC} v6 去 / v4 回（默认）" >&2
+        echo -e "  ${CYAN}2.${NC} v4 去 / v6 回" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        read_input -r -p "选择 XHTTP 分离方向 [1-2/0/b]，默认 1: " choice
+        case "${choice:-1}" in
+            1|01)
+                printf '%s' 'v6_up_v4_down'
+                return 0
+                ;;
+            2|02)
+                printf '%s' 'v4_up_v6_down'
+                return 0
+                ;;
+            0|00)
+                printf '%s' '__BACK__'
+                return 0
+                ;;
+            b|B)
+                printf '%s' '__MAIN__'
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2
+                ;;
+        esac
+    done
 }
 
-tmux_session_exists() {
-  tmux has-session \
-    -t "$TMUX_SESSION" \
-    2>/dev/null
+function get_xhttp_split_direction_desc() {
+    case "$1" in
+        v6_up_v4_down) printf '%s' 'v6 去 / v4 回' ;;
+        v4_up_v6_down) printf '%s' 'v4 去 / v6 回' ;;
+        *) printf '%s' 'v6 去 / v4 回' ;;
+    esac
 }
 
-legacy_tmux_session_exists() {
-  [[ "$LEGACY_TMUX_SESSION" != "$TMUX_SESSION" ]] || return 1
-  tmux has-session \
-    -t "$LEGACY_TMUX_SESSION" \
-    2>/dev/null
+function get_xhttp_split_direction_share_name() {
+    case "$1" in
+        v6_up_v4_down) printf '%s' 'v6去v4回' ;;
+        v4_up_v6_down) printf '%s' 'v4去v6回' ;;
+        *) printf '%s' 'v6去v4回' ;;
+    esac
 }
 
-tmux_session_has_runner() {
-  local session="$1"
-  local runner="$2"
-
-  tmux has-session -t "$session" 2>/dev/null || return 1
-  tmux list-panes \
-    -t "$session" \
-    -F '#{pane_start_command}' \
-    2>/dev/null \
-    | grep -Fq "$runner"
+function generate_xhttp_path() {
+    local rand_left=""
+    local rand_right=""
+    rand_left=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 5)
+    rand_right=$(LC_ALL=C tr -dc 'a-z0-9' </dev/urandom 2>/dev/null | head -c 5)
+    [[ -n "$rand_left" ]] || rand_left=$(openssl rand -hex 3 2>/dev/null | cut -c1-5 || true)
+    [[ -n "$rand_right" ]] || rand_right=$(openssl rand -hex 3 2>/dev/null | cut -c1-5 || true)
+    [[ -n "$rand_left" ]] || rand_left="$(date +%s | tail -c 6)"
+    [[ -n "$rand_right" ]] || rand_right="$(date +%N | tail -c 6)"
+    printf '/%s_%s' "$rand_left" "$rand_right"
 }
 
-active_tunnel_session() {
-  if tmux_session_has_runner "$TMUX_SESSION" "$CLOUDFLARED_RUNNER"; then
-    printf '%s\n' "$TMUX_SESSION"
-    return 0
-  fi
-
-  if tmux_session_has_runner "$LEGACY_TMUX_SESSION" "$CLOUDFLARED_RUNNER"; then
-    printf '%s\n' "$LEGACY_TMUX_SESSION"
-    return 0
-  fi
-
-  return 1
-}
-
-tunnel_is_running() {
-  active_tunnel_session >/dev/null
-}
-
-read_cloudflared_pid() {
-  local pid=""
-  local recorded_start=""
-  local extra=""
-
-  [[ -r "$CLOUDFLARED_PID_FILE" && ! -L "$CLOUDFLARED_PID_FILE" ]] || return 1
-  IFS=' ' read -r pid recorded_start extra < "$CLOUDFLARED_PID_FILE" || return 1
-  [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ && -z "$extra" ]] || return 1
-  printf '%s %s\n' "$pid" "$recorded_start"
-}
-
-cloudflared_identity_matches() {
-  local pid="$1"
-  local recorded_start="$2"
-  local actual_start=""
-  local state=""
-  local cmdline=""
-  local uid=""
-  local expected_uid=""
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  state="$(process_state "$pid" 2>/dev/null || true)"
-  [[ "$actual_start" == "$recorded_start" && "$state" != "Z" && "$state" != "X" ]] || return 1
-
-  expected_uid="$(id -u "$SERVICE_USER" 2>/dev/null || true)"
-  uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
-  [[ -n "$expected_uid" && "$uid" == "$expected_uid" ]] || return 1
-
-  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
-  [[ "$cmdline" == *"${CLOUDFLARED_BIN}"* \
-    && "$cmdline" == *"tunnel"* \
-    && "$cmdline" == *"127.0.0.1:${LOCAL_PORT}"* ]]
-}
-
-cloudflared_pid_is_ours() {
-  local pid=""
-  local recorded_start=""
-
-  IFS=' ' read -r pid recorded_start < <(read_cloudflared_pid) || return 1
-  cloudflared_identity_matches "$pid" "$recorded_start"
-}
-
-singbox_runtime_is_running() {
-  [[ -n "$CLOUDFLARED_BIN" ]] || resolve_cloudflared_bin
-  [[ -n "$CLOUDFLARED_BIN" ]] || return 1
-
-  service_is_active \
-    && listener_exact_loopback \
-    && tunnel_is_running \
-    && cloudflared_pid_is_ours
-}
-
-signal_cloudflared_verified() {
-  local signal_name="$1"
-  local pid="$2"
-  local recorded_start="$3"
-
-  cloudflared_identity_matches "$pid" "$recorded_start" || return 1
-  kill "-${signal_name}" "$pid" 2>/dev/null || return 1
-}
-
-extract_argo_host() {
-  [[ -f "$LOG_FILE" ]] || return 1
-
-  grep -Eo \
-    'https://[a-z0-9-]+\.trycloudflare\.com' \
-    "$LOG_FILE" \
-    2>/dev/null \
-    | tail -n 1 \
-    | sed 's#^https://##'
-}
-
-wait_for_argo_host() {
-  local i=0
-  local host=""
-
-  for ((i = 1; i <= 90; i++)); do
-    host="$(
-      extract_argo_host \
-        || true
-    )"
-
-    if valid_argo_host "$host" \
-        && [[ -n "$host" ]]; then
-      ARGO_HOST="$host"
-      save_state
-      return 0
-    fi
-
-    if ! tunnel_is_running \
-        && ! cloudflared_pid_is_ours; then
-      break
-    fi
-
-    sleep 1
-  done
-
-  return 1
-}
-
-generate_vmess_link() {
-  valid_uuid "$UUID" || die "UUID 无效，无法生成分享链接。"
-  valid_ws_path "$WSPATH" || die "WS 路径无效，无法生成分享链接。"
-  valid_argo_host "$ARGO_HOST" || die "临时 Argo 域名无效。"
-  [[ -n "$ARGO_HOST" ]] || die "临时 Argo 域名为空。"
-  valid_preferred_endpoint "$PREFERRED_ENDPOINT" || die "优选域名/IP 无效。"
-  valid_node_name "$NODE_NAME" || die "订阅节点名称无效。"
-
-  local tmp_json=""
-  local tmp_link=""
-  local encoded=""
-
-  tmp_json="$(mktemp "${DATA_DIR}/.vmess.json.XXXXXX")"
-  tmp_link="$(mktemp "${DATA_DIR}/.vmess.txt.XXXXXX")"
-
-  jq -c -n \
-    --arg ps "$NODE_NAME" \
-    --arg add "$PREFERRED_ENDPOINT" \
-    --arg id "$UUID" \
-    --arg host "$ARGO_HOST" \
-    --arg path "$WSPATH" \
-    --arg ech "$ECH_CONFIG" \
-    '{
-      v: "2",
-      ps: $ps,
-      add: $add,
-      port: "443",
-      id: $id,
-      aid: "0",
-      scy: "auto",
-      net: "ws",
-      type: "none",
-      host: $host,
-      path: $path,
-      tls: "tls",
-      sni: $host,
-      alpn: "http/1.1",
-      fp: "firefox",
-      insecure: "0",
-      vcn: $host,
-      pcs: "",
-      ech: $ech,
-      echConfigList: $ech
-    }' > "$tmp_json"
-
-  encoded="$(base64 < "$tmp_json" | tr -d '\r\n')"
-  printf 'vmess://%s\n' "$encoded" > "$tmp_link"
-
-  if ! base64 -d < <(sed 's#^vmess://##' "$tmp_link") 2>/dev/null \
-      | jq -e \
-        --arg ps "$NODE_NAME" \
-        --arg add "$PREFERRED_ENDPOINT" \
-        --arg host "$ARGO_HOST" \
-        --arg ech "$ECH_CONFIG" \
-        '
-          .ps == $ps
-          and .add == $add
-          and .host == $host
-          and .sni == $host
-          and .vcn == $host
-          and .pcs == ""
-          and .ech == $ech
-          and .echConfigList == $ech
-        ' >/dev/null; then
-    rm -f "$tmp_json" "$tmp_link"
-    die "生成的 VMess 链接自检失败，未写入磁盘。"
-  fi
-
-  chmod 600 "$tmp_json" "$tmp_link"
-  mv -f "$tmp_json" "$VMESS_JSON_FILE"
-  mv -f "$tmp_link" "$VMESS_LINK_FILE"
-  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
-  chmod 600 "$ECH_NOTE_FILE"
-}
-
-stop_tunnel() {
-  local stopped=0
-  local pid=""
-  local recorded_start=""
-  local i=0
-
-  resolve_cloudflared_bin
-
-  local session=""
-
-  if session="$(active_tunnel_session 2>/dev/null)"; then
-    tmux kill-session -t "$session" 2>/dev/null || true
-    stopped=1
-  elif tmux_session_exists; then
-    warn "发现同名 sing-box tmux 会话，但它不是本脚本创建的；不会将其删除。"
-  fi
-
-  sleep 1
-
-  if IFS=' ' read -r pid recorded_start < <(read_cloudflared_pid 2>/dev/null); then
-    if cloudflared_identity_matches "$pid" "$recorded_start"; then
-      signal_cloudflared_verified TERM "$pid" "$recorded_start" || true
-
-      for ((i = 0; i < 8; i++)); do
-        cloudflared_identity_matches "$pid" "$recorded_start" || break
-        sleep 1
-      done
-
-      if cloudflared_identity_matches "$pid" "$recorded_start"; then
-        signal_cloudflared_verified KILL "$pid" "$recorded_start" || true
-        sleep 1
-      fi
-
-      if cloudflared_identity_matches "$pid" "$recorded_start"; then
-        warn "cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
-        return 1
-      fi
-
-      stopped=1
-    fi
-  fi
-
-  rm -f "$CLOUDFLARED_PID_FILE"
-
-  if [[ $stopped -eq 1 ]]; then
-    ok "临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
-  else
-    info "没有发现正在运行的 zdd-argo 临时隧道。"
-  fi
-}
-
-command_stop_singbox_tunnel() {
-  warn "$(printf '%s' "此操作仅断开 sing-box 临时 Argo 隧道，并清理旧域名、订阅、日志与 cloudflared 临时缓存。")"
-  warn "$(printf '%s' "sing-box 服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留；Xray 不受影响。")"
-
-  if ! confirm_yes "$(printf '%s' "确认断开 sing-box 临时 Argo 请输入 yes：")"; then
-    info "$(printf '%s' "已取消。")"
-    return 0
-  fi
-
-  stop_tunnel || die "无法安全停止 sing-box 临时 Argo。"
-  clear_singbox_tunnel_artifacts
-
-  ok "$(printf '%s' "sing-box 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
-  info "$(printf '%s' "以后选择自动生成或自定义生成里的 sing-box 可重新创建隧道。")"
-}
-
-command_stop_xray_tunnel() {
-  warn "$(printf '%s' "此操作仅断开 Xray 临时 Argo 隧道，并清理旧域名、订阅、日志与 cloudflared 临时缓存。")"
-  warn "$(printf '%s' "Xray 服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留；sing-box 不受影响。")"
-
-  if ! confirm_yes "$(printf '%s' "确认断开 Xray 临时 Argo 请输入 yes：")"; then
-    info "$(printf '%s' "已取消。")"
-    return 0
-  fi
-
-  stop_xray_tunnel || die "无法安全停止 Xray 临时 Argo。"
-  clear_xray_tunnel_artifacts
-
-  ok "$(printf '%s' "Xray 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
-  info "$(printf '%s' "以后选择自动生成或自定义生成里的 Xray 可重新创建隧道。")"
-}
-
-clear_singbox_tunnel_artifacts() {
-  if [[ -f "$STATE_JSON" ]]; then
-    load_state
-    ARGO_HOST=""
-    save_state
-  fi
-
-  rm -f     "$CLOUDFLARED_PID_FILE"     "$LOG_FILE"     "$VMESS_JSON_FILE"     "$VMESS_LINK_FILE"     "$ECH_NOTE_FILE"
-
-  rm -rf "$CLOUDFLARED_HOME"
-}
-
-clear_xray_tunnel_artifacts() {
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    load_xray_state
-    XRAY_ARGO_HOST=""
-    save_xray_state
-  fi
-
-  rm -f     "$XRAY_CLOUDFLARED_PID_FILE"     "$XRAY_LOG_FILE"     "$XRAY_VLESS_JSON_FILE"     "$XRAY_VLESS_LINK_FILE"
-
-  rm -rf "$XRAY_CLOUDFLARED_HOME"
-}
-
-command_stop_clear_cache() {
-  warn "$(printf '%s' "此操作会断开 sing-box 与 Xray 两个临时 Argo 隧道，并清理旧域名、订阅、日志及 cloudflared 临时缓存。")"
-  warn "$(printf '%s' "两个核心服务、配置、UUID、WS 路径、优选地址和已安装程序都会保留。")"
-
-  if ! confirm_yes "$(printf '%s' "确认全部断开并清理请输入 yes：")"; then
-    info "$(printf '%s' "已取消。")"
-    return 0
-  fi
-
-  stop_tunnel || die "无法安全停止 sing-box 临时 Argo。"
-  stop_xray_tunnel || die "无法安全停止 Xray 临时 Argo。"
-  clear_singbox_tunnel_artifacts
-  clear_xray_tunnel_artifacts
-
-  ok "$(printf '%s' "sing-box 与 Xray 临时 Argo 已断开，旧订阅和临时缓存已清理。")"
-  info "$(printf '%s' "以后选择自动生成或自定义生成可重新创建隧道；当前设置会保留。")"
-}
-
-start_tunnel() {
-  local parsed_host=""
-  local attempt=0
-  local max_attempts=3
-  local retry_delay=5
-
-  if tmux_session_exists \
-      && ! tunnel_is_running; then
-
-    die "$(printf '%s' "已存在同名 tmux 会话 ${TMUX_SESSION}，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。")"
-  fi
-
-  if tunnel_is_running; then
-    parsed_host="$(
-      extract_argo_host \
-        || true
-    )"
-
-    if [[ -n "$parsed_host" ]] \
-        && valid_argo_host "$parsed_host"; then
-      ARGO_HOST="$parsed_host"
-      save_state
-      generate_vmess_link
-
-      info "$(printf '%s' "现有临时隧道运行正常，未重复创建。")"
-
-      return 0
-    fi
-
-    warn "$(printf '%s' "检测到 tmux 会话，但尚未取得有效临时域名，继续等待……")"
-
-    if wait_for_argo_host; then
-      generate_vmess_link
-      return 0
-    fi
-
-    warn "$(printf '%s' "现有临时隧道未返回有效域名，将停止异常会话并重新创建。")"
-
-    stop_tunnel || true
-  fi
-
-  : > "$LOG_FILE"
-  chmod 600 "$LOG_FILE"
-
-  rm -f \
-    "$CLOUDFLARED_PID_FILE" \
-    "$VMESS_JSON_FILE" \
-    "$VMESS_LINK_FILE" \
-    "$ECH_NOTE_FILE"
-
-  ARGO_HOST=""
-  save_state
-
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    if ((attempt > 1)); then
-      printf '\n===== Argo 重试 %d/%d =====\n' \
-        "$attempt" \
-        "$max_attempts" \
-        >> "$LOG_FILE"
-    fi
-
-    info "$(printf '%s' "正在创建临时 Argo（第 ${attempt}/${max_attempts} 次）……")"
-
-    if tmux new-session \
-        -d \
-        -s "$TMUX_SESSION" \
-        "$CLOUDFLARED_RUNNER"; then
-
-      if wait_for_argo_host; then
-        generate_vmess_link
-
-        ok "$(printf '%s' "第 ${attempt}/${max_attempts} 次尝试成功取得临时域名。")"
-
+function read_manual_xhttp_path() {
+    local prompt="$1"
+    local value
+    while true; do
+        read_input -r -p "$prompt" value
+        value=$(printf '%s' "$value" | tr -d '[:space:]')
+        [[ -n "$value" ]] || {
+            echo -e "${RED}  path 不能为空。${NC}" >&2
+            continue
+        }
+        [[ "$value" == /* ]] || value="/${value}"
+        if [[ "$value" == *'"'* || "$value" == *"'"* ]]; then
+            echo -e "${RED}  path 不能包含引号。${NC}" >&2
+            continue
+        fi
+        printf '%s' "$value"
         return 0
-      fi
-    else
-      warn "$(printf '%s' "第 ${attempt}/${max_attempts} 次无法创建 tmux 会话。")"
-    fi
-
-    warn "$(printf '%s' "第 ${attempt}/${max_attempts} 次未取得 trycloudflare.com 域名。")"
-
-    stop_tunnel || true
-
-    if ((attempt < max_attempts)); then
-      warn "$(printf '%s' "${retry_delay} 秒后自动重试……")"
-
-      sleep "$retry_delay"
-    fi
-  done
-
-  warn "$(printf '%s' "连续 ${max_attempts} 次创建临时 Argo 均失败，最近日志如下：")"
-
-  tail -n 80 \
-    "$LOG_FILE" \
-    >&2 \
-    || true
-
-  die "$(printf '%s' "临时隧道创建失败，请稍后重试。")"
+    done
 }
 
-deployment_transaction_exit_handler() {
-  local rc="${1:-1}"
+function build_xhttp_client_patch_json() {
+    local address="$1"
+    local port="$2"
+    local security="$3"
+    local server_name="$4"
+    local fingerprint="$5"
+    local public_key="$6"
+    local short_id="$7"
+    local path="$8"
 
-  if [[ $TRANSACTION_ACTIVE -eq 1 ]]; then
-    if [[ "$rc" -eq 0 ]]; then
-      deployment_transaction_rollback "部署流程未正常提交"
-    else
-      deployment_transaction_rollback "部署失败，正在恢复修改前状态"
-    fi
-  fi
-
-  release_lock
+    if [[ "$security" == "reality" ]]; then
+        cat <<EOF
+{
+"downloadSettings": {
+"address": "$(json_escape "$address")",
+"port": ${port},
+"network": "xhttp",
+"security": "reality",
+"realitySettings": {
+"serverName": "$(json_escape "$server_name")",
+"fingerprint": "$(json_escape "$fingerprint")",
+"publicKey": "$(json_escape "$public_key")",
+"shortId": "$(json_escape "$short_id")",
+"spiderX": "/"
+},
+"xhttpSettings": {
+"path": "$(json_escape "$path")"
 }
-
-transaction_dir_is_safe() {
-  local dir="$1"
-  local uid=""
-  local mode=""
-
-  [[ "$dir" == /tmp/zdd-argo-transaction.* \
-    && -d "$dir" \
-    && ! -L "$dir" ]] \
-    || return 1
-
-  uid="$(stat -Lc '%u' "$dir" 2>/dev/null || true)"
-  mode="$(stat -Lc '%a' "$dir" 2>/dev/null || true)"
-  [[ "$uid" == "0" && "$mode" == "700" ]]
 }
-
-cleanup_transaction_dir() {
-  local dir="${1:-}"
-
-  [[ -n "$dir" ]] || return 0
-  transaction_dir_is_safe "$dir" || return 1
-  rm -rf -- "$dir"
 }
-
-
-
-xray_service_is_active() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl is-active --quiet "$XRAY_SERVICE_NAME" 2>/dev/null
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" status >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_enable() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl enable "$XRAY_SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-update add "$XRAY_SERVICE_NAME" default >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_restart() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl restart "$XRAY_SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" restart \
-        || rc-service "$XRAY_SERVICE_NAME" start
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_stop() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl stop "$XRAY_SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" stop >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_disable_now() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl disable --now "$XRAY_SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" stop >/dev/null 2>&1 || true
-      rc-update del "$XRAY_SERVICE_NAME" default >/dev/null 2>&1 || true
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_enable_now() {
-  xray_service_enable || return 1
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl start "$XRAY_SERVICE_NAME" >/dev/null 2>&1
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" start >/dev/null 2>&1
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_service_reset_failed() {
-  case "$INIT_SYSTEM" in
-    systemd)
-      systemctl reset-failed "$XRAY_SERVICE_NAME" >/dev/null 2>&1 || true
-      ;;
-    openrc)
-      :
-      ;;
-  esac
-}
-
-xray_service_print_logs() {
-  local lines="${1:-80}"
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      journalctl -u "$XRAY_SERVICE_NAME" -n "$lines" --no-pager >&2 || true
-      ;;
-    openrc)
-      rc-service "$XRAY_SERVICE_NAME" status >&2 || true
-      ss -ltnp 2>/dev/null | grep -E "(^|:)${XRAY_LOCAL_PORT}[[:space:]]" >&2 || true
-      if [[ -f "$XRAY_CORE_LOG_FILE" ]]; then
-        tail -n "$lines" "$XRAY_CORE_LOG_FILE" >&2 || true
-      else
-        warn "OpenRC 模式未找到 Xray 日志文件：${XRAY_CORE_LOG_FILE}"
-      fi
-      ;;
-  esac
-}
-
-xray_unit_is_ours() {
-  [[ -f "$XRAY_UNIT" && ! -L "$XRAY_UNIT" ]] || return 1
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      grep -Fqx "Description=zdd-argo dedicated Xray VLESS-ENC WS service managed-v0.1.0" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "User=${SERVICE_USER}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "Group=${SERVICE_GROUP}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    openrc)
-      grep -Fqx 'zdd_argo_xray_managed="0.1.0"' "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command=\"${MANAGED_XRAY_BIN}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_args=\"run -config ${XRAY_CONFIG}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-xray_unit_is_legacy_ours() {
-  [[ -f "$XRAY_UNIT" && ! -L "$XRAY_UNIT" ]] || return 1
-
-  case "$INIT_SYSTEM" in
-    systemd)
-      grep -Fq "zdd-argo" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "User=${SERVICE_USER}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "Group=${SERVICE_GROUP}" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    openrc)
-      grep -Fq "zdd-argo" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command=\"${MANAGED_XRAY_BIN}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_args=\"run -config ${XRAY_CONFIG}\"" "$XRAY_UNIT" 2>/dev/null \
-        && grep -Fqx "command_user=\"${SERVICE_USER}:${SERVICE_GROUP}\"" "$XRAY_UNIT" 2>/dev/null
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-write_xray_service() {
-  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray 可执行文件。"
-  [[ "$XRAY_BIN" == "$MANAGED_XRAY_BIN" ]] \
-    || die "当前 Xray 不是脚本专用二进制，拒绝写入受管服务。"
-  ensure_service_account
-
-  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    xray_unit_is_ours || xray_unit_is_legacy_ours \
-      || die "Xray 服务路径已被其他程序占用：${XRAY_UNIT}"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp)"
-
-  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    cat > "$tmp" <<EOF
-[Unit]
-Description=zdd-argo dedicated Xray VLESS-ENC WS service managed-v0.1.0
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=${SERVICE_USER}
-Group=${SERVICE_GROUP}
-ExecStart=${MANAGED_XRAY_BIN} run -config ${XRAY_CONFIG}
-Restart=on-failure
-RestartSec=3s
-LimitNOFILE=1048576
-NoNewPrivileges=true
-UMask=0077
-CapabilityBoundingSet=
-AmbientCapabilities=
-PrivateTmp=true
-PrivateDevices=true
-ProtectHome=true
-ProtectSystem=strict
-ProtectKernelTunables=true
-ProtectKernelModules=true
-ProtectKernelLogs=true
-ProtectControlGroups=true
-LockPersonality=true
-RestrictSUIDSGID=true
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
-SystemCallArchitectures=native
-
-[Install]
-WantedBy=multi-user.target
 EOF
-    install -m 0644 "$tmp" "$XRAY_UNIT"
-  elif [[ "$INIT_SYSTEM" == "openrc" ]]; then
-    printf '%s\n' '#!/sbin/openrc-run' > "$tmp"
-    cat >> "$tmp" <<EOF
-zdd_argo_xray_managed="0.1.0"
-name="zdd-argo 专用 Xray VLESS-ENC WS 服务"
-description="zdd-argo dedicated Xray VLESS-ENC WS service"
-command="${MANAGED_XRAY_BIN}"
-command_args="run -config ${XRAY_CONFIG}"
-command_user="${SERVICE_USER}:${SERVICE_GROUP}"
-pidfile="/run/${XRAY_SERVICE_NAME}.pid"
-supervisor="supervise-daemon"
-respawn_delay=3
-respawn_max=0
-output_log="${XRAY_CORE_LOG_FILE}"
-error_log="${XRAY_CORE_LOG_FILE}"
+    else
+        cat <<EOF
+{
+"downloadSettings": {
+"address": "$(json_escape "$address")",
+"port": ${port},
+"network": "xhttp",
+"xhttpSettings": {
+"path": "$(json_escape "$path")"
+}
+}
+}
+EOF
+    fi
+}
+
+function write_xhttp_client_patch_file() {
+    local file_path="$1"
+    local address="$2"
+    local port="$3"
+    local security="$4"
+    local server_name="$5"
+    local fingerprint="$6"
+    local public_key="$7"
+    local short_id="$8"
+    local path="$9"
+    local patch_dir=""
+    local patch_json=""
+
+    patch_json=$(build_xhttp_client_patch_json "$address" "$port" "$security" "$server_name" "$fingerprint" "$public_key" "$short_id" "$path") || return 1
+    if ! printf '%s\n' "$patch_json" | jq -e . >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ XHTTP 客户端补丁 JSON 生成失败，拒绝写入。${NC}"
+        return 1
+    fi
+
+    patch_dir=$(dirname -- "$file_path")
+    mkdir -p -- "$patch_dir" || {
+        echo -e "${RED}  ✗ 无法创建 XHTTP 补丁目录：${patch_dir}${NC}"
+        return 1
+    }
+    if ! (umask 077; printf '%s\n' "$patch_json" > "$file_path"); then
+        echo -e "${RED}  ✗ 无法写入 XHTTP 客户端补丁：${file_path}${NC}"
+        rm -f -- "$file_path" >/dev/null 2>&1 || true
+        return 1
+    fi
+    return 0
+}
+
+function compact_json_inline() {
+    local json_text="$1"
+    if command -v jq >/dev/null 2>&1; then
+        printf '%s' "$json_text" | jq -c . 2>/dev/null || printf '%s' "$json_text" | tr -d '\n'
+    else
+        printf '%s' "$json_text" | tr -d '\n'
+    fi
+}
+
+function build_xhttp_reality_full_link() {
+    local uuid="$1"
+    local up_host_uri="$2"
+    local up_port="$3"
+    local down_address="$4"
+    local down_port="$5"
+    local server_name="$6"
+    local fingerprint="$7"
+    local public_key="$8"
+    local short_id="$9"
+    local path="${10}"
+    local share_name="${11}"
+    local extra_json=""
+    local extra_compact=""
+    local extra_uri=""
+
+    extra_json=$(build_xhttp_client_patch_json "$down_address" "$down_port" "reality" "$server_name" "$fingerprint" "$public_key" "$short_id" "$path") || return 1
+    extra_compact=$(compact_json_inline "$extra_json")
+    extra_uri=$(url_encode "$extra_compact")
+    printf 'vless://%s@%s:%s?encryption=none&security=reality&sni=%s&fp=%s&pbk=%s&sid=%s&spx=%%2F&type=xhttp&path=%s&mode=auto&extra=%s#%s'         "$uuid" "$up_host_uri" "$up_port" "$server_name" "$fingerprint" "$public_key" "$short_id" "$(url_encode "$path")" "$extra_uri" "$(url_encode "$share_name")"
+}
+
+function build_xhttp_vlessenc_full_link() {
+    local uuid="$1"
+    local up_host_uri="$2"
+    local up_port="$3"
+    local down_address="$4"
+    local down_port="$5"
+    local enc_value="$6"
+    local path="$7"
+    local share_name="$8"
+    local extra_json=""
+    local extra_compact=""
+    local extra_uri=""
+
+    extra_json=$(build_xhttp_client_patch_json "$down_address" "$down_port" "none" "" "" "" "" "$path") || return 1
+    extra_compact=$(compact_json_inline "$extra_json")
+    extra_uri=$(url_encode "$extra_compact")
+    printf 'vless://%s@%s:%s?encryption=%s&flow=xtls-rprx-vision&security=none&type=xhttp&path=%s&mode=auto&extra=%s#%s'         "$uuid" "$up_host_uri" "$up_port" "$(url_encode "$enc_value")" "$(url_encode "$path")" "$extra_uri" "$(url_encode "$share_name")"
+}
+
+function build_reality_gate_inbound_json() {
+    local dest="$1"
+    cat <<EOF
+    {
+      "tag": "reality-target-gate",
+      "listen": "127.0.0.1",
+      "port": ${REALITY_GATE_PORT},
+      "protocol": "dokodemo-door",
+      "settings": {
+        "address": "$(json_escape "$dest")",
+        "port": 443,
+        "network": "tcp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["tls"],
+        "routeOnly": true
+      }
+    },
+EOF
+}
+
+function build_reality_gate_rules_json() {
+    local dest="$1"
+    cat <<EOF
+      {
+        "type": "field",
+        "inboundTag": ["reality-target-gate"],
+        "domain": ["full:$(json_escape "$dest")"],
+        "network": "tcp",
+        "outboundTag": "direct"
+      },
+      {
+        "type": "field",
+        "inboundTag": ["reality-target-gate"],
+        "network": "tcp",
+        "outboundTag": "blocked"
+      },
+EOF
+}
+
+function precheck_reality_port_before_apply() {
+    local scenario="$1"
+    local port="$2"
+
+    if [[ "$port" == "$REALITY_GATE_PORT" ]]; then
+        echo -e "${RED}  端口 ${port} 已保留给 Reality 防偷 gate，不能作为对外监听端口。${NC}"
+        return 1
+    fi
+
+    case "$scenario" in
+        1|4|7)
+            precheck_reusable_xray_port_before_apply "$REALITY_GATE_PORT" "Reality fallback gate" || return 1
+            echo -e "${YELLOW}  端口预检...${NC}"
+
+            if ! is_port_in_use "$port"; then
+                echo -e "${GREEN}  ✓ Reality 目标端口 ${port} 当前空闲${NC}"
+                return 0
+            fi
+
+            if is_port_in_use_by_xray "$port"; then
+                echo -e "${GREEN}  ✓ Reality 目标端口 ${port} 由当前 Xray 占用，将在最终重启时原位复用${NC}"
+                return 0
+            fi
+
+            echo -e "${RED}  端口 ${port} 已被非 xray 进程占用，安装已中止。${NC}"
+            print_port_listener_details "$port"
+            show_reality_alternate_port_hint "$port"
+            echo -e "${YELLOW}  请先执行：ss -ltnup | grep :${port}${NC}"
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+function precheck_reusable_xray_port_before_apply() {
+    local port="$1"
+    local label="$2"
+
+    [[ -n "$port" ]] || return 0
+
+    echo -e "${YELLOW}  端口预检...${NC}"
+
+    if ! is_port_in_use "$port"; then
+        echo -e "${GREEN}  ✓ ${label} 目标端口 ${port} 当前空闲${NC}"
+        return 0
+    fi
+
+    if is_port_in_use_by_xray "$port"; then
+        echo -e "${GREEN}  ✓ ${label} 目标端口 ${port} 由当前 Xray 占用，将在最终重启时原位复用${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}  端口 ${port} 已被非 xray 进程占用，安装已中止。${NC}"
+    print_port_listener_details "$port"
+    echo -e "${YELLOW}  请先执行：ss -ltnup | grep :${port}${NC}"
+    return 1
+}
+
+
+function install_alpine_base_deps() {
+    echo -e "${YELLOW}  安装 Alpine 基础依赖...${NC}"
+    apk update || return 1
+    apk add curl wget jq openssl coreutils procps ca-certificates iproute2 || return 1
+}
+
+function get_alpine_xray_enc_port_from_config() {
+    if [[ -f "$CONFIG_FILE" ]]; then
+        if command -v jq >/dev/null 2>&1; then
+            jq -r '.inbounds[]? | select(.tag=="in-enc") | .port' "$CONFIG_FILE" 2>/dev/null | head -n 1
+        else
+            awk -F: '/"tag"[[:space:]]*:[[:space:]]*"in-enc"/ {found=1} found && /"port"/ {gsub(/[^0-9]/, "", $2); print $2; exit}' "$CONFIG_FILE" 2>/dev/null || true
+        fi
+    fi
+}
+
+function validate_alpine_openrc_service_script() {
+    local service_file="$1"
+    local service_label="$2"
+    local first_line=""
+
+    if [[ ! -f "$service_file" ]]; then
+        echo -e "${RED}  ✗ 未找到 ${service_label} OpenRC 服务文件：${service_file}${NC}"
+        return 1
+    fi
+
+    if [[ ! -x "$service_file" ]]; then
+        echo -e "${RED}  ✗ ${service_label} OpenRC 服务文件不可执行：${service_file}${NC}"
+        return 1
+    fi
+
+    first_line=$(head -n 1 "$service_file" 2>/dev/null || true)
+    if [[ "$first_line" != "#!/sbin/openrc-run" ]]; then
+        echo -e "${RED}  ✗ ${service_label} OpenRC 服务文件首行无效，必须是 #!/sbin/openrc-run：${service_file}${NC}"
+        return 1
+    fi
+
+    return 0
+}
+
+function write_alpine_xray_openrc_service() {
+    backup_file_if_exists "$ALPINE_XRAY_SERVICE_FILE" || return 1
+    cat > "$ALPINE_XRAY_SERVICE_FILE" <<'SERVICE_EOF' || return 1
+#!/sbin/openrc-run
+
+name="xray"
+description="Xray Service"
+
+command="/usr/local/bin/xray"
+command_args="run -config /usr/local/etc/xray/config.json"
+command_background="yes"
+pidfile="/run/${RC_SVCNAME}.pid"
 
 depend() {
-  use net
+    need net
+}
+SERVICE_EOF
+    chmod +x "$ALPINE_XRAY_SERVICE_FILE" >/dev/null 2>&1 || return 1
+    validate_alpine_openrc_service_script "$ALPINE_XRAY_SERVICE_FILE" "Xray"
 }
 
-start_pre() {
-  checkpath -d -m 0750 -o root:${SERVICE_GROUP} "${DATA_DIR}"
-  checkpath -f -m 0640 -o root:${SERVICE_GROUP} "${XRAY_CONFIG}"
-  checkpath -f -m 0640 -o ${SERVICE_USER}:${SERVICE_GROUP} "${XRAY_CORE_LOG_FILE}"
-}
-EOF
-    install -m 0755 "$tmp" "$XRAY_UNIT"
-  else
-    rm -f "$tmp"
-    die "无法识别服务管理器，不能写入 Xray 服务文件。"
-  fi
-
-  rm -f "$tmp"
-  service_daemon_reload
-}
-
-valid_xray_ws_path() {
-  [[ "$1" =~ ^/?[A-Za-z0-9._~-]+$ ]]
-}
-
-valid_xray_vlessenc_value() {
-  [[ "$1" =~ ^mlkem768x25519plus\.(native|xorpub|random)\.(0rtt|1rtt|[0-9]+s|[0-9]+-[0-9]+s)(\.[A-Za-z0-9_-]+)+$ ]]
+function choose_alpine_vlessenc_scenario() {
+    local choice
+    while true; do
+        line >&2
+        echo -e "${CYAN}${BOLD}  第三层：选择 Alpine Vless-Enc 模板${NC}" >&2
+        line >&2
+        echo -e "  ${CYAN}1.${NC} 单 Vless-Enc 直出" >&2
+        echo -e "  ${CYAN}2.${NC} Vless-Enc 入站 + VLESS 出站" >&2
+        echo -e "  ${CYAN}0.${NC} 返回上一步" >&2
+        echo -e "  ${CYAN}b.${NC} 返回主菜单" >&2
+        line >&2
+        read_input -r -p "选择 [1/2/0/b]: " choice
+        case "$choice" in
+            1|01) printf '%s' '3'; return 0 ;;
+            2|02) printf '%s' '6'; return 0 ;;
+            0|00) printf '%s' '__BACK__'; return 0 ;;
+            b|B) printf '%s' '__MAIN__'; return 0 ;;
+            *) echo -e "${RED}  请输入 1、2、0 或 b。${NC}" >&2 ;;
+        esac
+    done
 }
 
-load_xray_state() {
-  XRAY_UUID=""
-  XRAY_WS_PATH=""
-  XRAY_ARGO_HOST=""
-  XRAY_CREATED_AT=""
-  XRAY_VLESS_ENCRYPTION=""
-  XRAY_VLESS_DECRYPTION=""
-  XRAY_KEY_PRIVATE=""
-  XRAY_KEY_PUBLIC=""
-  XRAY_PREFERRED_ENDPOINT="${XRAY_PREFERRED_ENDPOINT:-$DEFAULT_XRAY_PREFERRED_ENDPOINT}"
-  XRAY_LOCAL_PORT="${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}"
-  XRAY_NODE_NAME="${XRAY_NODE_NAME:-$DEFAULT_XRAY_NODE_NAME}"
+function restart_alpine_xray_service() {
+    line
+    echo -e "${YELLOW}  重启 Alpine Xray（Vless-Enc）服务...${NC}"
+    ensure_alpine_supported || return 1
 
-  [[ -f "$XRAY_STATE_JSON" ]] || return 0
-
-  jq -e 'type == "object"' "$XRAY_STATE_JSON" >/dev/null 2>&1 \
-    || die "Xray 状态文件损坏：${XRAY_STATE_JSON}"
-
-  XRAY_UUID="$(jq -r '.uuid // ""' "$XRAY_STATE_JSON")"
-  XRAY_WS_PATH="$(jq -r '.ws_path // .xhttp_path // ""' "$XRAY_STATE_JSON")"
-  XRAY_ARGO_HOST="$(jq -r '.argo_host // ""' "$XRAY_STATE_JSON")"
-  XRAY_CREATED_AT="$(jq -r '.created_at // ""' "$XRAY_STATE_JSON")"
-  XRAY_VLESS_ENCRYPTION="$(jq -r '.vless_encryption // ""' "$XRAY_STATE_JSON")"
-  XRAY_VLESS_DECRYPTION="$(jq -r '.vless_decryption // ""' "$XRAY_STATE_JSON")"
-  XRAY_KEY_PRIVATE="$(jq -r '.x25519_private_key // ""' "$XRAY_STATE_JSON")"
-  XRAY_KEY_PUBLIC="$(jq -r '.x25519_public_key // ""' "$XRAY_STATE_JSON")"
-  XRAY_LOCAL_PORT="$(jq -r '.local_port // "'"$DEFAULT_XRAY_LOCAL_PORT"'"' "$XRAY_STATE_JSON")"
-  XRAY_NODE_NAME="$(jq -r '.node_name // "'"$DEFAULT_XRAY_NODE_NAME"'"' "$XRAY_STATE_JSON")"
-  XRAY_PREFERRED_ENDPOINT="$(jq -r '.preferred_endpoint // "'"$XRAY_PREFERRED_ENDPOINT"'"' "$XRAY_STATE_JSON")"
-  XRAY_PREFERRED_ENDPOINT="$(normalize_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT")"
-
-  [[ -z "$XRAY_UUID" ]] || valid_uuid "$XRAY_UUID" || die "Xray 状态文件中的 UUID 无效：${XRAY_STATE_JSON}"
-  [[ -z "$XRAY_WS_PATH" ]] || valid_xray_ws_path "$XRAY_WS_PATH" || die "Xray 状态文件中的 WS 路径无效：${XRAY_STATE_JSON}"
-  [[ -z "$XRAY_ARGO_HOST" ]] || valid_argo_host "$XRAY_ARGO_HOST" || die "Xray 状态文件中的临时域名无效：${XRAY_STATE_JSON}"
-  [[ -z "$XRAY_VLESS_ENCRYPTION" ]] || valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "Xray 状态文件中的 VLESS-ENC encryption 无效：${XRAY_STATE_JSON}"
-  [[ -z "$XRAY_VLESS_DECRYPTION" ]] || valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "Xray 状态文件中的 VLESS-ENC decryption 无效：${XRAY_STATE_JSON}"
-  valid_local_port "$XRAY_LOCAL_PORT" || die "Xray 状态文件中的本地端口无效：${XRAY_STATE_JSON}"
-  valid_node_name "$XRAY_NODE_NAME" || die "Xray 状态文件中的节点名称无效：${XRAY_STATE_JSON}"
-  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" || die "Xray 状态文件中的优选域名/IP 无效：${XRAY_STATE_JSON}"
-}
-
-save_xray_state() {
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
-  chmod 750 "$DATA_DIR"
-
-  if [[ -z "$XRAY_CREATED_AT" ]]; then
-    XRAY_CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  fi
-
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.xray-state.json.XXXXXX")"
-
-  jq -n \
-    --argjson schema 1 \
-    --arg uuid "$XRAY_UUID" \
-    --arg ws_path "$XRAY_WS_PATH" \
-    --arg argo_host "$XRAY_ARGO_HOST" \
-    --arg vless_encryption "$XRAY_VLESS_ENCRYPTION" \
-    --arg vless_decryption "$XRAY_VLESS_DECRYPTION" \
-    --arg x25519_private_key "$XRAY_KEY_PRIVATE" \
-    --arg x25519_public_key "$XRAY_KEY_PUBLIC" \
-    --arg local_port "$XRAY_LOCAL_PORT" \
-    --arg node_name "$XRAY_NODE_NAME" \
-    --arg preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" \
-    --arg created_at "$XRAY_CREATED_AT" \
-    --arg updated_at "$(date -u +'%Y-%m-%dT%H:%M:%SZ')" \
-    '{
-      schema: $schema,
-      uuid: $uuid,
-      ws_path: $ws_path,
-      argo_host: $argo_host,
-      vless_encryption: $vless_encryption,
-      vless_decryption: $vless_decryption,
-      x25519_private_key: $x25519_private_key,
-      x25519_public_key: $x25519_public_key,
-      local_port: ($local_port | tonumber),
-      node_name: $node_name,
-      preferred_endpoint: $preferred_endpoint,
-      created_at: $created_at,
-      updated_at: $updated_at
-    }' > "$tmp"
-
-  chmod 600 "$tmp"
-  mv -f "$tmp" "$XRAY_STATE_JSON"
-}
-
-parse_xray_key_line() {
-  local label="$1"
-  awk -v label="$label" '''
-    index(tolower($0), tolower(label)) {
-      for (i = NF; i >= 1; i--) {
-        if ($i ~ /^[A-Za-z0-9_-]+$/) {
-          print $i
-          exit
-        }
-      }
-    }
-  '''
-}
-
-extract_xray_vlessenc_values() {
-  local key="$1"
-  awk -v key="$key" '''
-    {
-      marker = "\"" key "\""
-      pos = index($0, marker)
-      if (pos == 0) {
-        next
-      }
-      rest = substr($0, pos + length(marker))
-      if (match(rest, /:[[:space:]]*"mlkem768x25519plus[.](native|xorpub|random)[.][^"]+"/)) {
-        value = substr(rest, RSTART, RLENGTH)
-        sub(/^:[[:space:]]*"/, "", value)
-        sub(/"$/, "", value)
-        print value
-      }
-    }
-  '''
-}
-
-normalize_xray_vlessenc_xorpub() {
-  local value="$1"
-  case "$value" in
-    mlkem768x25519plus.xorpub.*)
-      printf '%s\n' "$value"
-      ;;
-    mlkem768x25519plus.native.*)
-      printf '%s\n' "${value/#mlkem768x25519plus.native./mlkem768x25519plus.xorpub.}"
-      ;;
-    mlkem768x25519plus.random.*)
-      printf '%s\n' "${value/#mlkem768x25519plus.random./mlkem768x25519plus.xorpub.}"
-      ;;
-    *)
-      return 1
-      ;;
-  esac
-}
-
-choose_xray_vlessenc_value() {
-  local value=""
-
-  for value in "$@"; do
-    if [[ "$value" == mlkem768x25519plus.xorpub.* ]]; then
-      printf '%s\n' "$value"
-      return 0
+    if [[ ! -x /usr/local/bin/xray ]]; then
+        echo -e "${RED}  ✗ 未找到 /usr/local/bin/xray${NC}"
+        line
+        return 1
     fi
-  done
 
-  for value in "$@"; do
-    if [[ "$value" == mlkem768x25519plus.native.* || "$value" == mlkem768x25519plus.random.* ]]; then
-      normalize_xray_vlessenc_xorpub "$value"
-      return 0
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${RED}  ✗ 未找到配置文件：${CONFIG_FILE}${NC}"
+        line
+        return 1
     fi
-  done
 
-  return 1
+    if ! /usr/local/bin/xray run -test -config "$CONFIG_FILE"; then
+        echo -e "${RED}  ✗ 当前配置验证失败，已取消重启。${NC}"
+        line
+        return 1
+    fi
+
+    if ! validate_alpine_openrc_service_script "$ALPINE_XRAY_SERVICE_FILE" "Xray"; then
+        echo -e "${YELLOW}  正在重新生成 Xray OpenRC 服务文件...${NC}"
+        write_alpine_xray_openrc_service || { line; return 1; }
+    fi
+
+    rc-update add xray default >/dev/null 2>&1 || true
+    rc-service xray restart >/dev/null 2>&1 || rc-service xray start >/dev/null 2>&1 || {
+        echo -e "${RED}  ✗ Alpine Xray 服务启动失败。${NC}"
+        rc-service xray status || true
+        line
+        return 1
+    }
+
+    local check_attempt=0
+    while [[ $check_attempt -lt 5 ]]; do
+        sleep 2
+        if rc-service xray status >/dev/null 2>&1; then
+            break
+        fi
+        check_attempt=$((check_attempt + 1))
+        echo -e "${YELLOW}  等待服务启动... (${check_attempt}/5)${NC}"
+    done
+
+    if ! rc-service xray status >/dev/null 2>&1; then
+        echo -e "${RED}  Alpine Xray 服务启动失败！${NC}"
+        rc-service xray status || true
+        echo -e "${YELLOW}  可继续手动排查：/usr/local/bin/xray run -config ${CONFIG_FILE}${NC}"
+        line
+        return 1
+    fi
+
+    echo -e "${GREEN}  ✓ Alpine Xray 服务已启动${NC}"
+
+    local listen_port=""
+    listen_port=$(get_alpine_xray_enc_port_from_config)
+    if [[ -n "$listen_port" ]]; then
+        if ss -ltnup 2>/dev/null | grep -q ":${listen_port}\b"; then
+            echo -e "${GREEN}  ✓ 已检测到 ${listen_port} 端口监听${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ 未明确检测到 ${listen_port} 端口监听，请手动检查：ss -ltnup | grep :${listen_port}${NC}"
+        fi
+    fi
+    line
 }
 
-generate_xray_identity() {
-  local enc_output=""
-  local desired_port="${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}"
-  local desired_node="${XRAY_NODE_NAME:-$DEFAULT_XRAY_NODE_NAME}"
-  local desired_endpoint="${XRAY_PREFERRED_ENDPOINT:-$DEFAULT_XRAY_PREFERRED_ENDPOINT}"
-  local -a dec_values=()
-  local -a enc_values=()
+function _update_alpine_xray_service_impl() {
+    line
+    echo -e "${YELLOW}  更新 Alpine Xray（Vless-Enc）...${NC}"
+    ensure_alpine_supported || return 1
+    ensure_alpine_community_repo || { line; return 1; }
+    install_alpine_base_deps || { line; return 1; }
 
-  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray，无法生成 VLESS-ENC 密钥。"
+    echo -e "${YELLOW}  安装 / 更新 Xray 核心程序...${NC}"
+    download_and_run_xray_installer install || {
+        echo -e "${RED}  ✗ Xray 更新失败，请检查网络后重试。${NC}"
+        line
+        return 1
+    }
 
-  XRAY_UUID="$(generate_uuid_v4)" || die "Xray UUID 生成失败。"
-  valid_uuid "$XRAY_UUID" || die "生成的 Xray UUID 未通过格式校验。"
+    if [[ ! -x /usr/local/bin/xray ]]; then
+        echo -e "${RED}  ✗ 更新失败：未找到 /usr/local/bin/xray${NC}"
+        line
+        return 1
+    fi
 
-  enc_output="$($XRAY_BIN vlessenc 2>/dev/null || true)"
-  mapfile -t dec_values < <(printf '%s\n' "$enc_output" | extract_xray_vlessenc_values "decryption")
-  mapfile -t enc_values < <(printf '%s\n' "$enc_output" | extract_xray_vlessenc_values "encryption")
+    echo -e "${GREEN}  ✓ $(/usr/local/bin/xray version | head -1)${NC}"
 
-  XRAY_VLESS_DECRYPTION="$(choose_xray_vlessenc_value "${dec_values[@]}" 2>/dev/null || true)"
-  XRAY_VLESS_ENCRYPTION="$(choose_xray_vlessenc_value "${enc_values[@]}" 2>/dev/null || true)"
-
-  valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "Xray vlessenc 未输出可用的 VLESS-ENC decryption。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "Xray vlessenc 未输出可用的 VLESS-ENC encryption。"
-  [[ "$XRAY_VLESS_DECRYPTION" == mlkem768x25519plus.xorpub.* ]] || die "Xray VLESS-ENC decryption 未转换为 xorpub。"
-  [[ "$XRAY_VLESS_ENCRYPTION" == mlkem768x25519plus.xorpub.* ]] || die "Xray VLESS-ENC encryption 未转换为 xorpub。"
-
-  XRAY_KEY_PRIVATE=""
-  XRAY_KEY_PUBLIC=""
-  XRAY_WS_PATH="/${XRAY_UUID}-vw"
-  XRAY_ARGO_HOST=""
-  XRAY_CREATED_AT="$(date -u +'%Y-%m-%dT%H:%M:%SZ')"
-  XRAY_LOCAL_PORT="$desired_port"
-  XRAY_NODE_NAME="$desired_node"
-  XRAY_PREFERRED_ENDPOINT="$desired_endpoint"
-
-  valid_xray_ws_path "$XRAY_WS_PATH" || die "生成的 WS 路径无效。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "生成的 Xray decryption 无效。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "生成的 Xray encryption 无效。"
-
-  rm -f "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
-  save_xray_state
+    if [[ -f "$CONFIG_FILE" ]]; then
+        write_alpine_xray_openrc_service || { line; return 1; }
+        restart_alpine_xray_service || return 1
+        return 0
+    fi
+    line
 }
-xray_template_direct() {
-  jq -n \
-    --argjson port "$XRAY_LOCAL_PORT" \
-    --arg uuid "$XRAY_UUID" \
-    --arg node "$XRAY_NODE_NAME" \
-    --arg path "$XRAY_WS_PATH" \
-    --arg decryption "$XRAY_VLESS_DECRYPTION" \
-    --arg freedom_strategy "$(xray_freedom_domain_strategy)" \
-    --arg routing_strategy "$(xray_routing_domain_strategy)" \
-    '{
-      log: {
-        loglevel: "warning"
-      },
-      inbounds: [
-        {
-          tag: "vless-enc-ws-in",
-          listen: "127.0.0.1",
-          port: $port,
-          protocol: "vless",
-          settings: {
-            clients: [
-              {
-                id: $uuid,
-                level: 0,
-                email: $node,
-                flow: "xtls-rprx-vision"
-              }
-            ],
-            decryption: $decryption
-          },
-          streamSettings: {
-            network: "ws",
-            security: "none",
-            wsSettings: {
-              path: $path
-            }
-          },
-          sniffing: {
-            enabled: true,
-            destOverride: ["http", "tls", "quic"],
-            metadataOnly: false
-          }
-        }
-      ],
-      outbounds: [
-        {
-          tag: "direct",
-          protocol: "freedom",
-          settings: {
-            domainStrategy: $freedom_strategy
-          }
-        },
-        {
-          tag: "block",
-          protocol: "blackhole"
-        }
-      ],
-      routing: {
-        domainStrategy: $routing_strategy,
-        rules: [
-          {
-            type: "field",
-            ip: [
-              "0.0.0.0/8",
-              "10.0.0.0/8",
-              "100.64.0.0/10",
-              "127.0.0.0/8",
-              "169.254.0.0/16",
-              "172.16.0.0/12",
-              "192.0.0.0/24",
-              "192.0.2.0/24",
-              "192.168.0.0/16",
-              "198.18.0.0/15",
-              "198.51.100.0/24",
-              "203.0.113.0/24",
-              "224.0.0.0/4",
-              "240.0.0.0/4",
-              "::1/128",
-              "fc00::/7",
-              "fe80::/10",
-              "169.254.169.254/32",
-              "100.100.100.200/32"
-            ],
-            outboundTag: "block"
-          }
-        ]
+
+function show_alpine_xray_status() {
+    line
+    center_echo "Alpine Xray（Vless-Enc）服务状态" "${CYAN}${BOLD}"
+    line
+    ensure_alpine_supported || return 1
+
+    if [[ -x /usr/local/bin/xray ]]; then
+        echo -e "${CYAN}  版本: $(/usr/local/bin/xray version | head -1)${NC}"
+    else
+        echo -e "${YELLOW}  版本: N/A${NC}"
+    fi
+
+    if [[ -x "$ALPINE_XRAY_SERVICE_FILE" ]]; then
+        rc-service xray status || true
+    else
+        echo -e "${YELLOW}  未找到 OpenRC 服务文件：${ALPINE_XRAY_SERVICE_FILE}${NC}"
+    fi
+
+    echo ""
+    local listen_port=""
+    listen_port=$(get_alpine_xray_enc_port_from_config)
+    if [[ -n "$listen_port" ]]; then
+        center_echo "监听检查" "${CYAN}${BOLD}"
+        ss -ltnup 2>/dev/null | grep ":${listen_port}\b" || echo -e "${YELLOW}  未检测到 ${listen_port} 端口监听${NC}"
+        echo ""
+    fi
+
+    center_echo "日志提示" "${CYAN}${BOLD}"
+    echo -e "${YELLOW}  OpenRC 默认没有 journalctl 风格统一日志。${NC}"
+    echo -e "${CYAN}  如需看启动报错，可执行：${NC}"
+    echo -e "${CYAN}    rc-service xray restart${NC}"
+    echo -e "${CYAN}    /usr/local/bin/xray run -config ${CONFIG_FILE}${NC}"
+    line
+}
+
+function edit_alpine_xray_config() {
+    while true; do
+        line
+        center_echo "修改 Alpine Xray 配置文件" "${CYAN}${BOLD}"
+        line
+        echo -e "${CYAN}  路径: ${CONFIG_FILE}${NC}"
+        echo -e "${YELLOW}  仅建议熟悉 Xray 配置者使用。${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} 编辑当前配置"
+        echo -e "  ${CYAN}2.${NC} 清空配置（高风险）"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " EDIT_CHOICE
+
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo -e "${RED}  未找到配置文件，请先执行 Alpine Vless-Enc 安装。${NC}"
+            line
+            return 1
+        fi
+
+        case "$EDIT_CHOICE" in
+            1|01)
+                echo ""
+                if [[ -n "${EDITOR:-}" ]] && command -v "${EDITOR}" >/dev/null 2>&1; then
+                    "${EDITOR}" "$CONFIG_FILE"
+                elif command -v nano >/dev/null 2>&1; then
+                    nano "$CONFIG_FILE"
+                elif command -v vim >/dev/null 2>&1; then
+                    vim "$CONFIG_FILE"
+                elif command -v vi >/dev/null 2>&1; then
+                    vi "$CONFIG_FILE"
+                else
+                    echo -e "${RED}  未找到可用编辑器（nano/vim/vi）。${NC}"
+                    line
+                    return 1
+                fi
+
+                echo ""
+                if /usr/local/bin/xray run -test -config "$CONFIG_FILE" >/dev/null 2>&1; then
+                    echo -e "${GREEN}  ✓ Xray 配置语法校验通过。${NC}"
+                else
+                    cp -f -- "$CONFIG_FILE" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+                    echo -e "${RED}  ✗ 当前文件不是合法 Xray 配置，请修正后再重启服务。${NC}"
+                    echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+                fi
+                echo -e "${YELLOW}  已退出编辑器。请回主菜单执行「重启当前服务」。${NC}"
+                line
+                return 0
+                ;;
+            2|02)
+                echo ""
+                echo -e "${RED}${BOLD}  此操作会将当前配置清空为 0 字节。${NC}"
+                echo -e "${YELLOW}  清空前会自动备份。${NC}"
+                echo -e "${YELLOW}  未重新写入合法 JSON 前，服务无法重启。${NC}"
+                if ! ask_yes_no "  确认清空 ${CONFIG_FILE}"; then
+                    echo -e "${YELLOW}  已取消。${NC}"
+                    sleep 1
+                    continue
+                fi
+
+                local manual_backup
+                manual_backup="${CONFIG_FILE}.bak.manual-clear.$(date +%Y%m%d-%H%M%S)"
+                cp -a -- "$CONFIG_FILE" "$manual_backup" || {
+                    echo -e "${RED}  备份失败，已取消清空。${NC}"
+                    line
+                    return 1
+                }
+
+                truncate -s 0 "$CONFIG_FILE" || {
+                    echo -e "${RED}  清空失败，请手动检查权限或磁盘状态。${NC}"
+                    line
+                    return 1
+                }
+
+                echo -e "${GREEN}  ✓ 配置文件已清空。${NC}"
+                echo -e "${CYAN}  备份文件: ${manual_backup}${NC}"
+                echo -e "${YELLOW}  请先写入合法配置，再执行「重启当前服务」。${NC}"
+                line
+                return 0
+                ;;
+            "")
+                continue
+                ;;
+            0|00)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  无效输入，请输入 0、1 或 2。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+function cleanup_alpine_service_backups() {
+    local backup_path
+    for backup_path in \
+        "${ALPINE_XRAY_SERVICE_FILE}.bak."* \
+        "${ALPINE_SS_SERVICE_FILE}.bak."*; do
+        [[ -e "$backup_path" || -L "$backup_path" ]] || continue
+        remove_path_quiet "$backup_path" "$backup_path"
+    done
+}
+
+function cleanup_xray_artifacts_alpine() {
+    echo -e "${YELLOW}  清理 Alpine Xray 残留...${NC}"
+    rc-service xray stop >/dev/null 2>&1 || true
+    rc-update del xray default >/dev/null 2>&1 || true
+    remove_path_quiet "$ALPINE_XRAY_SERVICE_FILE" "$ALPINE_XRAY_SERVICE_FILE"
+    cleanup_xray_artifacts
+}
+
+function cleanup_alpine_ss_artifacts() {
+    echo -e "${YELLOW}  清理 Alpine SS2022 残留...${NC}"
+    rc-service ssserver stop >/dev/null 2>&1 || true
+    rc-update del ssserver default >/dev/null 2>&1 || true
+    apk del shadowsocks-rust mimalloc >/dev/null 2>&1 || true
+    remove_path_quiet "$ALPINE_SS_SERVICE_FILE" "$ALPINE_SS_SERVICE_FILE"
+    remove_path_quiet "$ALPINE_SS_CONFIG_DIR" "$ALPINE_SS_CONFIG_DIR"
+}
+
+function uninstall_alpine_xray_and_delete_self() {
+    line
+    center_echo "完整卸载 Alpine Xray" "${RED}${BOLD}"
+    line
+    echo -e "${RED}  - 卸载 Xray（Alpine）${NC}"
+    echo -e "${RED}  - 删除 Xray 配置、服务文件与生成目录${NC}"
+    echo -e "${RED}  - 删除 zxray 启动命令${NC}"
+    echo -e "${RED}  - 删除脚本源文件、临时文件、日志与 txt 文件${NC}"
+    line
+    if ! ask_yes_no "  确认完整卸载"; then
+        echo -e "${YELLOW}已取消。${NC}"
+        return 0
+    fi
+
+    cleanup_xray_artifacts_alpine
+    cleanup_alpine_service_backups
+    cleanup_doudou_runtime
+
+    echo -e "${GREEN}  ✓ 卸载与清理已完成。${NC}"
+    line
+    exit 0
+}
+
+function _install_alpine_xray_vlessenc_impl() {
+    line
+    echo -e "${GREEN}${BOLD}  Alpine 专用 Xray（仅 Vless-Enc）安装${NC}"
+    line
+    ensure_alpine_supported || return 1
+
+    echo -e "\n${CYAN}[Step 1/6] 基础环境${NC}"
+    ensure_alpine_community_repo || return 1
+    maybe_configure_bbr
+
+    local INSTALL_MODE="auto"
+    local SCENARIO=""
+    local TEMPLATE_LABEL=""
+    local FREEDOM_DOMAIN_STRATEGY="UseIPv4"
+    local FREEDOM_DESC="IPv4 优先"
+    local ENC_PORT_SOURCE="auto"
+    local MANUAL_ENC_PORT=""
+    local ENC_RTT_MODE="0rtt"
+    local ENC_SHAPE_MODE="xorpub"
+    local ENC_TICKET_WINDOW="600s"
+    local ENC_AUTH_METHOD="x25519"
+    local -a LANDING_LINKS=()
+    local -a LANDING_LABELS=()
+    local -a LANDING_JSONS=()
+    local -a LANDING_TAGS=()
+    local PREFLIGHT_SERVER_IP_V4=""
+    local PREFLIGHT_SERVER_IP_V6=""
+    local PREFLIGHT_SERVER_IP_RAW=""
+
+    while true; do
+        echo -e "\n${CYAN}[Step 2/6] 第二层：安装模式${NC}"
+        while true; do
+            echo -e "  ${CYAN}1.${NC} 自动模式"
+            echo -e "  ${CYAN}2.${NC} 手动模式"
+            echo -e "  ${CYAN}0.${NC} 返回主菜单"
+            read_input -r -p "选择 [1-2/0]，默认 1: " INSTALL_MODE_CHOICE
+            case "${INSTALL_MODE_CHOICE:-1}" in
+                1|01) INSTALL_MODE="auto"; break ;;
+                2|02) INSTALL_MODE="manual"; break ;;
+                0|00) return 0 ;;
+                *) echo -e "${RED}  请输入 1、2 或 0。${NC}" ;;
+            esac
+        done
+
+        while true; do
+            echo -e "\n${CYAN}[Step 3/6] 第三层：模板选择${NC}"
+            SCENARIO=$(choose_alpine_vlessenc_scenario)
+            case "$SCENARIO" in
+                __BACK__)
+                    break
+                    ;;
+                __MAIN__)
+                    return 0
+                    ;;
+            esac
+
+            while true; do
+                TEMPLATE_LABEL=$(get_install_scenario_label "$SCENARIO")
+                FREEDOM_DOMAIN_STRATEGY="UseIPv4"
+                FREEDOM_DESC="IPv4 优先"
+                ENC_PORT_SOURCE="auto"
+                MANUAL_ENC_PORT=""
+                ENC_RTT_MODE="0rtt"
+                ENC_SHAPE_MODE="xorpub"
+                ENC_TICKET_WINDOW="600s"
+                ENC_AUTH_METHOD="x25519"
+                LANDING_LINKS=()
+                LANDING_LABELS=()
+                LANDING_JSONS=()
+                LANDING_TAGS=()
+
+                echo -e "${GREEN}  已选：${TEMPLATE_LABEL}${NC}"
+                echo -e "${YELLOW}  说明：该 Alpine Xray 流程仅提供 Vless-Enc，不包含 Reality，也不提供 padding / delay 选项。${NC}"
+                echo -e "${YELLOW}  说明：主菜单 1 为覆盖安装，会生成新的完整配置并替换当前 Xray 配置；旧配置会先自动备份。${NC}"
+
+                if [[ "$INSTALL_MODE" == "auto" ]]; then
+                    echo -e "${CYAN}  自动模式将使用本模板默认值：${NC}"
+                    echo -e "${CYAN}    - Vless-Enc：xorpub / 0rtt / x25519 认证${NC}"
+                    echo -e "${CYAN}    - Vless-Enc 端口：随机高位端口${NC}"
+                    if [[ "$SCENARIO" == "3" ]]; then
+                        echo -e "${CYAN}    - 出口：freedom / ${FREEDOM_DESC}${NC}"
+                    else
+                        echo -e "${CYAN}    - 出口：VLESS / Reality / Vless-Enc${NC}"
+                    fi
+                fi
+
+                if [[ "$INSTALL_MODE" == "manual" ]]; then
+                    echo ""
+                    if ask_yes_no "  是否手动选择直连出站的 IPv4 策略（y=手动选择，n=使用默认配置：IPv4 优先）"; then
+                        FREEDOM_DOMAIN_STRATEGY=$(choose_freedom_domain_strategy)
+                        case "$FREEDOM_DOMAIN_STRATEGY" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        [[ "$FREEDOM_DOMAIN_STRATEGY" == "ForceIPv4" ]] && FREEDOM_DESC="仅 IPv4"
+                    fi
+
+                    echo ""
+                    if ask_yes_no "  是否手动指定 Vless-Enc 端口（y=手动指定，n=使用默认配置：随机高位端口）"; then
+                        MANUAL_ENC_PORT=$(read_manual_ss_port "请输入 Vless-Enc 端口: ")
+                        ENC_PORT_SOURCE="manual"
+                    fi
+                    echo ""
+                    echo -e "${CYAN}  Vless-Enc 握手模式：${NC}"
+                    echo -e "${CYAN}  - 0rtt：更偏性能；1rtt：更偏保守${NC}"
+                    ENC_RTT_MODE=$(choose_vlessenc_rtt_mode)
+                    case "$ENC_RTT_MODE" in
+                        __BACK__)
+                            continue
+                            ;;
+                        __MAIN__)
+                            return 0
+                            ;;
+                    esac
+                    echo ""
+                    echo -e "${CYAN}  Vless-Enc 包形态：${NC}"
+                    echo -e "${CYAN}  - xorpub / native / random：默认推荐 xorpub${NC}"
+                    ENC_SHAPE_MODE=$(choose_vlessenc_shape_mode)
+                    case "$ENC_SHAPE_MODE" in
+                        __BACK__)
+                            continue
+                            ;;
+                        __MAIN__)
+                            return 0
+                            ;;
+                    esac
+                    echo ""
+                    echo -e "${CYAN}  Vless-Enc 认证方式：${NC}"
+                    echo -e "${CYAN}  - x25519 更短；mlkem768 更长且认证也抗量子${NC}"
+                    ENC_AUTH_METHOD=$(choose_vlessenc_auth_method)
+                    case "$ENC_AUTH_METHOD" in
+                        __BACK__)
+                            continue
+                            ;;
+                        __MAIN__)
+                            return 0
+                            ;;
+                    esac
+                fi
+
+                if [[ "$SCENARIO" == "6" ]]; then
+                    echo ""
+                    echo -e "${CYAN}  当前模板为 Vless-Enc 入站 + 出站配置，需要输入 1 个出站链接。${NC}"
+                    while true; do
+                        local one_link=""
+                        read_input -r -p "请输入落地链接: " one_link
+                        one_link=$(printf '%s' "$one_link" | tr -d ' ')
+                        if [[ -n "$one_link" ]]; then
+                            LANDING_LINKS=("$one_link")
+                            break
+                        fi
+                        echo -e "${RED}  落地链接不能为空。${NC}"
+                    done
+                fi
+
+                break 3
+            done
+        done
+    done
+
+    echo -e "\n${CYAN}  安装前网络信息预检${NC}"
+    PREFLIGHT_SERVER_IP_V4=$(get_public_ip_v4 || true)
+    PREFLIGHT_SERVER_IP_V6=$(get_public_ip_v6 || true)
+    if [[ -n "$PREFLIGHT_SERVER_IP_V4" ]]; then
+        PREFLIGHT_SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_V4"
+    elif [[ -n "$PREFLIGHT_SERVER_IP_V6" ]]; then
+        PREFLIGHT_SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_V6"
+    fi
+    if [[ -z "$PREFLIGHT_SERVER_IP_RAW" ]]; then
+        read_input -r -p "请输入本机公网 IP/域名: " PREFLIGHT_SERVER_IP_RAW
+    fi
+    [[ -n "$PREFLIGHT_SERVER_IP_RAW" ]] || {
+        echo -e "${RED}  未提供服务器地址，安装中止。${NC}"
+        return 1
+    }
+
+    echo -e "\n${CYAN}[Step 4/6] 安装依赖与 Xray 核心${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+    install_alpine_base_deps || {
+        echo -e "${RED}依赖安装失败，请检查网络和软件源。${NC}"
+        return 1
+    }
+
+    echo -e "${YELLOW}  安装 Xray 核心程序...${NC}"
+    download_and_run_xray_installer install || {
+        echo -e "${RED}Xray 安装失败！请检查网络连接后重试。${NC}"
+        return 1
+    }
+
+    if [[ ! -x /usr/local/bin/xray ]]; then
+        echo -e "${RED}Xray 安装失败：未找到 /usr/local/bin/xray${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ 安装成功：$(/usr/local/bin/xray version | head -1)${NC}"
+
+    if [[ -f "$CONFIG_FILE" ]] && ! /usr/local/bin/xray run -test -config "$CONFIG_FILE" >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ 新核心无法读取当前正式配置，已立即中止并准备恢复旧核心。${NC}"
+        return 1
+    fi
+    if [[ "$TRANSACTION_XRAY_ACTIVE" == "1" ]] && ! rc-service xray status >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ 核心安装后旧服务未保持运行，已立即中止并准备恢复。${NC}"
+        return 1
+    fi
+
+    echo -e "\n${CYAN}[Step 5/6] 生成密钥、端口与出站参数${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+
+    local PORT=""
+    local UUID=""
+    local LOCAL_ENC_PORT=""
+    local VLESSENC_PAIR_RAW="" VLESS_ENC_DECRYPTION_BASE="" VLESS_ENC_ENCRYPTION_BASE=""
+    local VLESS_ENC_DECRYPTION="" VLESS_ENC_ENCRYPTION=""
+
+    UUID=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+    [[ -n "$UUID" ]] || { echo -e "${RED}  ✗ 生成 Vless-Enc UUID 失败，安装已中止。${NC}"; return 1; }
+
+    if [[ "$ENC_PORT_SOURCE" == "manual" ]]; then
+        ensure_alpine_install_port_available "$MANUAL_ENC_PORT" "Alpine Vless-Enc" || return 1
+        LOCAL_ENC_PORT="$MANUAL_ENC_PORT"
+    else
+        LOCAL_ENC_PORT=$(pick_random_free_port_excluding) || { echo -e "${RED}  ✗ 无法为 Vless-Enc 选出可用的随机高位端口。${NC}"; return 1; }
+    fi
+
+    VLESSENC_PAIR_RAW=$(get_vlessenc_pair_from_xray "$ENC_AUTH_METHOD" || true)
+    [[ -n "$VLESSENC_PAIR_RAW" ]] || { echo -e "${RED}  ✗ 调用 xray vlessenc 生成 Vless-Enc 参数失败。${NC}"; return 1; }
+    VLESS_ENC_DECRYPTION_BASE=${VLESSENC_PAIR_RAW%%$'\t'*}
+    VLESS_ENC_ENCRYPTION_BASE=${VLESSENC_PAIR_RAW#*$'\t'}
+    [[ -n "$VLESS_ENC_DECRYPTION_BASE" && -n "$VLESS_ENC_ENCRYPTION_BASE" ]] || { echo -e "${RED}  ✗ 解析 xray vlessenc 输出失败。${NC}"; return 1; }
+    VLESS_ENC_DECRYPTION=$(rewrite_vlessenc_block2_block3 "$VLESS_ENC_DECRYPTION_BASE" "$ENC_SHAPE_MODE" "$ENC_TICKET_WINDOW") || { echo -e "${RED}  ✗ 重写服务端 Vless-Enc 参数失败。${NC}"; return 1; }
+    VLESS_ENC_ENCRYPTION=$(rewrite_vlessenc_block2_block3 "$VLESS_ENC_ENCRYPTION_BASE" "$ENC_SHAPE_MODE" "$ENC_RTT_MODE") || { echo -e "${RED}  ✗ 重写客户端 Vless-Enc 参数失败。${NC}"; return 1; }
+
+    if [[ "$SCENARIO" == "6" ]]; then
+        build_outbound_from_link "${LANDING_LINKS[0]}" "landing" || { echo -e "${RED}  ✗ 解析出站链接失败，请检查格式。${NC}"; return 1; }
+        print_parsed_outbound_preview
+        LANDING_JSONS=("$PARSED_OUTBOUND_JSON")
+        LANDING_LABELS=("$PARSED_LINK_LABEL")
+        LANDING_TAGS=("landing")
+    fi
+
+    echo -e "${GREEN}  ✓ 端口、密钥与模板参数已准备完成${NC}"
+
+    echo -e "\n${CYAN}[Step 6/6] 写入配置并启动服务${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+    ensure_runtime_layout
+    mkdir -p "$CONFIG_DIR"
+    backup_existing_config || { echo -e "${RED}  旧配置备份失败，安装已中止。${NC}"; return 1; }
+
+    local OUTBOUND_JSON
+    OUTBOUND_JSON='{
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "'"${FREEDOM_DOMAIN_STRATEGY}"'"
       }
     }'
-}
-write_xray_config() {
-  [[ -n "$XRAY_BIN" ]] || die "未找到 Xray。"
-  valid_uuid "$XRAY_UUID" || die "Xray UUID 无效。"
-  valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_DECRYPTION" || die "VLESS-ENC decryption 无效。"
-  valid_local_port "$XRAY_LOCAL_PORT" || die "Xray 本地端口无效。"
-  valid_outbound_ip_mode "$OUTBOUND_IP_MODE" || die "出站策略无效。"
 
-  local tmp=""
-  tmp="$(mktemp "${DATA_DIR}/.xray-config.XXXXXX.json")"
+    local INBOUNDS_JSON=""
+    local OUTBOUNDS_JSON=""
+    local ALLOW_RULES_JSON=""
+    local COMMON_RULES_JSON
+    local SUBS_TEXT=""
+    local PORTS_TEXT=""
+    local SERVER_IP_RAW="" SERVER_IP_URI="" SERVER_IP_URI_V6="" SERVER_IP_V4="" SERVER_IP_V6=""
+    local VLESS_ENC_LINK_V6=""
+    local VLESS_ENC_LINK=""
+    local VLESS_ENC_ENCRYPTION_URI=""
+    local TEMP_CONFIG=""
 
-  xray_template_direct > "$tmp"
+    COMMON_RULES_JSON=$(get_common_block_rules_json)
 
-  jq -e \
-    --argjson port "$XRAY_LOCAL_PORT" \
-    --arg uuid "$XRAY_UUID" \
-    --arg path "$XRAY_WS_PATH" \
-    --arg decryption "$XRAY_VLESS_DECRYPTION" \
-    --arg freedom_strategy "$(xray_freedom_domain_strategy)" \
-    --arg routing_strategy "$(xray_routing_domain_strategy)" \
-    '.inbounds[0].port == $port
-      and .inbounds[0].settings.clients[0].id == $uuid
-      and .inbounds[0].settings.decryption == $decryption
-      and .inbounds[0].settings.clients[0].flow == "xtls-rprx-vision"
-      and .inbounds[0].streamSettings.network == "ws"
-      and .inbounds[0].streamSettings.wsSettings.path == $path
-      and (.inbounds[0].streamSettings.wsSettings | has("mode") | not)
-      and (.inbounds[0].streamSettings.wsSettings | has("host") | not)
-      and any((.outbounds // [])[]?;
-        .tag == "direct"
-        and .protocol == "freedom"
-        and .settings.domainStrategy == $freedom_strategy)
-      and any((.outbounds // [])[]?;
-        .tag == "block" and .protocol == "blackhole")
-      and .routing.domainStrategy == $routing_strategy
-      and any((.routing.rules // [])[]?;
-        .type == "field"
-        and .outboundTag == "block"
-        and ((.ip // []) | index("127.0.0.0/8") != null)
-        and ((.ip // []) | index("169.254.169.254/32") != null)
-        and ((.ip // []) | index("100.100.100.200/32") != null))' \
-    "$tmp" >/dev/null \
-    || { rm -f "$tmp"; die "生成的 Xray 配置未通过结构自检。"; }
-
-  "$XRAY_BIN" run -test -config "$tmp" \
-    || { rm -f "$tmp"; die "Xray 配置校验失败。"; }
-
-  chown root:"$SERVICE_GROUP" "$tmp" 2>/dev/null || true
-  chmod 640 "$tmp"
-  mv -f "$tmp" "$XRAY_CONFIG"
-
-  "$XRAY_BIN" run -test -config "$XRAY_CONFIG" \
-    || die "写入后的 Xray 配置校验失败。"
-}
-
-xray_listener_exact_loopback() {
-  ss_listen_tcp_lines \
-    | grep -Eq "(^|[[:space:]])127[.]0[.]0[.]1:${XRAY_LOCAL_PORT}([[:space:]]|$)"
-}
-
-wait_for_xray_ready() {
-  local i=0
-
-  for ((i = 1; i <= 15; i++)); do
-    if xray_service_is_active && xray_listener_exact_loopback; then
-      return 0
+    SERVER_IP_V4="$PREFLIGHT_SERVER_IP_V4"
+    SERVER_IP_V6="$PREFLIGHT_SERVER_IP_V6"
+    SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_RAW"
+    SERVER_IP_URI=$(format_host_for_uri "$SERVER_IP_RAW")
+    if [[ -n "$SERVER_IP_V6" ]]; then
+        SERVER_IP_URI_V6=$(format_host_for_uri "$SERVER_IP_V6")
     fi
 
-    if [[ "$INIT_SYSTEM" == "openrc" ]] && xray_listener_exact_loopback; then
-      return 0
+    VLESS_ENC_ENCRYPTION_URI=$(url_encode "$VLESS_ENC_ENCRYPTION")
+    VLESS_ENC_LINK="vless://${UUID}@${SERVER_IP_URI}:${LOCAL_ENC_PORT}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-zxray"
+    if [[ -n "$SERVER_IP_URI_V6" ]]; then
+        VLESS_ENC_LINK_V6="vless://${UUID}@${SERVER_IP_URI_V6}:${LOCAL_ENC_PORT}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-IPv6-zxray"
     fi
 
-    sleep 1
-  done
-
-  return 1
-}
-
-ensure_xray_running() {
-  if ss_listen_tcp_lines | grep -Eq "(^|[[:space:]])[^[:space:]]*:${XRAY_LOCAL_PORT}([[:space:]]|$)" \
-      && ! xray_service_is_active; then
-    warn "端口 ${XRAY_LOCAL_PORT} 已被其他进程占用："
-    ss_listen_tcp_process_lines | grep -E "(^|:)${XRAY_LOCAL_PORT}[[:space:]]" || true
-    die "为避免覆盖其他服务，已停止 Xray 部署。"
-  fi
-
-  xray_service_enable || die "无法启用 ${XRAY_SERVICE_NAME}。"
-  xray_service_restart || die "无法重启 ${XRAY_SERVICE_NAME}。"
-
-  if ! wait_for_xray_ready; then
-    xray_service_print_logs 80
-    die "${XRAY_SERVICE_NAME} 未能在 15 秒内进入正常状态，或本机未监听 127.0.0.1:${XRAY_LOCAL_PORT}。"
-  fi
-}
-
-write_xray_cloudflared_runner() {
-  [[ -n "$CLOUDFLARED_BIN" ]] || die "未找到 cloudflared。"
-  ensure_service_account
-
-  local service_uid=""
-  local service_gid=""
-  local tmp=""
-
-  service_uid="$(id -u "$SERVICE_USER")"
-  service_gid="$(id -g "$SERVICE_USER")"
-  [[ "$service_uid" =~ ^[0-9]+$ && "$service_gid" =~ ^[0-9]+$ ]] \
-    || die "无法读取低权限服务账户的 UID/GID。"
-
-  tmp="$(mktemp)"
-  printf '%s\n' '#!/usr/bin/env bash' > "$tmp"
-  cat >> "$tmp" <<EOF
-set -Eeuo pipefail
-IFS=\$'\\n\\t'
-umask 077
-
-export HOME="${XRAY_CLOUDFLARED_HOME}"
-CF_PID=""
-CF_START=""
-
-process_start_time() {
-  local pid="\$1"
-  local stat_line=""
-  local remainder=""
-  local start_time=""
-  local -a fields=()
-
-  [[ "\$pid" =~ ^[0-9]+\$ ]] || return 1
-  [[ -r "/proc/\${pid}/stat" ]] || return 1
-  IFS= read -r stat_line < "/proc/\${pid}/stat" || return 1
-  [[ "\$stat_line" == *") "* ]] || return 1
-  remainder="\${stat_line##*) }"
-  IFS=' ' read -r -a fields <<< "\$remainder"
-  [[ \${#fields[@]} -ge 20 ]] || return 1
-  start_time="\${fields[19]}"
-  [[ "\$start_time" =~ ^[0-9]+\$ ]] || return 1
-  printf '%s\\n' "\$start_time"
-}
-
-identity_matches() {
-  local pid="\$1"
-  local recorded_start="\$2"
-  local actual_start=""
-  actual_start="\$(process_start_time "\$pid" 2>/dev/null || true)"
-  [[ -n "\$actual_start" && "\$actual_start" == "\$recorded_start" ]]
-}
-
-signal_verified() {
-  local signal_name="\$1"
-  local pid="\$2"
-  local recorded_start="\$3"
-  identity_matches "\$pid" "\$recorded_start" || return 0
-  kill "-\${signal_name}" "\$pid" 2>/dev/null || true
-}
-
-cleanup() {
-  local rc=\$?
-  local i=0
-  trap - EXIT HUP INT TERM
-  if [[ -n "\${CF_PID}" && -n "\${CF_START}" ]]; then
-    signal_verified TERM "\${CF_PID}" "\${CF_START}"
-    for ((i = 0; i < 8; i++)); do
-      identity_matches "\${CF_PID}" "\${CF_START}" || break
-      sleep 1
-    done
-    signal_verified KILL "\${CF_PID}" "\${CF_START}"
-    wait "\${CF_PID}" 2>/dev/null || true
-  fi
-  rm -f "${XRAY_CLOUDFLARED_PID_FILE}"
-  exit "\$rc"
-}
-
-trap cleanup EXIT HUP INT TERM
-
-if [[ "${INIT_SYSTEM}" == "openrc" ]]; then
-  su-exec ${service_uid}:${service_gid} \
-    "${CLOUDFLARED_BIN}" tunnel \
-      --url "http://127.0.0.1:${XRAY_LOCAL_PORT}" \
-      --edge-ip-version auto \
-      --no-autoupdate \
-      --protocol http2 \
-      > >(tee -a "${XRAY_LOG_FILE}") 2>&1 &
-else
-  setpriv \
-    --reuid=${service_uid} \
-    --regid=${service_gid} \
-    --clear-groups \
-    --no-new-privs \
-    -- \
-    "${CLOUDFLARED_BIN}" tunnel \
-      --url "http://127.0.0.1:${XRAY_LOCAL_PORT}" \
-      --edge-ip-version auto \
-      --no-autoupdate \
-      --protocol http2 \
-      > >(tee -a "${XRAY_LOG_FILE}") 2>&1 &
-fi
-
-CF_PID=\$!
-CF_START="\$(process_start_time "\${CF_PID}" 2>/dev/null || true)"
-if [[ ! "\${CF_START}" =~ ^[0-9]+\$ ]]; then
-  wait "\${CF_PID}" 2>/dev/null || true
-  exit 1
-fi
-printf '%s %s\\n' "\${CF_PID}" "\${CF_START}" > "${XRAY_CLOUDFLARED_PID_FILE}"
-chmod 600 "${XRAY_CLOUDFLARED_PID_FILE}"
-wait "\${CF_PID}"
+    case "$SCENARIO" in
+        3)
+            INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
 EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-enc"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: Vless-Enc
+  - 出口: freedom / ${FREEDOM_DESC}
+订阅:
+Vless-Enc（直出）:
+  ${VLESS_ENC_LINK}
+提示:
+  - 若当前为 NAT / 内网转发环境，请确认入口端口已放通，或已正确配置端口转发，若有外部 IP，请将订阅中的 IP 一并改为该外部 IP。
+EOF
+)
+            if [[ -n "$VLESS_ENC_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+Vless-Enc（直出 / IPv6）:
+  ${VLESS_ENC_LINK_V6}
+EOF
+)
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  Vless-Enc:   ${LOCAL_ENC_PORT}
+出站说明:
+  直连策略:    ${FREEDOM_DESC}
+EOF
+)
+            ;;
+        6)
+            INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+${LANDING_JSONS[0]},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-enc"],
+        "network": "tcp,udp",
+        "outboundTag": "landing"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: Vless-Enc
+  - 出口: VLESS / Reality / Vless-Enc
+订阅:
+Vless-Enc（入站）:
+  ${VLESS_ENC_LINK}
+提示:
+  - 若当前为 NAT / 内网转发环境，请确认入口端口已放通，或已正确配置端口转发。
+EOF
+)
+            if [[ -n "$VLESS_ENC_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+Vless-Enc（入站 / IPv6）:
+  ${VLESS_ENC_LINK_V6}
+EOF
+)
+            fi
+            SUBS_TEXT+=$(cat <<EOF
+说明:
+  - 入口协议: Vless-Enc 入站
+  - 出口协议: VLESS / Reality / Vless-Enc 出站（按你输入的链接决定）
+  - 当前出站目标: ${LANDING_LABELS[0]}
+  - 原始出站链接: ${LANDING_LINKS[0]}
+EOF
+)
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  Vless-Enc:   ${LOCAL_ENC_PORT}
+出站说明:
+  出站方向:    Vless-Enc 入站 -> VLESS / Reality / Vless-Enc 出站
+  出站目标:    ${LANDING_LABELS[0]}
+EOF
+)
+            ;;
+        *)
+            echo -e "${RED}  未知 Alpine Vless-Enc 模板：${SCENARIO}${NC}"
+            return 1
+            ;;
+    esac
 
-  install -m 0700 "$tmp" "$XRAY_CLOUDFLARED_RUNNER"
-  rm -f "$tmp"
-}
-
-xray_tmux_session_exists() {
-  tmux has-session -t "$XRAY_TMUX_SESSION" 2>/dev/null
-}
-
-xray_tunnel_is_running() {
-  xray_tmux_session_exists || return 1
-  tmux list-panes -t "$XRAY_TMUX_SESSION" -F '#{pane_start_command}' 2>/dev/null \
-    | grep -Fq "$XRAY_CLOUDFLARED_RUNNER"
-}
-
-read_xray_cloudflared_pid() {
-  local pid=""
-  local recorded_start=""
-  local extra=""
-
-  [[ -r "$XRAY_CLOUDFLARED_PID_FILE" && ! -L "$XRAY_CLOUDFLARED_PID_FILE" ]] || return 1
-  IFS=' ' read -r pid recorded_start extra < "$XRAY_CLOUDFLARED_PID_FILE" || return 1
-  [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ && -z "$extra" ]] || return 1
-  printf '%s %s\n' "$pid" "$recorded_start"
-}
-
-xray_cloudflared_identity_matches() {
-  local pid="$1"
-  local recorded_start="$2"
-  local actual_start=""
-  local state=""
-  local cmdline=""
-  local uid=""
-  local expected_uid=""
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  state="$(process_state "$pid" 2>/dev/null || true)"
-  [[ "$actual_start" == "$recorded_start" && "$state" != "Z" && "$state" != "X" ]] || return 1
-
-  expected_uid="$(id -u "$SERVICE_USER" 2>/dev/null || true)"
-  uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
-  [[ -n "$expected_uid" && "$uid" == "$expected_uid" ]] || return 1
-
-  cmdline="$(process_command_line "$pid" 2>/dev/null || true)"
-  [[ "$cmdline" == *"${CLOUDFLARED_BIN}"* \
-    && "$cmdline" == *"tunnel"* \
-    && "$cmdline" == *"127.0.0.1:${XRAY_LOCAL_PORT}"* ]]
-}
-
-xray_cloudflared_pid_is_ours() {
-  local pid=""
-  local recorded_start=""
-
-  IFS=' ' read -r pid recorded_start < <(read_xray_cloudflared_pid) || return 1
-  xray_cloudflared_identity_matches "$pid" "$recorded_start"
-}
-
-xray_runtime_is_running() {
-  [[ -n "$CLOUDFLARED_BIN" ]] || resolve_cloudflared_bin
-  [[ -n "$CLOUDFLARED_BIN" ]] || return 1
-
-  xray_service_is_active \
-    && xray_listener_exact_loopback \
-    && xray_tunnel_is_running \
-    && xray_cloudflared_pid_is_ours
-}
-
-signal_xray_cloudflared_verified() {
-  local signal_name="$1"
-  local pid="$2"
-  local recorded_start="$3"
-
-  xray_cloudflared_identity_matches "$pid" "$recorded_start" || return 1
-  kill "-${signal_name}" "$pid" 2>/dev/null || return 1
-}
-
-extract_xray_argo_host() {
-  [[ -f "$XRAY_LOG_FILE" ]] || return 1
-  grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$XRAY_LOG_FILE" 2>/dev/null \
-    | tail -n 1 \
-    | sed 's#^https://##'
-}
-
-wait_for_xray_argo_host() {
-  local i=0
-  local host=""
-
-  for ((i = 1; i <= 90; i++)); do
-    host="$(extract_xray_argo_host || true)"
-    if valid_argo_host "$host" && [[ -n "$host" ]]; then
-      XRAY_ARGO_HOST="$host"
-      save_xray_state
-      return 0
-    fi
-
-    if ! xray_tunnel_is_running && ! xray_cloudflared_pid_is_ours; then
-      break
-    fi
-    sleep 1
-  done
-
-  return 1
-}
-
-stop_xray_tunnel() {
-  local stopped=0
-  local pid=""
-  local recorded_start=""
-  local i=0
-
-  resolve_cloudflared_bin
-
-  if xray_tunnel_is_running; then
-    tmux kill-session -t "$XRAY_TMUX_SESSION" 2>/dev/null || true
-    stopped=1
-  elif xray_tmux_session_exists; then
-    warn "发现同名 Xray tmux 会话，但它不是本脚本创建的；不会将其删除。"
-  fi
-
-  sleep 1
-
-  if IFS=' ' read -r pid recorded_start < <(read_xray_cloudflared_pid 2>/dev/null); then
-    if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-      signal_xray_cloudflared_verified TERM "$pid" "$recorded_start" || true
-      for ((i = 0; i < 8; i++)); do
-        xray_cloudflared_identity_matches "$pid" "$recorded_start" || break
-        sleep 1
-      done
-      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-        signal_xray_cloudflared_verified KILL "$pid" "$recorded_start" || true
-        sleep 1
-      fi
-      if xray_cloudflared_identity_matches "$pid" "$recorded_start"; then
-        warn "Xray cloudflared 进程仍未退出；为避免误杀其他进程，已保留 PID 文件供排查。"
+    TEMP_CONFIG=$(mktemp /tmp/xray-alpine-config.XXXXXX.json) || {
+        echo -e "${RED}  ✗ 无法创建临时配置文件。${NC}"
         return 1
-      fi
-      stopped=1
-    fi
-  fi
+    }
+    add_tmp_file "$TEMP_CONFIG"
 
-  rm -f "$XRAY_CLOUDFLARED_PID_FILE"
-  if [[ $stopped -eq 1 ]]; then
-    ok "Xray 临时 Argo 已停止；旧 trycloudflare.com 域名随之失效。"
-  else
-    info "没有发现正在运行的 Xray 临时隧道。"
-  fi
+    cat > "$TEMP_CONFIG" <<JSONEOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+${INBOUNDS_JSON}
+  ],
+  "outbounds": [
+${OUTBOUNDS_JSON}
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+${COMMON_RULES_JSON}
+${ALLOW_RULES_JSON}
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "blocked"
+      }
+    ]
+  }
 }
+JSONEOF
 
-start_xray_tunnel() {
-  local parsed_host=""
-  local attempt=0
-  local max_attempts=3
-  local retry_delay=5
-
-  if xray_tmux_session_exists && ! xray_tunnel_is_running; then
-    die "已存在同名 tmux 会话 ${XRAY_TMUX_SESSION}，但不是本脚本创建的会话；为避免误伤，请先改名或删除该会话。"
-  fi
-
-  if xray_tunnel_is_running; then
-    parsed_host="$(extract_xray_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      XRAY_ARGO_HOST="$parsed_host"
-      save_xray_state
-      generate_xray_vless_link
-      ok "Xray 临时 Argo 已在运行：${XRAY_ARGO_HOST}"
-      return 0
+    echo -e "${YELLOW}  验证配置文件...${NC}"
+    if ! jq empty "$TEMP_CONFIG" >/dev/null 2>&1; then
+        cp -f -- "$TEMP_CONFIG" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ 生成结果不是合法 JSON，已拒绝覆盖当前配置。${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        return 1
     fi
-  fi
-
-  : > "$XRAY_LOG_FILE"
-  chmod 600 "$XRAY_LOG_FILE"
-  rm -f "$XRAY_CLOUDFLARED_PID_FILE" "$XRAY_VLESS_JSON_FILE" "$XRAY_VLESS_LINK_FILE"
-  XRAY_ARGO_HOST=""
-  save_xray_state
-  mkdir -p "$XRAY_CLOUDFLARED_HOME"
-  chown "$SERVICE_USER:$SERVICE_GROUP" "$XRAY_CLOUDFLARED_HOME" 2>/dev/null || true
-  chmod 700 "$XRAY_CLOUDFLARED_HOME"
-
-  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
-    tmux new-session -d -s "$XRAY_TMUX_SESSION" "$XRAY_CLOUDFLARED_RUNNER" \
-      || die "无法启动 Xray cloudflared tmux 会话。"
-
-    if wait_for_xray_argo_host; then
-      generate_xray_vless_link
-      ok "Xray 临时 Argo 已启动：${XRAY_ARGO_HOST}"
-      return 0
+    if ! /usr/local/bin/xray run -test -config "$TEMP_CONFIG"; then
+        cp -f -- "$TEMP_CONFIG" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ 配置文件验证失败！${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        echo -e "${YELLOW}  当前运行中的旧配置未被覆盖。${NC}"
+        return 1
     fi
+    echo -e "${GREEN}  ✓ 配置文件语法验证通过${NC}"
 
-    stop_xray_tunnel || true
-    if ((attempt < max_attempts)); then
-      warn "未能获取 Xray 临时域名，${retry_delay} 秒后重试（${attempt}/${max_attempts}）。"
-      sleep "$retry_delay"
+    if is_port_in_use "$LOCAL_ENC_PORT"; then
+        stop_alpine_known_service_on_port "$LOCAL_ENC_PORT" || {
+            echo -e "${RED}  ✗ 无法在最终切换前释放端口 ${LOCAL_ENC_PORT}。${NC}"
+            return 1
+        }
     fi
-  done
+    cp -f -- "$TEMP_CONFIG" "$CONFIG_FILE" || return 1
+    chmod 600 "$CONFIG_FILE" || return 1
+    write_alpine_xray_openrc_service || return 1
+    rc-update add xray default >/dev/null 2>&1 || true
 
-  if [[ -f "$XRAY_LOG_FILE" ]]; then
-    warn "Xray cloudflared 最近日志："
-    tail -n 80 "$XRAY_LOG_FILE" >&2 || true
-  fi
-  die "Xray cloudflared 未能在 90 秒内输出临时 trycloudflare.com 域名。"
-}
+    rc-service xray restart >/dev/null 2>&1 || rc-service xray start >/dev/null 2>&1 || {
+        echo -e "${RED}  Alpine Xray 服务启动失败！${NC}"
+        rc-service xray status || true
+        return 1
+    }
 
-url_encode() {
-  jq -rn --arg value "$1" '$value | @uri'
-}
-
-generate_xray_vless_link() {
-  valid_uuid "$XRAY_UUID" || die "Xray UUID 无效，无法生成 VLESS 链接。"
-  valid_xray_ws_path "$XRAY_WS_PATH" || die "WS 路径无效，无法生成 VLESS 链接。"
-  valid_argo_host "$XRAY_ARGO_HOST" || die "Xray 临时 Argo 域名无效。"
-  [[ -n "$XRAY_ARGO_HOST" ]] || die "Xray 临时 Argo 域名为空。"
-  valid_preferred_endpoint "$XRAY_PREFERRED_ENDPOINT" || die "Xray 优选域名/IP 无效。"
-  valid_node_name "$XRAY_NODE_NAME" || die "Xray 节点名称无效。"
-  valid_xray_vlessenc_value "$XRAY_VLESS_ENCRYPTION" || die "Xray VLESS-ENC encryption 无效。"
-
-  local tmp_json=""
-  local tmp_link=""
-  local enc_encryption=""
-  local enc_sni=""
-  local enc_path=""
-  local enc_node=""
-  local enc_ech=""
-  local node_name=""
-
-  tmp_json="$(mktemp "${DATA_DIR}/.vless-ws.json.XXXXXX")"
-  tmp_link="$(mktemp "${DATA_DIR}/.vless-ws.txt.XXXXXX")"
-
-  node_name="${XRAY_NODE_NAME}"
-
-  enc_encryption="$(url_encode "$XRAY_VLESS_ENCRYPTION")"
-  enc_sni="$(url_encode "$XRAY_ARGO_HOST")"
-  enc_path="$(url_encode "$XRAY_WS_PATH")"
-  enc_node="$(url_encode "$node_name")"
-  enc_ech="$(url_encode "$ECH_CONFIG")"
-
-  jq -n \
-    --arg protocol "vless" \
-    --arg ps "$node_name" \
-    --arg add "$XRAY_PREFERRED_ENDPOINT" \
-    --arg port "443" \
-    --arg id "$XRAY_UUID" \
-    --arg encryption "$XRAY_VLESS_ENCRYPTION" \
-    --arg security "tls" \
-    --arg sni "$XRAY_ARGO_HOST" \
-    --arg host "$XRAY_ARGO_HOST" \
-    --arg path "$XRAY_WS_PATH" \
-    --arg type "ws" \
-    --arg flow "xtls-rprx-vision" \
-    --arg ech "$ECH_CONFIG" \
-    '{
-      protocol: $protocol,
-      ps: $ps,
-      add: $add,
-      port: ($port | tonumber),
-      id: $id,
-      encryption: $encryption,
-      security: $security,
-      sni: $sni,
-      vcn: $sni,
-      host: $host,
-      path: $path,
-      type: $type,
-      flow: $flow,
-      alpn: "http/1.1",
-      fp: "firefox",
-      ech: $ech,
-      echConfigList: $ech
-    }' > "$tmp_json"
-
-  printf 'vless://%s@%s:443?encryption=%s&flow=xtls-rprx-vision&security=tls&sni=%s&vcn=%s&fp=firefox&type=ws&host=%s&path=%s&alpn=http%%2F1.1&ech=%s&echConfigList=%s#%s\n' \
-    "$XRAY_UUID" \
-    "$XRAY_PREFERRED_ENDPOINT" \
-    "$enc_encryption" \
-    "$enc_sni" \
-    "$enc_sni" \
-    "$enc_sni" \
-    "$enc_path" \
-    "$enc_ech" \
-    "$enc_ech" \
-    "$enc_node" \
-    > "$tmp_link"
-
-  if ! jq -e \
-      --arg ps "$node_name" \
-      --arg add "$XRAY_PREFERRED_ENDPOINT" \
-      --arg host "$XRAY_ARGO_HOST" \
-      --arg path "$XRAY_WS_PATH" \
-      --arg encryption "$XRAY_VLESS_ENCRYPTION" \
-      --arg ech "$ECH_CONFIG" \
-      '.ps == $ps
-        and .add == $add
-        and .host == $host
-        and .sni == $host
-        and .vcn == $host
-        and .path == $path
-        and .type == "ws"
-        and .flow == "xtls-rprx-vision"
-        and .alpn == "http/1.1"
-        and .encryption == $encryption
-        and .ech == $ech
-        and .echConfigList == $ech' \
-      "$tmp_json" >/dev/null \
-      || ! grep -Fq "&vcn=${enc_sni}" "$tmp_link"; then
-    rm -f "$tmp_json" "$tmp_link"
-    die "生成的 VLESS-ENC + WS 链接自检失败，未写入磁盘。"
-  fi
-
-  chmod 600 "$tmp_json" "$tmp_link"
-  mv -f "$tmp_json" "$XRAY_VLESS_JSON_FILE"
-  mv -f "$tmp_link" "$XRAY_VLESS_LINK_FILE"
-  printf '%s\n' "$ECH_CONFIG" > "$ECH_NOTE_FILE"
-  chmod 600 "$ECH_NOTE_FILE"
-}
-prepare_xray_deployment() {
-  load_settings
-  install_xray_if_needed
-  install_cloudflared_if_needed
-  ensure_service_account
-
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
-
-  if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
-    PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-    XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-    LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-    NODE_NAME="$DEFAULT_NODE_NAME"
-    DOH_ENABLED="$DEFAULT_DOH_ENABLED"
-    WARP_ENABLED="$DEFAULT_WARP_ENABLED"
-    OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
-    save_settings
-  fi
-
-  [[ -n "${XRAY_PREFERRED_ENDPOINT:-}" ]] || XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-  load_xray_state
-  if [[ -z "${XRAY_NODE_NAME:-}" || "$XRAY_NODE_NAME" == "zdd-argo-xray" ]]; then
-    XRAY_NODE_NAME="$NODE_NAME"
-  fi
-}
-
-rebuild_xray_deployment_after_stop() {
-  generate_xray_identity
-
-  xray_service_stop || true
-  xray_service_reset_failed
-
-  write_xray_config
-  write_xray_service
-  write_xray_cloudflared_runner
-  write_logrotate_config
-
-  ensure_xray_running
-  start_xray_tunnel
-}
-
-command_generate_xray_vlessenc_ws() {
-  deployment_transaction_begin xray
-  prepare_xray_deployment
-
-  stop_xray_tunnel || die "无法安全停止现有 Xray 临时隧道。"
-  rebuild_xray_deployment_after_stop
-
-  deployment_transaction_commit
-  ok "Xray VLESS-ENC + WS 临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
-  show_xray_subscription
-}
-
-command_generate_xray_custom() {
-  deployment_transaction_begin xray
-  prepare_xray_deployment
-
-  stop_xray_tunnel || die "无法安全停止现有 Xray 临时隧道。"
-  configure_xray_custom_settings
-  rebuild_xray_deployment_after_stop
-
-  deployment_transaction_commit
-  ok "Xray 自定义临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
-  show_xray_subscription
-}
-
-show_xray_subscription() {
-  load_settings
-  load_xray_state
-
-  local running="否"
-  local parsed_host=""
-
-  if xray_runtime_is_running; then
-    running="是"
-    parsed_host="$(extract_xray_argo_host || true)"
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      if [[ "$XRAY_ARGO_HOST" != "$parsed_host" ]]; then
-        XRAY_ARGO_HOST="$parsed_host"
-        save_xray_state
-      fi
-    fi
-    if [[ -n "$XRAY_ARGO_HOST" ]] && valid_argo_host "$XRAY_ARGO_HOST"; then
-      generate_xray_vless_link
-    fi
-  fi
-
-  print_section_header "zdd-argo Xray VLESS-ENC + WS" "$C_GREEN" 78
-  print_kv "节点名称：" "${XRAY_NODE_NAME:-$NODE_NAME}" 18
-  print_kv "优选域名/IP：" "${XRAY_PREFERRED_ENDPOINT:-未设置}" 18
-  print_kv "传输方式：" "VLESS-ENC / WS / TLS" 18
-  print_kv "出站策略：" "$(outbound_ip_mode_label)" 18
-  print_kv "后台运行：" "$running" 18
-  print_kv "加密参数：" "0rtt + xorpub，已隐藏" 18
-  print_section_footer "$C_GREEN" 78
-
-  if [[ -f "$XRAY_VLESS_LINK_FILE" ]]; then
-    if ! xray_runtime_is_running; then
-      warn "Xray 或其临时 Argo 隧道当前未完整运行；下面是保存的旧链接，目前不可用。"
-    fi
-
-    printf '\n%sXray 分享链接：%s\n' "$C_CYAN" "$C_RESET"
-    cat "$XRAY_VLESS_LINK_FILE"
-    printf '\n保存位置： %s\n' "$XRAY_VLESS_LINK_FILE"
-    printf '\n%s\n' "导入后应显示 type=ws，alpn=http/1.1，SNI/Host 为临时 Argo 域名。"
-  else
-    warn "尚未生成临时 argo 隧道"
-  fi
-}
-show_all_subscriptions() {
-  if [[ -f "$STATE_JSON" ]]; then
-    show_subscription
-  else
-    warn "sing-box：尚未生成临时 argo 隧道"
-  fi
-
-  printf '\n'
-
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    show_xray_subscription
-  else
-    warn "Xray：尚未生成临时 argo 隧道"
-  fi
-}
-
-deployment_transaction_begin() {
-  local scope="${1:-all}"
-
-  [[ "$scope" == "all" || "$scope" == "xray" ]] || scope="all"
-  [[ $TRANSACTION_ACTIVE -eq 0 ]] || die "部署事务已经处于活动状态。"
-
-  TRANSACTION_SCOPE="$scope"
-  TRANSACTION_DIR="$(mktemp -d /tmp/zdd-argo-transaction.XXXXXX)"
-  TRANSACTION_OLD_SERVICE_ACTIVE=0
-  TRANSACTION_OLD_TUNNEL_RUNNING=0
-  TRANSACTION_OLD_XRAY_SERVICE_ACTIVE=0
-  TRANSACTION_OLD_XRAY_TUNNEL_RUNNING=0
-  TRANSACTION_OLD_SERVICE_ACCOUNT=0
-  TRANSACTION_OLD_SERVICE_GROUP=0
-  TRANSACTION_OLD_SERVICE_HOME=0
-
-  if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    TRANSACTION_OLD_SERVICE_ACCOUNT=1
-  fi
-  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-    TRANSACTION_OLD_SERVICE_GROUP=1
-  fi
-  if [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]]; then
-    TRANSACTION_OLD_SERVICE_HOME=1
-  fi
-
-  if service_is_active; then
-    TRANSACTION_OLD_SERVICE_ACTIVE=1
-  fi
-  if tunnel_is_running; then
-    TRANSACTION_OLD_TUNNEL_RUNNING=1
-  fi
-  if xray_service_is_active; then
-    TRANSACTION_OLD_XRAY_SERVICE_ACTIVE=1
-  fi
-  if xray_tunnel_is_running; then
-    TRANSACTION_OLD_XRAY_TUNNEL_RUNNING=1
-  fi
-
-  if [[ -d "$DATA_DIR" ]]; then
-    if ! cp -a "$DATA_DIR" "${TRANSACTION_DIR}/data"; then
-      cleanup_transaction_dir "$TRANSACTION_DIR" || true
-      TRANSACTION_DIR=""
-      die "无法备份现有 zdd-argo 数据目录，部署尚未修改系统。"
-    fi
-    : > "${TRANSACTION_DIR}/had-data"
-  fi
-
-  if [[ -d "$BIN_DIR" ]]; then
-    if ! cp -a "$BIN_DIR" "${TRANSACTION_DIR}/bin"; then
-      cleanup_transaction_dir "$TRANSACTION_DIR" || true
-      TRANSACTION_DIR=""
-      die "无法备份现有 zdd-argo 程序目录，部署尚未修改系统。"
-    fi
-    : > "${TRANSACTION_DIR}/had-bin"
-  fi
-
-  if [[ -f "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
-    if ! cp -a "$SINGBOX_UNIT" "${TRANSACTION_DIR}/sing-box.service"; then
-      cleanup_transaction_dir "$TRANSACTION_DIR" || true
-      TRANSACTION_DIR=""
-      die "无法备份现有 sing-box 服务文件，部署尚未修改系统。"
-    fi
-    : > "${TRANSACTION_DIR}/had-unit"
-  fi
-
-  if [[ -f "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    if ! cp -a "$XRAY_UNIT" "${TRANSACTION_DIR}/xray.service"; then
-      cleanup_transaction_dir "$TRANSACTION_DIR" || true
-      TRANSACTION_DIR=""
-      die "无法备份现有 Xray 服务文件，部署尚未修改系统。"
-    fi
-    : > "${TRANSACTION_DIR}/had-xray-unit"
-  fi
-
-  if [[ -f "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    if ! cp -a "$LOGROTATE_CONFIG" "${TRANSACTION_DIR}/logrotate"; then
-      cleanup_transaction_dir "$TRANSACTION_DIR" || true
-      TRANSACTION_DIR=""
-      die "无法备份现有日志轮转配置，部署尚未修改系统。"
-    fi
-    : > "${TRANSACTION_DIR}/had-logrotate"
-  fi
-
-  TRANSACTION_ACTIVE=1
-}
-
-deployment_transaction_commit() {
-  [[ $TRANSACTION_ACTIVE -eq 1 ]] || return 0
-  TRANSACTION_ACTIVE=0
-
-  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
-    warn "部署已提交，但事务临时目录无法通过安全校验或清理失败：${TRANSACTION_DIR}"
-  fi
-
-  TRANSACTION_SCOPE="all"
-  TRANSACTION_DIR=""
-}
-
-deployment_transaction_rollback() {
-  local reason="${1:-部署失败}"
-
-  [[ $TRANSACTION_ACTIVE -eq 1 ]] || return 0
-  TRANSACTION_ACTIVE=0
-
-  warn "${reason}。"
-
-  if ! managed_paths_are_safe; then
-    warn "受管路径安全校验失败，未执行破坏性回滚；事务备份保留在：${TRANSACTION_DIR}"
-    TRANSACTION_DIR=""
-    return 0
-  fi
-
-  if [[ "${TRANSACTION_SCOPE:-all}" == "xray" ]]; then
-    local rel=""
-
-    (stop_xray_tunnel) >/dev/null 2>&1 || true
-
-    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-      xray_service_disable_now || true
-    fi
-
-    mkdir -p "$DATA_DIR"
-    for rel in \
-      "$(basename "$XRAY_CONFIG")" \
-      "$(basename "$XRAY_STATE_JSON")" \
-      "$(basename "$XRAY_CLOUDFLARED_RUNNER")" \
-      "$(basename "$XRAY_CLOUDFLARED_PID_FILE")" \
-      "$(basename "$XRAY_VLESS_JSON_FILE")" \
-      "$(basename "$XRAY_VLESS_LINK_FILE")" \
-      "$(basename "$SETTINGS_JSON")" \
-      "$(basename "$ECH_NOTE_FILE")"
-    do
-      if [[ -f "${TRANSACTION_DIR}/had-data" \
-          && ( -e "${TRANSACTION_DIR}/data/${rel}" \
-            || -L "${TRANSACTION_DIR}/data/${rel}" ) ]]; then
-        cp -a "${TRANSACTION_DIR}/data/${rel}" "${DATA_DIR}/${rel}" \
-          || warn "回滚 Xray 数据文件失败：${DATA_DIR}/${rel}"
-      else
-        rm -f "${DATA_DIR}/${rel}"
-      fi
+    local check_attempt=0
+    while [[ $check_attempt -lt 5 ]]; do
+        sleep 2
+        if rc-service xray status >/dev/null 2>&1; then
+            break
+        fi
+        check_attempt=$((check_attempt + 1))
+        echo -e "${YELLOW}  等待服务启动... (${check_attempt}/5)${NC}"
     done
 
-    mkdir -p "$BIN_DIR"
-    for rel in \
-      "$(basename "$MANAGED_XRAY_BIN")" \
-      "$(basename "$XRAY_RELEASE_META")" \
-      "$(basename "$MANAGED_CLOUDFLARED_BIN")" \
-      "$(basename "$CLOUDFLARED_RELEASE_META")"
-    do
-      if [[ -f "${TRANSACTION_DIR}/had-bin" \
-          && ( -e "${TRANSACTION_DIR}/bin/${rel}" \
-            || -L "${TRANSACTION_DIR}/bin/${rel}" ) ]]; then
-        cp -a "${TRANSACTION_DIR}/bin/${rel}" "${BIN_DIR}/${rel}" \
-          || warn "回滚 Xray 程序文件失败：${BIN_DIR}/${rel}"
-      else
-        rm -f "${BIN_DIR}/${rel}"
-      fi
+    if ! rc-service xray status >/dev/null 2>&1; then
+        echo -e "${RED}  Alpine Xray 服务启动失败！${NC}"
+        rc-service xray status || true
+        echo -e "${YELLOW}  可继续手动排查：/usr/local/bin/xray run -config ${CONFIG_FILE}${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ Alpine Xray 服务已启动${NC}"
+
+    if ss -ltnup 2>/dev/null | grep -q ":${LOCAL_ENC_PORT}\b"; then
+        echo -e "${GREEN}  ✓ 已检测到 ${LOCAL_ENC_PORT} 端口监听${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 未明确检测到 ${LOCAL_ENC_PORT} 端口监听，请手动检查：ss -ltnup | grep :${LOCAL_ENC_PORT}${NC}"
+    fi
+
+    write_dynamic_result_files "$SUBS_TEXT" "$PORTS_TEXT"
+    write_install_runtime_kind "alpine-xray-vlessenc"
+    render_saved_node_info "配置完成" || { echo -e "${RED}  节点信息写入失败，请检查 ${INFO_FILE}${NC}"; return 1; }
+}
+
+function install_alpine_service_entry() {
+    ensure_alpine_supported || return 1
+    while true; do
+        line
+        center_echo "Alpine 覆盖安装" "${CYAN}${BOLD}"
+        line
+        echo -e "  ${CYAN}1.${NC} Alpine 专用 Xray（仅 Vless-Enc，无 Reality，无 padding）"
+        echo -e "  ${CYAN}2.${NC} Alpine 专用 SS2022（shadowsocks-rust）"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " ALPINE_INSTALL_CHOICE
+        case "$ALPINE_INSTALL_CHOICE" in
+            1|01)
+                install_alpine_xray_vlessenc
+                return $?
+                ;;
+            2|02)
+                install_alpine_ss2022
+                return $?
+                ;;
+            0|00)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}无效输入，请重新选择。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+function _install_xray_impl() {
+    line
+    echo -e "${GREEN}${BOLD}  Xray 覆盖安装${NC}"
+    line
+
+    echo -e "\n${CYAN}[Step 1/7] 系统环境预检${NC}"
+    ensure_systemd_supported || return 1
+    maybe_configure_bbr
+
+    local INSTALL_MODE="auto"
+    local SCENARIO=""
+    local TEMPLATE_LABEL=""
+    local FREEDOM_DOMAIN_STRATEGY="UseIPv4"
+    local REALITY_PORT="$DEFAULT_PORT"
+    local SNI_SOURCE="auto"
+    local MANUAL_DEST=""
+    local DEST=""
+    local SS_PORT_SOURCE="auto"
+    local MANUAL_SS_PORT=""
+    local ENC_PORT_SOURCE="auto"
+    local MANUAL_ENC_PORT=""
+    local ENC_RTT_MODE="0rtt"
+    local ENC_SHAPE_MODE="xorpub"
+    local ENC_TICKET_WINDOW="600s"
+    local ENC_AUTH_METHOD="x25519"
+    local ENC_PADDING_PROFILE="off"
+    local ENC_PADDING_PROFILE_DESC=""
+    local ENC_PADDING_CLIENT=""
+    local ENC_PADDING_SERVER=""
+    local NEED_LANDING="0"
+    local route_idx=""
+    local route_port=""
+    local existing_port=""
+    local duplicate_port=0
+    local LANDING_LINK=""
+    local LANDING_EXPECT="any"
+    local FREEDOM_DESC="IPv4 优先"
+    local SS_METHOD_DESC="2022-blake3-aes-128-gcm"
+    local LOCAL_SS_METHOD="2022-blake3-aes-128-gcm"
+    local REALITY_LANDING_COUNT=0
+    local MULTI_ROUTE_COUNT=0
+    local -a LANDING_LINKS=()
+    local -a REALITY_LANDING_UUIDS=()
+    local -a MULTI_ROUTE_PORTS=()
+    local -a MULTI_ROUTE_MANUAL_PORTS=()
+    local -a MULTI_ROUTE_UUIDS=()
+    local -a MULTI_ROUTE_SS_PASSWORDS=()
+    local -a MULTI_ROUTE_SS_LINKS=()
+    local -a MULTI_ROUTE_SS_LINKS_V6=()
+    local -a MULTI_ROUTE_VLESS_LINKS=()
+    local -a MULTI_ROUTE_VLESS_LINKS_V6=()
+    local -a LANDING_LABELS=()
+    local -a LANDING_JSONS=()
+    local -a LANDING_TAGS=()
+    local XHTTP_SPLIT_DIRECTION="v6_up_v4_down"
+    local XHTTP_SPLIT_DESC=""
+    local XHTTP_PATH=""
+    local XHTTP_REQ_V4=""
+    local XHTTP_REQ_V6=""
+    local PREFLIGHT_SERVER_IP_V4=""
+    local PREFLIGHT_SERVER_IP_V6=""
+    local PREFLIGHT_SERVER_IP_RAW=""
+    ENC_PADDING_PROFILE_DESC=$(get_vlessenc_padding_profile_desc off)
+    XHTTP_SPLIT_DESC=$(get_xhttp_split_direction_desc v6_up_v4_down)
+    XHTTP_PATH=$(generate_xhttp_path)
+    REALITY_GATE_RULES_JSON=""
+
+    while true; do
+        echo -e "
+${CYAN}[Step 2/7] 第二层：安装模式${NC}"
+        if is_quick_install_noninteractive; then
+            echo -e "${YELLOW}  检测到非交互快速安装：安装模式自动使用默认值（自动模式）。${NC}"
+            INSTALL_MODE="auto"
+        else
+            while true; do
+                echo -e "  ${CYAN}1.${NC} 自动模式"
+                echo -e "  ${CYAN}2.${NC} 手动模式"
+                echo -e "  ${CYAN}0.${NC} 返回主菜单"
+                read_input -r -p "选择 [1-2/0]，默认 1: " INSTALL_MODE_CHOICE
+                case "${INSTALL_MODE_CHOICE:-1}" in
+                    1|01) INSTALL_MODE="auto"; break ;;
+                    2|02) INSTALL_MODE="manual"; break ;;
+                    0|00) return 0 ;;
+                    *) echo -e "${RED}  请输入 1、2 或 0。${NC}" ;;
+                esac
+            done
+        fi
+
+        while true; do
+            echo -e "
+${CYAN}[Step 3/7] 第三层：模板选择${NC}"
+            if is_quick_install_noninteractive; then
+                if [[ -n "$QUICK_SCENARIO" ]]; then
+                    SCENARIO="$QUICK_SCENARIO"
+                    case "$SCENARIO" in
+                        01) SCENARIO="1" ;;
+                        02) SCENARIO="2" ;;
+                        03) SCENARIO="3" ;;
+                        04) SCENARIO="4" ;;
+                        05) SCENARIO="5" ;;
+                        06) SCENARIO="6" ;;
+                        07) SCENARIO="7" ;;
+                        08) SCENARIO="8" ;;
+                        1|2|3|4|5|6|7|8) ;;
+                        *)
+                            echo -e "${RED}  ✗ 快速安装模板编号无效：${SCENARIO}，仅支持 1-8。${NC}"
+                            return 1
+                            ;;
+                    esac
+                    echo -e "${YELLOW}  检测到非交互快速安装：安装模板自动使用指定值（$(get_install_scenario_label "$SCENARIO")）。${NC}"
+                else
+                    SCENARIO="1"
+                    echo -e "${YELLOW}  检测到非交互快速安装：安装模板自动使用默认值（主菜单 1：Reality 直出 / 多落地，非交互模式默认 0 个落地）。${NC}"
+                fi
+            else
+                SCENARIO=$(choose_install_scenario)
+                case "$SCENARIO" in
+                    __BACK__)
+                        break
+                        ;;
+                    __MAIN__)
+                        return 0
+                        ;;
+                    __CHAIN_SS__)
+                        SCENARIO="5"
+                        ;;
+                    __CHAIN_VLESSENC__)
+                        SCENARIO="6"
+                        ;;
+                esac
+            fi
+
+            while true; do
+                TEMPLATE_LABEL=$(get_install_scenario_label "$SCENARIO")
+                FREEDOM_DOMAIN_STRATEGY="UseIPv4"
+                REALITY_PORT="$DEFAULT_PORT"
+                SNI_SOURCE="auto"
+                MANUAL_DEST=""
+                DEST=""
+                SS_PORT_SOURCE="auto"
+                MANUAL_SS_PORT=""
+                ENC_PORT_SOURCE="auto"
+                MANUAL_ENC_PORT=""
+                ENC_RTT_MODE="0rtt"
+                ENC_SHAPE_MODE="xorpub"
+                ENC_TICKET_WINDOW="600s"
+                ENC_AUTH_METHOD="x25519"
+                ENC_PADDING_PROFILE="off"
+                ENC_PADDING_PROFILE_DESC="$(get_vlessenc_padding_profile_desc off)"
+                ENC_PADDING_CLIENT=""
+                ENC_PADDING_SERVER=""
+                NEED_LANDING="0"
+                LANDING_LINK=""
+                LANDING_EXPECT="any"
+                FREEDOM_DESC="IPv4 优先"
+                SS_METHOD_DESC="2022-blake3-aes-128-gcm"
+                LOCAL_SS_METHOD="2022-blake3-aes-128-gcm"
+                REALITY_LANDING_COUNT=0
+                MULTI_ROUTE_COUNT=0
+                LANDING_LINKS=()
+                REALITY_LANDING_UUIDS=()
+                MULTI_ROUTE_PORTS=()
+                MULTI_ROUTE_MANUAL_PORTS=()
+                MULTI_ROUTE_UUIDS=()
+                MULTI_ROUTE_SS_PASSWORDS=()
+                MULTI_ROUTE_SS_LINKS=()
+                MULTI_ROUTE_SS_LINKS_V6=()
+                MULTI_ROUTE_VLESS_LINKS=()
+                MULTI_ROUTE_VLESS_LINKS_V6=()
+                LANDING_LABELS=()
+                LANDING_JSONS=()
+                LANDING_TAGS=()
+                XHTTP_SPLIT_DIRECTION="v6_up_v4_down"
+                XHTTP_SPLIT_DESC="$(get_xhttp_split_direction_desc v6_up_v4_down)"
+                XHTTP_PATH="$(generate_xhttp_path)"
+                XHTTP_REQ_V4=""
+                XHTTP_REQ_V6=""
+                REALITY_GATE_RULES_JSON=""
+                echo -e "${GREEN}  已选：${TEMPLATE_LABEL}${NC}"
+
+                case "$SCENARIO" in
+                    1)
+                        echo -e "${CYAN}  说明：Reality 专用模板支持 0-10 个落地出口。0 代表纯直出；1-10 代表在直出之外增加对应数量的落地入口。${NC}"
+                        echo -e "${CYAN}  这些入口共用同一个 Reality 监听端口，通过不同用户 / UUID 区分直出与各个落地出口。${NC}"
+                        if is_quick_install_noninteractive; then
+                            REALITY_LANDING_COUNT="0"
+                            echo -e "${YELLOW}  非交互快速安装默认使用纯直出，不添加 Reality 落地。${NC}"
+                        else
+                            REALITY_LANDING_COUNT=$(choose_reality_landing_count)
+                        fi
+                        case "$REALITY_LANDING_COUNT" in
+                            __BACK__)
+                                break
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        if (( REALITY_LANDING_COUNT > 0 )); then
+                            NEED_LANDING="1"
+                            LANDING_EXPECT="any"
+                        fi
+                        ;;
+                    5)
+                        echo -e "${CYAN}  这是 SS 入站 + 多出口模式：直出和每个落地各使用一个独立高位端口。支持 0-10 个落地。${NC}"
+                        if is_quick_install_noninteractive; then
+                            MULTI_ROUTE_COUNT="0"
+                            echo -e "${YELLOW}  非交互快速安装默认使用 0 个落地，仅保留 SS 直出。${NC}"
+                        else
+                            MULTI_ROUTE_COUNT=$(choose_reality_landing_count)
+                        fi
+                        case "$MULTI_ROUTE_COUNT" in
+                            __BACK__)
+                                break
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        if (( MULTI_ROUTE_COUNT > 0 )); then
+                            NEED_LANDING="1"
+                            LANDING_EXPECT="any"
+                        fi
+                        ;;
+                    6)
+                        echo -e "${CYAN}  这是 Vless-Enc 入站 + 多出口模式：直出和每个落地各使用一个独立高位端口。支持 0-10 个落地。${NC}"
+                        if is_quick_install_noninteractive; then
+                            MULTI_ROUTE_COUNT="0"
+                            echo -e "${YELLOW}  非交互快速安装默认使用 0 个落地，仅保留 Vless-Enc 直出。${NC}"
+                        else
+                            MULTI_ROUTE_COUNT=$(choose_reality_landing_count)
+                        fi
+                        case "$MULTI_ROUTE_COUNT" in
+                            __BACK__)
+                                break
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        if (( MULTI_ROUTE_COUNT > 0 )); then
+                            NEED_LANDING="1"
+                            LANDING_EXPECT="any"
+                        fi
+                        ;;
+                    7)
+                        echo -e "${CYAN}  说明：该模板使用 XHTTP + Reality，并通过 downloadSettings 做去程 / 回程分离。${NC}"
+                        echo -e "${CYAN}  这些入口共用同一个 XHTTP + Reality 监听端口，支持 0-10 个落地，通过不同用户 / UUID 区分直出与各个落地出口。${NC}"
+                        if is_quick_install_noninteractive; then
+                            REALITY_LANDING_COUNT="0"
+                            echo -e "${YELLOW}  非交互快速安装默认使用纯直出，不添加 XHTTP + Reality 落地。${NC}"
+                        else
+                            REALITY_LANDING_COUNT=$(choose_reality_landing_count)
+                        fi
+                        case "$REALITY_LANDING_COUNT" in
+                            __BACK__)
+                                break
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        if (( REALITY_LANDING_COUNT > 0 )); then
+                            NEED_LANDING="1"
+                            LANDING_EXPECT="any"
+                        fi
+                        ;;
+                    8)
+                        ENC_RTT_MODE="1rtt"
+                        ENC_SHAPE_MODE="random"
+                        ENC_AUTH_METHOD="mlkem768"
+                        ENC_PADDING_PROFILE="aggressive"
+                        ENC_PADDING_PROFILE_DESC="$(get_vlessenc_padding_profile_desc aggressive)"
+                        echo -e "${RED}${BOLD}  警告：该模板为 XHTTP + Vless-Enc，无 TLS / 无 Reality，仅适合实验研究，不建议在高风险公网环境使用。${NC}"
+                        ;;
+                esac
+
+                echo -e "${YELLOW}  说明：主菜单 1 为覆盖安装，会生成新的完整配置并替换当前 Xray 配置；旧配置会先自动备份。${NC}"
+
+                if [[ "$INSTALL_MODE" == "auto" ]]; then
+                    echo -e "${CYAN}  自动模式将使用本模板默认值：${NC}"
+                    case "$SCENARIO" in
+                        1)
+                            echo -e "${CYAN}    - Reality 端口：${REALITY_PORT}${NC}"
+                            echo -e "${CYAN}    - Reality SNI：自动测速选优${NC}"
+                            if (( REALITY_LANDING_COUNT == 0 )); then
+                                echo -e "${CYAN}    - 架构：纯直出${NC}"
+                            else
+                                echo -e "${CYAN}    - 架构：直出 + ${REALITY_LANDING_COUNT} 个落地出口${NC}"
+                            fi
+                            ;;
+                        2)
+                            echo -e "${CYAN}    - SS2022 加密：${SS_METHOD_DESC}${NC}"
+                            echo -e "${CYAN}    - SS2022 端口：随机高位端口${NC}"
+                            ;;
+                        3)
+                            echo -e "${CYAN}    - Vless-Enc：xorpub / 0rtt / x25519 认证${NC}"
+                            echo -e "${CYAN}    - Vless-Enc padding / delay：${ENC_PADDING_PROFILE_DESC}${NC}"
+                            echo -e "${CYAN}    - Vless-Enc 端口：随机高位端口${NC}"
+                            ;;
+                        4)
+                            echo -e "${CYAN}    - Reality 端口：${REALITY_PORT}${NC}"
+                            echo -e "${CYAN}    - Reality SNI：自动测速选优${NC}"
+                            echo -e "${CYAN}    - SS2022 加密：${SS_METHOD_DESC}${NC}"
+                            echo -e "${CYAN}    - Vless-Enc：xorpub / 0rtt / x25519 认证${NC}"
+                            echo -e "${CYAN}    - Vless-Enc padding / delay：${ENC_PADDING_PROFILE_DESC}${NC}"
+                            ;;
+                        5)
+                            echo -e "${CYAN}    - 入口：SS 入站${NC}"
+                            echo -e "${CYAN}    - 路由：直出 + ${MULTI_ROUTE_COUNT} 个落地${NC}"
+                            echo -e "${CYAN}    - 每条路由：独立高位端口${NC}"
+                            echo -e "${CYAN}    - 落地出站：按输入的 SS / VLESS / Reality 链接生成${NC}"
+                            ;;
+                        6)
+                            echo -e "${CYAN}    - Vless-Enc：xorpub / 0rtt / x25519 认证${NC}"
+                            echo -e "${CYAN}    - Vless-Enc padding / delay：${ENC_PADDING_PROFILE_DESC}${NC}"
+                            echo -e "${CYAN}    - 入口：Vless-Enc 入站${NC}"
+                            echo -e "${CYAN}    - 路由：直出 + ${MULTI_ROUTE_COUNT} 个落地${NC}"
+                            echo -e "${CYAN}    - 每条路由：独立高位端口${NC}"
+                            echo -e "${CYAN}    - 落地出站：按输入的 SS / VLESS / Reality 链接生成${NC}"
+                            ;;
+                        7)
+                            echo -e "${CYAN}    - XHTTP + Reality：启用${NC}"
+                            echo -e "${CYAN}    - 分离方向：${XHTTP_SPLIT_DESC}${NC}"
+                            echo -e "${CYAN}    - XHTTP path：${XHTTP_PATH}${NC}"
+                            echo -e "${CYAN}    - Reality 端口：${REALITY_PORT}${NC}"
+                            echo -e "${CYAN}    - Reality SNI：自动测速选优${NC}"
+                            echo -e "${CYAN}    - 客户端：推荐 v2rayN + Xray 内核；其他客户端本脚本不支持自动适配${NC}"
+                            ;;
+                        8)
+                            echo -e "${CYAN}    - XHTTP + Vless-Enc：实验性启用${NC}"
+                            echo -e "${CYAN}    - 分离方向：${XHTTP_SPLIT_DESC}${NC}"
+                            echo -e "${CYAN}    - XHTTP path：${XHTTP_PATH}${NC}"
+                            echo -e "${CYAN}    - Vless-Enc：random / 1rtt / mlkem768 认证${NC}"
+                            echo -e "${CYAN}    - Vless-Enc padding / delay：${ENC_PADDING_PROFILE_DESC}${NC}"
+                            echo -e "${CYAN}    - 客户端：推荐 v2rayN + Xray 内核；其他客户端本脚本不支持自动适配${NC}"
+                            ;;
+                    esac
+                fi
+
+                if [[ "$INSTALL_MODE" == "manual" ]]; then
+                    echo ""
+                    if ask_yes_no "  是否手动选择直连出站的 IPv4 策略（y=手动选择，n=使用默认配置：IPv4 优先）"; then
+                        FREEDOM_DOMAIN_STRATEGY=$(choose_freedom_domain_strategy)
+                        case "$FREEDOM_DOMAIN_STRATEGY" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        [[ "$FREEDOM_DOMAIN_STRATEGY" == "ForceIPv4" ]] && FREEDOM_DESC="仅 IPv4"
+                    fi
+
+                    if [[ "$SCENARIO" == "1" || "$SCENARIO" == "4" || "$SCENARIO" == "7" ]]; then
+                        echo ""
+                        echo -e "${CYAN}  当前模板包含 Reality 入站，因此需要设置 Reality 端口与 SNI。${NC}"
+                        echo -e "${CYAN}  Reality 端口：${NC}"
+                        REALITY_PORT=$(choose_reality_port)
+                        case "$REALITY_PORT" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        echo ""
+                        if ask_yes_no "  是否手动输入 REALITY SNI（y=手动输入，n=使用默认配置：自动测速选优）"; then
+                            MANUAL_DEST=$(read_manual_sni "请输入 SNI / serverName / dest 域名: ")
+                            SNI_SOURCE="manual"
+                        fi
+                    fi
+
+                    if [[ "$SCENARIO" == "2" || "$SCENARIO" == "4" || "$SCENARIO" == "5" ]]; then
+                        echo ""
+                        echo -e "${YELLOW}  提醒：该模板没有 TLS 或 REALITY 外层，流量特征与部署暴露程度更高，不建议直接用于高风险公网链路。${NC}"
+                        echo -e "${CYAN}  先定义 SS2022 入站，再决定具体加密方式。${NC}"
+                        echo -e "${CYAN}  SS2022 加密方式：${NC}"
+                        LOCAL_SS_METHOD=$(choose_ss_method)
+                        case "$LOCAL_SS_METHOD" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        SS_METHOD_DESC="$LOCAL_SS_METHOD"
+                        if ask_yes_no "  是否手动指定 SS2022 端口（y=手动指定，n=使用默认配置：随机高位端口）"; then
+                            MANUAL_SS_PORT=$(read_manual_ss_port "请输入 SS2022 端口: ")
+                            SS_PORT_SOURCE="manual"
+                        fi
+                    fi
+
+                    if [[ "$SCENARIO" == "3" || "$SCENARIO" == "4" || "$SCENARIO" == "6" || "$SCENARIO" == "8" ]]; then
+                        echo ""
+                        if [[ "$SCENARIO" != "8" ]]; then
+                            echo -e "${YELLOW}  提醒：该模板没有 TLS 或 REALITY 外层，流量特征与部署暴露程度更高，不建议直接用于高风险公网链路。${NC}"
+                        else
+                            echo -e "${RED}  警告！该模板无 TLS / 无 Reality，仅适合实验研究。${NC}"
+                        fi
+                        echo -e "${CYAN}  先定义 Vless-Enc 入站端口，再配置握手与实验性参数。${NC}"
+                        if ask_yes_no "  是否手动指定 Vless-Enc 端口（y=手动指定，n=使用默认配置：随机高位端口）"; then
+                            MANUAL_ENC_PORT=$(read_manual_ss_port "请输入 Vless-Enc 端口: ")
+                            ENC_PORT_SOURCE="manual"
+                        fi
+                        echo ""
+                        echo -e "${CYAN}  Vless-Enc 握手模式：${NC}"
+                        echo -e "${CYAN}  - 0rtt：更偏性能；1rtt：更偏保守${NC}"
+                        ENC_RTT_MODE=$(choose_vlessenc_rtt_mode)
+                        case "$ENC_RTT_MODE" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        echo ""
+                        echo -e "${CYAN}  Vless-Enc 包形态：${NC}"
+                        echo -e "${CYAN}  - xorpub / native / random：默认推荐 xorpub${NC}"
+                        ENC_SHAPE_MODE=$(choose_vlessenc_shape_mode)
+                        case "$ENC_SHAPE_MODE" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        echo ""
+                        echo -e "${CYAN}  Vless-Enc 认证方式：${NC}"
+                        echo -e "${CYAN}  - x25519 更短；mlkem768 更长且认证也抗量子${NC}"
+                        ENC_AUTH_METHOD=$(choose_vlessenc_auth_method)
+                        case "$ENC_AUTH_METHOD" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        echo ""
+                        echo -e "${CYAN}  Vless-Enc 实验性 padding / delay：${NC}"
+                        echo -e "${CYAN}  - 本质：padding 改单次包长范围，delay 改发包间隔；两端规则可以不同。${NC}"
+                        echo -e "${CYAN}  - 温和档主要做轻量长度 / 节奏扰动；激进档会加入更强抖动，但更容易带来时延、吞吐和兼容性波动。${NC}"
+                        echo -e "${CYAN}  - 手动自定义时：客户端规则写入分享链接 encryption，服务端规则写入入站 decryption。${NC}"
+                        ENC_PADDING_PROFILE=$(choose_vlessenc_padding_profile)
+                        case "$ENC_PADDING_PROFILE" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        ENC_PADDING_PROFILE_DESC=$(get_vlessenc_padding_profile_desc "$ENC_PADDING_PROFILE")
+                        if [[ "$ENC_PADDING_PROFILE" == "custom" ]]; then
+                            echo ""
+                            ENC_PADDING_CLIENT=$(read_manual_vlessenc_padding_profile "客户端")
+                            echo ""
+                            ENC_PADDING_SERVER=$(read_manual_vlessenc_padding_profile "服务端")
+                        fi
+                    fi
+
+                    if [[ ("$SCENARIO" == "5" || "$SCENARIO" == "6") && "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                        echo ""
+                        echo -e "${CYAN}  每个落地入口都会使用独立高位端口；可手动指定，也可让脚本随机分配。${NC}"
+                        for route_idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                            route_port="auto"
+                            if ask_yes_no "  是否手动指定落地${route_idx}端口（y=手动指定，n=随机高位端口）"; then
+                                while true; do
+                                    route_port=$(read_manual_ss_port "请输入落地${route_idx}端口: ")
+                                    duplicate_port=0
+                                    if [[ "$route_port" == "$REALITY_PORT" || "$route_port" == "${LOCAL_SS_PORT:-}" || "$route_port" == "${LOCAL_ENC_PORT:-}" || "$route_port" == "$MANUAL_SS_PORT" || "$route_port" == "$MANUAL_ENC_PORT" ]]; then
+                                        duplicate_port=1
+                                    fi
+                                    for existing_port in "${MULTI_ROUTE_MANUAL_PORTS[@]-}"; do
+                                        [[ "$existing_port" == "$route_port" ]] && duplicate_port=1
+                                    done
+                                    if is_port_in_use_by_non_xray "$route_port" || [[ "$duplicate_port" -eq 1 ]]; then
+                                        echo -e "${RED}  端口 ${route_port} 已被占用或与现有入口冲突，请重新输入。${NC}"
+                                        continue
+                                    fi
+                                    break
+                                done
+                            fi
+                            MULTI_ROUTE_MANUAL_PORTS+=("$route_port")
+                        done
+                    fi
+
+                    if [[ "$SCENARIO" == "7" || "$SCENARIO" == "8" ]]; then
+                        echo ""
+                        echo -e "${CYAN}  当前模板包含 XHTTP 分离链路，需要额外指定分离方向与 path。${NC}"
+                        XHTTP_SPLIT_DIRECTION=$(choose_xhttp_split_direction)
+                        case "$XHTTP_SPLIT_DIRECTION" in
+                            __BACK__)
+                                continue
+                                ;;
+                            __MAIN__)
+                                return 0
+                                ;;
+                        esac
+                        XHTTP_SPLIT_DESC=$(get_xhttp_split_direction_desc "$XHTTP_SPLIT_DIRECTION")
+                        echo -e "${CYAN}  客户端建议：v2rayN + Xray 内核。其他客户端本脚本不支持自动适配。${NC}"
+                        if ask_yes_no "  是否手动指定 XHTTP path（y=手动输入，n=使用默认随机 path）"; then
+                            XHTTP_PATH=$(read_manual_xhttp_path "请输入 XHTTP path: ")
+                        fi
+                    fi
+                fi
+
+                break 3
+            done
+        done
     done
 
-    rm -f -- "$XRAY_UNIT" "$LOGROTATE_CONFIG"
-    if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
-      cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
-        || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
+    if [[ "$SCENARIO" == "1" || "$SCENARIO" == "4" || "$SCENARIO" == "7" ]]; then
+        echo -e "${CYAN}  当前 Reality 端口：${REALITY_PORT}${NC}"
     fi
-    if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
-      cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
-        || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
+    if [[ "$SCENARIO" == "5" || "$SCENARIO" == "6" ]]; then
+        echo -e "${CYAN}  当前多出口数量：${MULTI_ROUTE_COUNT} 个落地；直出与每个落地分别使用独立高位端口${NC}"
     fi
-
-    service_daemon_reload
-    hash -r
-    load_settings
-    resolve_xray_bin
-    resolve_cloudflared_bin
-
-    if [[ $TRANSACTION_OLD_XRAY_SERVICE_ACTIVE -eq 1 ]] \
-        && (xray_unit_is_ours || xray_unit_is_legacy_ours); then
-      xray_service_enable_now || true
+    if [[ "$SCENARIO" == "2" || "$SCENARIO" == "4" || "$SCENARIO" == "5" ]]; then
+        echo -e "${CYAN}  当前 SS2022 加密方式：${SS_METHOD_DESC}${NC}"
     fi
-
-    if [[ $TRANSACTION_OLD_XRAY_TUNNEL_RUNNING -eq 1 \
-        && -x "$XRAY_CLOUDFLARED_RUNNER" \
-        && -f "$XRAY_STATE_JSON" ]]; then
-      (
-        load_xray_state
-        if xray_service_is_active; then
-          start_xray_tunnel
+    if [[ "$SCENARIO" == "3" || "$SCENARIO" == "4" || "$SCENARIO" == "6" || "$SCENARIO" == "8" ]]; then
+        echo -e "${CYAN}  当前 Vless-Enc 实验性 padding / delay：${ENC_PADDING_PROFILE_DESC}${NC}"
+    fi
+    if [[ "$SCENARIO" == "7" || "$SCENARIO" == "8" ]]; then
+        XHTTP_REQ_V4=$(get_public_ip_v4 || true)
+        XHTTP_REQ_V6=$(get_public_ip_v6 || true)
+        if [[ -z "$XHTTP_REQ_V4" || -z "$XHTTP_REQ_V6" ]]; then
+            echo -e "${RED}  ✗ 当前机器未检测到双栈公网（需要同时具备 IPv4 与 IPv6），无法使用 XHTTP 分离链路。${NC}"
+            return 1
         fi
-      ) >/dev/null 2>&1 || true
+        echo -e "${CYAN}  当前 XHTTP 分离方向：${XHTTP_SPLIT_DESC}${NC}"
+        echo -e "${CYAN}  当前 XHTTP path：${XHTTP_PATH}${NC}"
     fi
 
-    if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]]; then
-      (remove_service_account) >/dev/null 2>&1 || true
+    if [[ "$SCENARIO" == "5" || "$SCENARIO" == "6" ]] && [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+        echo ""
+        echo -e "${CYAN}  当前模板需要输入 ${MULTI_ROUTE_COUNT} 个落地出站链接（ss:// 或 vless://）。${NC}"
+        local idx
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            while true; do
+                read_input -r -p "请输入落地${idx}出站链接: " LANDING_LINK
+                LANDING_LINK=$(normalize_share_link "$LANDING_LINK")
+                [[ -n "$LANDING_LINK" ]] || { echo -e "${RED}  链接不能为空。${NC}"; continue; }
+                case "$LANDING_LINK" in
+                    ss://*|vless://*) LANDING_LINKS+=("$LANDING_LINK"); break ;;
+                    *) echo -e "${RED}  仅支持 ss:// 或 vless:// 链接。${NC}" ;;
+                esac
+            done
+        done
+    elif [[ "$SCENARIO" == "1" && "$REALITY_LANDING_COUNT" -gt 0 ]] || [[ "$SCENARIO" == "7" && "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+        echo ""
+        echo -e "${CYAN}  当前模板为 Reality 多出口模式，需要依次输入 ${REALITY_LANDING_COUNT} 个落地目标链接。${NC}"
+        echo -e "${CYAN}  支持输入 ss:// 或 vless:// 链接；每个链接会绑定到一个独立的用户入口。${NC}"
+        local idx
+        for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+            while true; do
+                read_input -r -p "请输入第 ${idx} 个落地链接: " LANDING_LINK
+                LANDING_LINK=$(normalize_share_link "$LANDING_LINK")
+                [[ -n "$LANDING_LINK" ]] || { echo -e "${RED}  链接不能为空。${NC}"; continue; }
+                case "$LANDING_LINK" in
+                    ss://*|vless://*) LANDING_LINKS+=("$LANDING_LINK"); break ;;
+                    *) echo -e "${RED}  仅支持 ss:// 或 vless:// 链接。${NC}" ;;
+                esac
+            done
+        done
+    elif [[ "$NEED_LANDING" == "1" ]]; then
+        echo ""
+        echo -e "${CYAN}  当前模板需要输入一个出站目标链接。${NC}"
+        case "$LANDING_EXPECT" in
+            ss) echo -e "${CYAN}  原因：当前模板需要一个 ss:// 出站目标。${NC}" ;;
+            vless) echo -e "${CYAN}  原因：当前模板需要一个 vless:// 出站目标。${NC}" ;;
+            any) echo -e "${CYAN}  原因：当前模板允许 ss:// 或 vless:// 出站目标（包含 Vless-Enc / Reality 参数）。${NC}" ;;
+        esac
+        while true; do
+            read_input -r -p "请输入出站目标链接: " LANDING_LINK
+            LANDING_LINK=$(normalize_share_link "$LANDING_LINK")
+            [[ -n "$LANDING_LINK" ]] || { echo -e "${RED}  链接不能为空。${NC}"; continue; }
+            case "$LANDING_EXPECT" in
+                ss)
+                    [[ "$LANDING_LINK" == ss://* ]] || { echo -e "${RED}  该模板只接受 ss:// 链接。${NC}"; continue; }
+                    ;;
+                vless)
+                    [[ "$LANDING_LINK" == vless://* ]] || { echo -e "${RED}  该模板只接受 vless:// 链接。${NC}"; continue; }
+                    ;;
+                any)
+                    case "$LANDING_LINK" in
+                        ss://*|vless://*) ;;
+                        *) echo -e "${RED}  请输入 ss:// 或 vless:// 链接。${NC}"; continue ;;
+                    esac
+                    ;;
+            esac
+            LANDING_LINKS=("$LANDING_LINK")
+            break
+        done
+    fi
 
-      if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-        if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
-            && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-          groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
+    echo -e "\n${CYAN}  安装前网络信息预检${NC}"
+    PREFLIGHT_SERVER_IP_V4=$(get_public_ip_v4 || true)
+    PREFLIGHT_SERVER_IP_V6=$(get_public_ip_v6 || true)
+    if [[ -n "$PREFLIGHT_SERVER_IP_V4" ]]; then
+        PREFLIGHT_SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_V4"
+    elif [[ -n "$PREFLIGHT_SERVER_IP_V6" ]]; then
+        PREFLIGHT_SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_V6"
+    fi
+    if [[ -z "$PREFLIGHT_SERVER_IP_RAW" ]]; then
+        read_input -r -p "请输入本机公网 IP/域名: " PREFLIGHT_SERVER_IP_RAW
+    fi
+    [[ -n "$PREFLIGHT_SERVER_IP_RAW" ]] || {
+        echo -e "${RED}  未提供服务器地址，安装中止。${NC}"
+        return 1
+    }
+
+    echo -e "\n${CYAN}[Step 4/7] 安装依赖与 Xray 核心${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+    install_deps || {
+        echo -e "${RED}依赖安装失败，请检查网络和软件源。${NC}"
+        return 1
+    }
+
+    echo -e "${YELLOW}  安装 Xray 核心程序...${NC}"
+    download_and_run_xray_installer install || {
+        echo -e "${RED}Xray 安装失败！请检查网络连接后重试。${NC}"
+        return 1
+    }
+
+    if [[ ! -x /usr/local/bin/xray ]]; then
+        echo -e "${RED}Xray 安装失败：未找到 /usr/local/bin/xray${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ 安装成功：$(/usr/local/bin/xray version | head -1)${NC}"
+
+    if [[ -f "$CONFIG_FILE" ]] && ! /usr/local/bin/xray run -test -config "$CONFIG_FILE" >/dev/null 2>&1; then
+        echo -e "${RED}  ✗ 新核心无法读取当前正式配置，已立即中止并准备恢复旧核心。${NC}"
+        return 1
+    fi
+    if [[ "$TRANSACTION_XRAY_ACTIVE" == "1" ]] && ! systemctl is-active --quiet xray; then
+        echo -e "${RED}  ✗ 核心安装后旧服务未保持运行，已立即中止并准备恢复。${NC}"
+        return 1
+    fi
+
+    if [[ "$SCENARIO" == "1" || "$SCENARIO" == "4" || "$SCENARIO" == "7" ]]; then
+        echo -e "\n${CYAN}[Step 5/7] REALITY SNI 延迟测速${NC}"
+        render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+        if [[ "$SNI_SOURCE" == "manual" ]]; then
+            DEST="$MANUAL_DEST"
+            echo -e "${GREEN}  ✓ 使用手动指定 SNI：${DEST}${NC}"
+        else
+            load_sni_pool
+            local CURRENT_POOL_SIG=""
+            CURRENT_POOL_SIG=$(get_loaded_sni_pool_signature)
+            if [[ -n "$BEST_DEST" && -n "$BEST_DEST_POOL_SIG" && "$BEST_DEST_POOL_SIG" == "$CURRENT_POOL_SIG" ]]; then
+                DEST="$BEST_DEST"
+                echo -e "${GREEN}  ✓ 复用当前会话已测速的最优 SNI：${DEST}${NC}"
+            else
+                benchmark_dest || return 1
+                DEST="$BEST_DEST"
+            fi
         fi
+    else
+        echo -e "\n${CYAN}[Step 5/7] 模板参数确认${NC}"
+        render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+        echo -e "${GREEN}  ✓ 当前模板无需 REALITY SNI 测速${NC}"
+    fi
 
-        if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 \
-            && -d "$SERVICE_HOME" \
-            && ! -L "$SERVICE_HOME" ]]; then
-          rm -rf -- "$SERVICE_HOME"
+    echo -e "\n${CYAN}[Step 6/7] 生成密钥、端口与落地参数${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+    local PORT="$REALITY_PORT"
+    local SHORT_ID UUID KEYS PRIVATE_KEY PUBLIC_KEY
+    local REALITY_DIRECT_UUID=""
+    local LOCAL_SS_PORT="" LOCAL_SS_PWD=""
+    local LOCAL_ENC_PORT=""
+    local VLESS_ENC_DECRYPTION="" VLESS_ENC_ENCRYPTION=""
+    local VLESSENC_PAIR_RAW="" VLESS_ENC_DECRYPTION_BASE="" VLESS_ENC_ENCRYPTION_BASE=""
+    local -a REALITY_LANDING_LINKS=()
+    local -a REALITY_LANDING_LINKS_V6=()
+
+    if [[ "$SCENARIO" == "1" || "$SCENARIO" == "4" || "$SCENARIO" == "7" ]]; then
+        SHORT_ID=$(generate_short_id) || { echo -e "${RED}  ✗ 生成 shortId 失败，安装已中止。${NC}"; return 1; }
+        KEYS=$(/usr/local/bin/xray x25519 2>/dev/null || true)
+        PRIVATE_KEY=$(printf '%s' "$KEYS" | extract_x25519_private || true)
+        PUBLIC_KEY=$(printf '%s'  "$KEYS" | extract_x25519_public || true)
+        [[ -n "$PRIVATE_KEY" && -n "$PUBLIC_KEY" ]] || { echo -e "${RED}  ✗ 生成 Reality x25519 密钥失败，安装已中止。${NC}"; return 1; }
+        if [[ "$SCENARIO" == "1" || "$SCENARIO" == "7" ]]; then
+            REALITY_DIRECT_UUID=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+            [[ -n "$REALITY_DIRECT_UUID" ]] || { echo -e "${RED}  ✗ 生成 Reality UUID 失败，安装已中止。${NC}"; return 1; }
+            local idx
+            for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                local one_uuid
+                one_uuid=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+                [[ -n "$one_uuid" ]] || { echo -e "${RED}  ✗ 生成第 ${idx} 个落地 UUID 失败，安装已中止。${NC}"; return 1; }
+                REALITY_LANDING_UUIDS+=("$one_uuid")
+            done
+        else
+            UUID=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+            [[ -n "$UUID" ]] || { echo -e "${RED}  ✗ 生成 Reality UUID 失败，安装已中止。${NC}"; return 1; }
         fi
-      fi
     fi
 
-    if [[ ! -f "${TRANSACTION_DIR}/had-data" ]]; then
-      rmdir "$DATA_DIR" 2>/dev/null || true
+    if [[ "$SCENARIO" == "3" || "$SCENARIO" == "4" || "$SCENARIO" == "6" || "$SCENARIO" == "8" ]]; then
+        if [[ -z "${UUID:-}" ]]; then
+            UUID=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+            [[ -n "$UUID" ]] || { echo -e "${RED}  ✗ 生成 Vless-Enc UUID 失败，安装已中止。${NC}"; return 1; }
+        fi
     fi
 
-    if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
-      warn "Xray 回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
+    if [[ "$SCENARIO" == "2" || "$SCENARIO" == "4" || "$SCENARIO" == "5" ]]; then
+        if [[ "$SS_PORT_SOURCE" == "manual" ]]; then
+            while is_port_in_use_by_non_xray "$MANUAL_SS_PORT" || [[ "$MANUAL_SS_PORT" == "$PORT" ]]; do
+                echo -e "${RED}  端口 ${MANUAL_SS_PORT} 已被占用或与 Reality 冲突。${NC}"
+                MANUAL_SS_PORT=$(read_manual_ss_port "请重新输入 SS2022 端口: ")
+            done
+            LOCAL_SS_PORT="$MANUAL_SS_PORT"
+        else
+            while true; do
+                LOCAL_SS_PORT=$(pick_random_free_port_excluding "$PORT" "$LOCAL_ENC_PORT") || { echo -e "${RED}  ✗ 无法选出可用的随机高位 SS2022 端口。${NC}"; return 1; }
+                duplicate_port=0
+                for existing_port in "${MULTI_ROUTE_MANUAL_PORTS[@]-}"; do
+                    [[ "$existing_port" != "auto" && "$existing_port" == "$LOCAL_SS_PORT" ]] && duplicate_port=1
+                done
+                [[ "$duplicate_port" -eq 0 ]] && break
+            done
+        fi
+        if [[ "$LOCAL_SS_METHOD" == *"256"* ]]; then
+            LOCAL_SS_PWD=$(openssl rand -base64 32 | tr -d '\n')
+        else
+            LOCAL_SS_PWD=$(openssl rand -base64 16 | tr -d '\n')
+        fi
     fi
-    TRANSACTION_SCOPE="all"
-    TRANSACTION_DIR=""
-    warn "已执行 Xray 专项回滚；sing-box 服务和隧道未被回滚流程改动。"
-    return 0
-  fi
 
-  (stop_tunnel) >/dev/null 2>&1 || true
-  (stop_xray_tunnel) >/dev/null 2>&1 || true
-
-  if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-    service_disable_now || true
-  fi
-  if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-    xray_service_disable_now || true
-  fi
-
-  rm -rf -- "$DATA_DIR"
-  rm -rf -- "$BIN_DIR"
-  rm -f -- "$SINGBOX_UNIT" "$XRAY_UNIT" "$LOGROTATE_CONFIG"
-
-  if [[ -f "${TRANSACTION_DIR}/had-data" ]]; then
-    cp -a "${TRANSACTION_DIR}/data" "$DATA_DIR" \
-      || warn "回滚数据目录失败：${DATA_DIR}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-bin" ]]; then
-    cp -a "${TRANSACTION_DIR}/bin" "$BIN_DIR" \
-      || warn "回滚程序目录失败：${BIN_DIR}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-unit" ]]; then
-    cp -a "${TRANSACTION_DIR}/sing-box.service" "$SINGBOX_UNIT" \
-      || warn "回滚服务文件失败：${SINGBOX_UNIT}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-xray-unit" ]]; then
-    cp -a "${TRANSACTION_DIR}/xray.service" "$XRAY_UNIT" \
-      || warn "回滚 Xray 服务文件失败：${XRAY_UNIT}"
-  fi
-  if [[ -f "${TRANSACTION_DIR}/had-logrotate" ]]; then
-    cp -a "${TRANSACTION_DIR}/logrotate" "$LOGROTATE_CONFIG" \
-      || warn "回滚日志轮转配置失败：${LOGROTATE_CONFIG}"
-  fi
-
-  service_daemon_reload
-  load_settings
-  resolve_singbox_bin
-  resolve_xray_bin
-  resolve_cloudflared_bin
-
-  if [[ $TRANSACTION_OLD_SERVICE_ACTIVE -eq 1 ]] \
-      && (singbox_unit_is_ours || singbox_unit_is_legacy_ours); then
-    service_enable_now || true
-  fi
-
-  if [[ $TRANSACTION_OLD_TUNNEL_RUNNING -eq 1 \
-      && -x "$CLOUDFLARED_RUNNER" \
-      && -f "$STATE_JSON" ]]; then
-    (
-      load_state
-      if service_is_active; then
-        start_tunnel
-      fi
-    ) >/dev/null 2>&1 || true
-  fi
-
-  if [[ $TRANSACTION_OLD_XRAY_SERVICE_ACTIVE -eq 1 ]] \
-      && (xray_unit_is_ours || xray_unit_is_legacy_ours); then
-    xray_service_enable_now || true
-  fi
-
-  if [[ $TRANSACTION_OLD_XRAY_TUNNEL_RUNNING -eq 1 \
-      && -x "$XRAY_CLOUDFLARED_RUNNER" \
-      && -f "$XRAY_STATE_JSON" ]]; then
-    (
-      load_xray_state
-      if xray_service_is_active; then
-        start_xray_tunnel
-      fi
-    ) >/dev/null 2>&1 || true
-  fi
-
-  if [[ $TRANSACTION_OLD_SERVICE_ACCOUNT -eq 0 ]]; then
-    (remove_service_account) >/dev/null 2>&1 || true
-
-    if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-      if [[ $TRANSACTION_OLD_SERVICE_GROUP -eq 0 ]] \
-          && getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 || true
-      fi
-
-      if [[ $TRANSACTION_OLD_SERVICE_HOME -eq 0 \
-          && -d "$SERVICE_HOME" \
-          && ! -L "$SERVICE_HOME" ]]; then
-        rm -rf -- "$SERVICE_HOME"
-      fi
+    if [[ "$SCENARIO" == "3" || "$SCENARIO" == "4" || "$SCENARIO" == "6" || "$SCENARIO" == "8" ]]; then
+        if [[ "$ENC_PORT_SOURCE" == "manual" ]]; then
+            while is_port_in_use_by_non_xray "$MANUAL_ENC_PORT" || [[ "$MANUAL_ENC_PORT" == "$PORT" || "$MANUAL_ENC_PORT" == "$LOCAL_SS_PORT" ]]; do
+                echo -e "${RED}  端口 ${MANUAL_ENC_PORT} 已被占用或与现有端口冲突。${NC}"
+                MANUAL_ENC_PORT=$(read_manual_ss_port "请重新输入 Vless-Enc 端口: ")
+            done
+            LOCAL_ENC_PORT="$MANUAL_ENC_PORT"
+        else
+            while true; do
+                LOCAL_ENC_PORT=$(pick_random_free_port_excluding "$PORT" "$LOCAL_SS_PORT") || { echo -e "${RED}  ✗ 无法为 Vless-Enc 选出可用的随机高位端口。${NC}"; return 1; }
+                duplicate_port=0
+                for existing_port in "${MULTI_ROUTE_MANUAL_PORTS[@]-}"; do
+                    [[ "$existing_port" != "auto" && "$existing_port" == "$LOCAL_ENC_PORT" ]] && duplicate_port=1
+                done
+                [[ "$duplicate_port" -eq 0 ]] && break
+            done
+        fi
+        VLESSENC_PAIR_RAW=$(get_vlessenc_pair_from_xray "$ENC_AUTH_METHOD" || true)
+        [[ -n "$VLESSENC_PAIR_RAW" ]] || { echo -e "${RED}  ✗ 调用 xray vlessenc 生成 Vless-Enc 参数失败。${NC}"; return 1; }
+        VLESS_ENC_DECRYPTION_BASE=${VLESSENC_PAIR_RAW%%$'\t'*}
+        VLESS_ENC_ENCRYPTION_BASE=${VLESSENC_PAIR_RAW#*$'\t'}
+        [[ -n "$VLESS_ENC_DECRYPTION_BASE" && -n "$VLESS_ENC_ENCRYPTION_BASE" ]] || { echo -e "${RED}  ✗ 解析 xray vlessenc 输出失败。${NC}"; return 1; }
+        VLESS_ENC_DECRYPTION=$(rewrite_vlessenc_block2_block3 "$VLESS_ENC_DECRYPTION_BASE" "$ENC_SHAPE_MODE" "$ENC_TICKET_WINDOW") || { echo -e "${RED}  ✗ 重写服务端 Vless-Enc 参数失败。${NC}"; return 1; }
+        VLESS_ENC_ENCRYPTION=$(rewrite_vlessenc_block2_block3 "$VLESS_ENC_ENCRYPTION_BASE" "$ENC_SHAPE_MODE" "$ENC_RTT_MODE") || { echo -e "${RED}  ✗ 重写客户端 Vless-Enc 参数失败。${NC}"; return 1; }
+        if [[ "$ENC_PADDING_PROFILE" != "custom" ]]; then
+            ENC_PADDING_CLIENT=$(get_vlessenc_padding_profile_for_side "$ENC_PADDING_PROFILE" "client")
+            ENC_PADDING_SERVER=$(get_vlessenc_padding_profile_for_side "$ENC_PADDING_PROFILE" "server")
+        fi
+        if [[ -n "$ENC_PADDING_CLIENT" ]]; then
+            VLESS_ENC_ENCRYPTION=$(rewrite_vlessenc_padding_profile "$VLESS_ENC_ENCRYPTION" "$ENC_PADDING_CLIENT") || { echo -e "${RED}  ✗ 写入客户端 Vless-Enc padding / delay 失败。${NC}"; return 1; }
+        fi
+        if [[ -n "$ENC_PADDING_SERVER" ]]; then
+            VLESS_ENC_DECRYPTION=$(rewrite_vlessenc_padding_profile "$VLESS_ENC_DECRYPTION" "$ENC_PADDING_SERVER") || { echo -e "${RED}  ✗ 写入服务端 Vless-Enc padding / delay 失败。${NC}"; return 1; }
+        fi
     fi
-  fi
 
-  if ! cleanup_transaction_dir "$TRANSACTION_DIR"; then
-    warn "事务回滚已完成，但临时备份目录未能安全清理：${TRANSACTION_DIR}"
-  fi
-  TRANSACTION_SCOPE="all"
-  TRANSACTION_DIR=""
+    if [[ ("$SCENARIO" == "5" || "$SCENARIO" == "6") && "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+        local idx route_port existing_port duplicate_port one_uuid one_password
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            route_port="${MULTI_ROUTE_MANUAL_PORTS[$((idx-1))]:-auto}"
+            if [[ "$route_port" == "auto" ]]; then
+                while true; do
+                    route_port=$(pick_random_free_port_excluding "$PORT" "$LOCAL_SS_PORT" "$LOCAL_ENC_PORT") || {
+                        echo -e "${RED}  ✗ 无法为落地${idx}选出随机高位端口。${NC}"
+                        return 1
+                    }
+                    duplicate_port=0
+                    for existing_port in "${MULTI_ROUTE_PORTS[@]-}"; do
+                        [[ "$existing_port" == "$route_port" ]] && duplicate_port=1
+                    done
+                    for existing_port in "${MULTI_ROUTE_MANUAL_PORTS[@]-}"; do
+                        [[ "$existing_port" != "auto" && "$existing_port" == "$route_port" ]] && duplicate_port=1
+                    done
+                    [[ "$duplicate_port" -eq 0 ]] && break
+                done
+            fi
+            MULTI_ROUTE_PORTS+=("$route_port")
 
-  warn "已执行回滚；Quick Tunnel 域名无法原样恢复，若旧隧道曾运行，脚本已尽力重新创建。"
+            if [[ "$SCENARIO" == "5" ]]; then
+                if [[ "$LOCAL_SS_METHOD" == *"256"* ]]; then
+                    one_password=$(openssl rand -base64 32 | tr -d '\n')
+                else
+                    one_password=$(openssl rand -base64 16 | tr -d '\n')
+                fi
+                MULTI_ROUTE_SS_PASSWORDS+=("$one_password")
+            else
+                one_uuid=$(/usr/local/bin/xray uuid 2>/dev/null || true)
+                [[ -n "$one_uuid" ]] || { echo -e "${RED}  ✗ 生成落地${idx} Vless-Enc UUID 失败，安装已中止。${NC}"; return 1; }
+                MULTI_ROUTE_UUIDS+=("$one_uuid")
+            fi
+        done
+    fi
+
+    if [[ "$SCENARIO" == "1" && "$REALITY_LANDING_COUNT" -gt 0 ]] || [[ "$SCENARIO" == "7" && "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+        local idx
+        for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+            build_outbound_from_link "${LANDING_LINKS[$((idx-1))]}" "landing${idx}" || { echo -e "${RED}  ✗ 解析第 ${idx} 个落地链接失败，请检查格式。${NC}"; return 1; }
+            print_parsed_outbound_preview
+            LANDING_JSONS+=("$PARSED_OUTBOUND_JSON")
+            LANDING_LABELS+=("$PARSED_LINK_LABEL")
+            LANDING_TAGS+=("landing${idx}")
+        done
+    elif [[ ("$SCENARIO" == "5" || "$SCENARIO" == "6") && "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+        local idx
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            build_outbound_from_link "${LANDING_LINKS[$((idx-1))]}" "landing${idx}" || { echo -e "${RED}  ✗ 解析落地${idx}出站链接失败，请检查格式。${NC}"; return 1; }
+            print_parsed_outbound_preview
+            LANDING_JSONS+=("$PARSED_OUTBOUND_JSON")
+            LANDING_LABELS+=("$PARSED_LINK_LABEL")
+            LANDING_TAGS+=("landing${idx}")
+        done
+    fi
+
+    echo -e "${GREEN}  ✓ 端口、密钥与模板参数已准备完成${NC}"
+
+    precheck_reality_port_before_apply "$SCENARIO" "$PORT" || return 1
+    precheck_reusable_xray_port_before_apply "$LOCAL_SS_PORT" "SS2022" || return 1
+    precheck_reusable_xray_port_before_apply "$LOCAL_ENC_PORT" "Vless-Enc" || return 1
+    if [[ "$SCENARIO" == "5" || "$SCENARIO" == "6" ]]; then
+        local idx
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            precheck_reusable_xray_port_before_apply "${MULTI_ROUTE_PORTS[$((idx-1))]}" "落地${idx}" || return 1
+        done
+    fi
+
+    echo -e "\n${CYAN}[Step 7/7] 写入配置并启动服务${NC}"
+    render_install_context "$TEMPLATE_LABEL" "$INSTALL_MODE"
+    ensure_runtime_layout
+    mkdir -p "$CONFIG_DIR"
+    rm -rf -- "$XHTTP_PATCH_DIR" >/dev/null 2>&1 || true
+    mkdir -p -- "$XHTTP_PATCH_DIR" || {
+        echo -e "${RED}  无法创建 XHTTP 客户端补丁目录：${XHTTP_PATCH_DIR}${NC}"
+        return 1
+    }
+    backup_existing_config || { echo -e "${RED}  旧配置备份失败，安装已中止。${NC}"; return 1; }
+
+    local OUTBOUND_JSON
+    OUTBOUND_JSON='{
+      "tag": "direct",
+      "protocol": "freedom",
+      "settings": {
+        "domainStrategy": "'"${FREEDOM_DOMAIN_STRATEGY}"'"
+      }
+    }'
+
+    local INBOUNDS_JSON=""
+    local OUTBOUNDS_JSON=""
+    local ALLOW_RULES_JSON=""
+    local COMMON_RULES_JSON
+    local SUBS_TEXT=""
+    local PORTS_TEXT=""
+    local SERVER_IP_RAW="" SERVER_IP_URI="" SERVER_IP_URI_V6="" SERVER_IP_V4="" SERVER_IP_V6=""
+    local REALITY_LINK_V6="" VLESS_ENC_LINK_V6="" SS_NODE_LINK_V6=""
+    local VLESS_LINK="" VLESS_ENC_LINK="" SS_NODE_LINK=""
+    local VLESS_ENC_ENCRYPTION_URI=""
+    local XHTTP_UP_IP_RAW="" XHTTP_UP_IP_URI="" XHTTP_DOWN_IP_RAW=""
+    local -a XHTTP_PATCH_FILES=()
+    local -a XHTTP_PATCH_LABELS=()
+    local -a XHTTP_ENTRY_LINKS=()
+
+    COMMON_RULES_JSON=$(get_common_block_rules_json)
+
+    SERVER_IP_V4="$PREFLIGHT_SERVER_IP_V4"
+    SERVER_IP_V6="$PREFLIGHT_SERVER_IP_V6"
+    SERVER_IP_RAW="$PREFLIGHT_SERVER_IP_RAW"
+    SERVER_IP_URI=$(format_host_for_uri "$SERVER_IP_RAW")
+    if [[ -n "$SERVER_IP_V6" ]]; then
+        SERVER_IP_URI_V6=$(format_host_for_uri "$SERVER_IP_V6")
+    fi
+
+    if [[ "$SCENARIO" == "7" || "$SCENARIO" == "8" ]]; then
+        [[ -n "$SERVER_IP_V4" && -n "$SERVER_IP_V6" ]] || { echo -e "${RED}  ✗ 未检测到双栈公网，无法生成 XHTTP 分离链路客户端配置。${NC}"; return 1; }
+        case "$XHTTP_SPLIT_DIRECTION" in
+            v6_up_v4_down)
+                XHTTP_UP_IP_RAW="$SERVER_IP_V6"
+                XHTTP_DOWN_IP_RAW="$SERVER_IP_V4"
+                ;;
+            v4_up_v6_down)
+                XHTTP_UP_IP_RAW="$SERVER_IP_V4"
+                XHTTP_DOWN_IP_RAW="$SERVER_IP_V6"
+                ;;
+        esac
+        XHTTP_UP_IP_URI=$(format_host_for_uri "$XHTTP_UP_IP_RAW")
+    fi
+
+    if [[ "$SCENARIO" == "1" || "$SCENARIO" == "4" ]]; then
+        if [[ "$SCENARIO" == "1" ]]; then
+            VLESS_LINK="vless://${REALITY_DIRECT_UUID}@${SERVER_IP_URI}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-直出-zxray"
+            if [[ -n "$SERVER_IP_URI_V6" ]]; then
+                REALITY_LINK_V6="vless://${REALITY_DIRECT_UUID}@${SERVER_IP_URI_V6}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-直出-IPv6-zxray"
+            fi
+        else
+            VLESS_LINK="vless://${UUID}@${SERVER_IP_URI}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-zxray"
+            if [[ -n "$SERVER_IP_URI_V6" ]]; then
+                REALITY_LINK_V6="vless://${UUID}@${SERVER_IP_URI_V6}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-IPv6-zxray"
+            fi
+        fi
+    fi
+    if [[ "$SCENARIO" == "3" || "$SCENARIO" == "4" || "$SCENARIO" == "6" ]]; then
+        VLESS_ENC_ENCRYPTION_URI=$(url_encode "$VLESS_ENC_ENCRYPTION")
+        VLESS_ENC_LINK="vless://${UUID}@${SERVER_IP_URI}:${LOCAL_ENC_PORT}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-zxray"
+        if [[ -n "$SERVER_IP_URI_V6" ]]; then
+            VLESS_ENC_LINK_V6="vless://${UUID}@${SERVER_IP_URI_V6}:${LOCAL_ENC_PORT}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-IPv6-zxray"
+        fi
+    fi
+    if [[ "$SCENARIO" == "2" || "$SCENARIO" == "4" || "$SCENARIO" == "5" ]]; then
+        local SS_USERINFO
+        SS_USERINFO=$(base64_encode_urlsafe_nopad "${LOCAL_SS_METHOD}:${LOCAL_SS_PWD}")
+        SS_NODE_LINK="ss://${SS_USERINFO}@${SERVER_IP_URI}:${LOCAL_SS_PORT}#SS-zxray"
+        if [[ -n "$SERVER_IP_URI_V6" ]]; then
+            SS_NODE_LINK_V6="ss://${SS_USERINFO}@${SERVER_IP_URI_V6}:${LOCAL_SS_PORT}#SS-IPv6-zxray"
+        fi
+    fi
+
+    if [[ "$SCENARIO" == "5" && "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+        local idx route_userinfo
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            route_userinfo=$(base64_encode_urlsafe_nopad "${LOCAL_SS_METHOD}:${MULTI_ROUTE_SS_PASSWORDS[$((idx-1))]}")
+            MULTI_ROUTE_SS_LINKS+=("ss://${route_userinfo}@${SERVER_IP_URI}:${MULTI_ROUTE_PORTS[$((idx-1))]}#SS-落地${idx}-zxray")
+            if [[ -n "$SERVER_IP_URI_V6" ]]; then
+                MULTI_ROUTE_SS_LINKS_V6+=("ss://${route_userinfo}@${SERVER_IP_URI_V6}:${MULTI_ROUTE_PORTS[$((idx-1))]}#SS-落地${idx}-IPv6-zxray")
+            fi
+        done
+    fi
+
+    if [[ "$SCENARIO" == "6" && "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+        local idx
+        for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+            MULTI_ROUTE_VLESS_LINKS+=("vless://${MULTI_ROUTE_UUIDS[$((idx-1))]}@${SERVER_IP_URI}:${MULTI_ROUTE_PORTS[$((idx-1))]}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-落地${idx}-zxray")
+            if [[ -n "$SERVER_IP_URI_V6" ]]; then
+                MULTI_ROUTE_VLESS_LINKS_V6+=("vless://${MULTI_ROUTE_UUIDS[$((idx-1))]}@${SERVER_IP_URI_V6}:${MULTI_ROUTE_PORTS[$((idx-1))]}?encryption=${VLESS_ENC_ENCRYPTION_URI}&flow=xtls-rprx-vision&headerType=none&type=tcp#Vless-Enc-落地${idx}-IPv6-zxray")
+            fi
+        done
+    fi
+
+    case "$SCENARIO" in
+        1)
+            local REALITY_CLIENTS_JSON=""
+            local REALITY_OUTBOUNDS_JSON=""
+            local REALITY_RULES_JSON=""
+            REALITY_CLIENTS_JSON=$(cat <<EOF
+          {
+            "id": "${REALITY_DIRECT_UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "reality_direct"
+          }
+EOF
+)
+            REALITY_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-reality"],
+        "user": ["reality_direct"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            REALITY_GATE_RULES_JSON=$(build_reality_gate_rules_json "$DEST")
+            if [[ "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    REALITY_CLIENTS_JSON+=$(cat <<EOF
+,
+          {
+            "id": "${REALITY_LANDING_UUIDS[$((idx-1))]}",
+            "flow": "xtls-rprx-vision",
+            "email": "reality_landing_${idx}"
+          }
+EOF
+)
+                    REALITY_OUTBOUNDS_JSON+=$(printf '%s,\n' "${LANDING_JSONS[$((idx-1))]}")
+                    REALITY_RULES_JSON+=$(cat <<EOF
+      {
+        "type": "field",
+        "inboundTag": ["in-reality"],
+        "user": ["reality_landing_${idx}"],
+        "network": "tcp,udp",
+        "outboundTag": "landing${idx}"
+      },
+EOF
+)
+                    REALITY_LANDING_LINKS+=("vless://${REALITY_LANDING_UUIDS[$((idx-1))]}@${SERVER_IP_URI}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-落地${idx}-zxray")
+                    if [[ -n "$SERVER_IP_URI_V6" ]]; then
+                        REALITY_LANDING_LINKS_V6+=("vless://${REALITY_LANDING_UUIDS[$((idx-1))]}@${SERVER_IP_URI_V6}:${PORT}?security=reality&encryption=none&pbk=${PUBLIC_KEY}&headerType=none&fp=firefox&type=raw&flow=xtls-rprx-vision&sni=${DEST}&sid=${SHORT_ID}&spx=%2F#Reality-落地${idx}-IPv6-zxray")
+                    fi
+                done
+            fi
+            INBOUNDS_JSON=$(cat <<EOF
+$(build_reality_gate_inbound_json "$DEST")    {
+      "tag": "in-reality",
+      "listen": "::",
+      "port": ${PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+${REALITY_CLIENTS_JSON}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "127.0.0.1:${REALITY_GATE_PORT}",
+          "serverNames": ["${DEST}"],
+          "privateKey": "${PRIVATE_KEY}",
+          "shortIds": ["${SHORT_ID}"],
+          "limitFallbackUpload": {
+            "afterBytes": 8192,
+            "bytesPerSec": 1024,
+            "burstBytesPerSec": 0
+          },
+          "limitFallbackDownload": {
+            "afterBytes": 32768,
+            "bytesPerSec": 2048,
+            "burstBytesPerSec": 0
+          }
+        }
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+${REALITY_OUTBOUNDS_JSON}    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON="${REALITY_GATE_RULES_JSON}${REALITY_RULES_JSON}"
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: Reality
+  - 直出: freedom / ${FREEDOM_DESC}
+  - 落地数量: ${REALITY_LANDING_COUNT}
+
+订阅:
+REALITY（直出入口）:
+  ${VLESS_LINK}
+EOF
+)
+            if [[ -n "$REALITY_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+REALITY（直出入口 / IPv6）:
+  ${REALITY_LINK_V6}
+EOF
+)
+            fi
+            if [[ "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    SUBS_TEXT+=$(cat <<EOF
+
+REALITY（落地入口 ${idx}）:
+  ${REALITY_LANDING_LINKS[$((idx-1))]}
+EOF
+)
+                    if [[ ${#REALITY_LANDING_LINKS_V6[@]} -ge ${idx} ]]; then
+                        SUBS_TEXT+=$(cat <<EOF
+
+REALITY（落地入口 ${idx} / IPv6）:
+  ${REALITY_LANDING_LINKS_V6[$((idx-1))]}
+EOF
+)
+                    fi
+                done
+                SUBS_TEXT+=$'\n\n说明:'
+                SUBS_TEXT+=$'\n  - 直出入口: 命中 reality_direct 用户，服务端直接出站'
+                for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    SUBS_TEXT+=$'\n'
+                    SUBS_TEXT+="  - 落地入口 ${idx}: 命中 reality_landing_${idx} 用户，服务端转发到 ${LANDING_LABELS[$((idx-1))]}"
+                    SUBS_TEXT+=$'\n'
+                    SUBS_TEXT+="    落地原始链接 ${idx}: ${LANDING_LINKS[$((idx-1))]}"
+                done
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  REALITY:     ${PORT}
+
+出站说明:
+  直出出口:    freedom / ${FREEDOM_DESC}
+EOF
+)
+            if [[ "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    PORTS_TEXT+=$(cat <<EOF
+  落地出口 ${idx}:  ${LANDING_LABELS[$((idx-1))]}
+EOF
+)
+                done
+            fi
+            ;;
+        2)
+            INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-ss",
+      "listen": "::",
+      "port": ${LOCAL_SS_PORT},
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "${LOCAL_SS_METHOD}",
+        "password": "${LOCAL_SS_PWD}",
+        "network": "tcp,udp"
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-ss"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: SS2022
+  - 出口: freedom / ${FREEDOM_DESC}
+
+订阅:
+SS2022（直出）:
+  ${SS_NODE_LINK}
+EOF
+)
+            if [[ -n "$SS_NODE_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+SS2022（直出 / IPv6）:
+  ${SS_NODE_LINK_V6}
+EOF
+)
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  SS2022:      ${LOCAL_SS_PORT}
+EOF
+)
+            ;;
+        3)
+            INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-enc"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: Vless-Enc
+  - 出口: freedom / ${FREEDOM_DESC}
+
+订阅:
+Vless-Enc（直出）:
+  ${VLESS_ENC_LINK}
+EOF
+)
+            if [[ -n "$VLESS_ENC_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+Vless-Enc（直出 / IPv6）:
+  ${VLESS_ENC_LINK_V6}
+EOF
+)
+            fi
+            SUBS_TEXT+=$(cat <<EOF
+
+说明:
+  - 客户端实验性 padding / delay: ${ENC_PADDING_PROFILE_DESC}
+EOF
+)
+            if [[ -n "$ENC_PADDING_CLIENT" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+  - 客户端实际规则: ${ENC_PADDING_CLIENT}
+  - 服务端实际规则: ${ENC_PADDING_SERVER}
+EOF
+)
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  Vless-Enc:   ${LOCAL_ENC_PORT}
+EOF
+)
+            ;;
+        4)
+            REALITY_GATE_RULES_JSON=$(build_reality_gate_rules_json "$DEST")
+            INBOUNDS_JSON=$(cat <<EOF
+$(build_reality_gate_inbound_json "$DEST")    {
+      "tag": "in-reality",
+      "listen": "::",
+      "port": ${PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "reality_user"
+          }
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "127.0.0.1:${REALITY_GATE_PORT}",
+          "serverNames": ["${DEST}"],
+          "privateKey": "${PRIVATE_KEY}",
+          "shortIds": ["${SHORT_ID}"],
+          "limitFallbackUpload": {
+            "afterBytes": 8192,
+            "bytesPerSec": 1024,
+            "burstBytesPerSec": 0
+          },
+          "limitFallbackDownload": {
+            "afterBytes": 32768,
+            "bytesPerSec": 2048,
+            "burstBytesPerSec": 0
+          }
+        }
+      }
+    },
+    {
+      "tag": "in-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    },
+    {
+      "tag": "in-ss",
+      "listen": "::",
+      "port": ${LOCAL_SS_PORT},
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "${LOCAL_SS_METHOD}",
+        "password": "${LOCAL_SS_PWD}",
+        "network": "tcp,udp"
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<EOF
+${REALITY_GATE_RULES_JSON}
+      {
+        "type": "field",
+        "inboundTag": [
+          "in-reality",
+          "in-enc",
+          "in-ss"
+        ],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: Reality + Vless-Enc + SS2022
+  - 出口: freedom / ${FREEDOM_DESC}
+
+订阅:
+REALITY（直出）:
+  ${VLESS_LINK}
+
+Vless-Enc（直出）:
+  ${VLESS_ENC_LINK}
+
+SS2022（直出）:
+  ${SS_NODE_LINK}
+EOF
+)
+            if [[ -n "$REALITY_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+REALITY（直出 / IPv6）:
+  ${REALITY_LINK_V6}
+EOF
+)
+            fi
+            if [[ -n "$VLESS_ENC_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+Vless-Enc（直出 / IPv6）:
+  ${VLESS_ENC_LINK_V6}
+EOF
+)
+            fi
+            if [[ -n "$SS_NODE_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+SS2022（直出 / IPv6）:
+  ${SS_NODE_LINK_V6}
+EOF
+)
+            fi
+            SUBS_TEXT+=$(cat <<EOF
+
+说明:
+  - Vless-Enc 客户端实验性 padding / delay: ${ENC_PADDING_PROFILE_DESC}
+EOF
+)
+            if [[ -n "$ENC_PADDING_CLIENT" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+  - Vless-Enc 客户端实际规则: ${ENC_PADDING_CLIENT}
+  - Vless-Enc 服务端实际规则: ${ENC_PADDING_SERVER}
+EOF
+)
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  REALITY:     ${PORT}
+  Vless-Enc:   ${LOCAL_ENC_PORT}
+  SS2022:      ${LOCAL_SS_PORT}
+EOF
+)
+            ;;
+        5)
+            local MULTI_SS_INBOUNDS_JSON=""
+            local MULTI_SS_RULES_JSON=""
+            local MULTI_SS_OUTBOUNDS_JSON=""
+            MULTI_SS_INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-ss",
+      "listen": "::",
+      "port": ${LOCAL_SS_PORT},
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "${LOCAL_SS_METHOD}",
+        "password": "${LOCAL_SS_PWD}",
+        "network": "tcp,udp"
+      }
+    }
+EOF
+)
+            MULTI_SS_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-ss"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    MULTI_SS_INBOUNDS_JSON+=$(cat <<EOF
+,
+    {
+      "tag": "in-ss-landing${idx}",
+      "listen": "::",
+      "port": ${MULTI_ROUTE_PORTS[$((idx-1))]},
+      "protocol": "shadowsocks",
+      "settings": {
+        "method": "${LOCAL_SS_METHOD}",
+        "password": "${MULTI_ROUTE_SS_PASSWORDS[$((idx-1))]}",
+        "network": "tcp,udp"
+      }
+    }
+EOF
+)
+                    MULTI_SS_RULES_JSON+=$(cat <<EOF
+      {
+        "type": "field",
+        "inboundTag": ["in-ss-landing${idx}"],
+        "network": "tcp,udp",
+        "outboundTag": "landing${idx}"
+      },
+EOF
+)
+                    MULTI_SS_OUTBOUNDS_JSON+=$(printf '%s,\n' "${LANDING_JSONS[$((idx-1))]}")
+                done
+            fi
+            INBOUNDS_JSON="$MULTI_SS_INBOUNDS_JSON"
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+${MULTI_SS_OUTBOUNDS_JSON}    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON="$MULTI_SS_RULES_JSON"
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口协议: SS2022
+  - 路由数量: 直出 + ${MULTI_ROUTE_COUNT} 个落地
+
+订阅:
+SS2022（直出）:
+  ${SS_NODE_LINK}
+EOF
+)
+            if [[ -n "$SS_NODE_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+SS2022（直出 / IPv6）:
+  ${SS_NODE_LINK_V6}
+EOF
+)
+            fi
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    SUBS_TEXT+=$(cat <<EOF
+
+SS2022（落地${idx}）:
+  ${MULTI_ROUTE_SS_LINKS[$((idx-1))]}
+EOF
+)
+                    if [[ ${#MULTI_ROUTE_SS_LINKS_V6[@]} -ge ${idx} ]]; then
+                        SUBS_TEXT+=$(cat <<EOF
+
+SS2022（落地${idx} / IPv6）:
+  ${MULTI_ROUTE_SS_LINKS_V6[$((idx-1))]}
+EOF
+)
+                    fi
+                done
+            fi
+            SUBS_TEXT+=$(cat <<EOF
+
+说明:
+  - 直出入口：SS 入站 -> freedom
+  - 每个落地入口：SS 入站 -> 对应的 SS / VLESS / Reality 出站
+  - 直出和每个落地使用不同端口，避免无 TLS 模式下的入口混淆
+EOF
+)
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    SUBS_TEXT+=$(cat <<EOF
+  - 落地${idx}出站：${LANDING_LABELS[$((idx-1))]}
+    原始链接：${LANDING_LINKS[$((idx-1))]}
+EOF
+)
+                done
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  SS2022 直出: ${LOCAL_SS_PORT}
+EOF
+)
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    PORTS_TEXT+=$(cat <<EOF
+  SS2022 落地${idx}: ${MULTI_ROUTE_PORTS[$((idx-1))]}
+EOF
+)
+                done
+            fi
+            ;;
+        6)
+            local MULTI_ENC_INBOUNDS_JSON=""
+            local MULTI_ENC_RULES_JSON=""
+            local MULTI_ENC_OUTBOUNDS_JSON=""
+            MULTI_ENC_INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
+EOF
+)
+            MULTI_ENC_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-enc"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    MULTI_ENC_INBOUNDS_JSON+=$(cat <<EOF
+,
+    {
+      "tag": "in-enc-landing${idx}",
+      "listen": "::",
+      "port": ${MULTI_ROUTE_PORTS[$((idx-1))]},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${MULTI_ROUTE_UUIDS[$((idx-1))]}",
+            "flow": "xtls-rprx-vision",
+            "email": "enc_landing_${idx}"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "tcp"
+      }
+    }
+EOF
+)
+                    MULTI_ENC_RULES_JSON+=$(cat <<EOF
+      {
+        "type": "field",
+        "inboundTag": ["in-enc-landing${idx}"],
+        "network": "tcp,udp",
+        "outboundTag": "landing${idx}"
+      },
+EOF
+)
+                    MULTI_ENC_OUTBOUNDS_JSON+=$(printf '%s,\n' "${LANDING_JSONS[$((idx-1))]}")
+                done
+            fi
+            INBOUNDS_JSON="$MULTI_ENC_INBOUNDS_JSON"
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+${MULTI_ENC_OUTBOUNDS_JSON}    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON="$MULTI_ENC_RULES_JSON"
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口协议: Vless-Enc
+  - 路由数量: 直出 + ${MULTI_ROUTE_COUNT} 个落地
+
+订阅:
+Vless-Enc（直出）:
+  ${VLESS_ENC_LINK}
+EOF
+)
+            if [[ -n "$VLESS_ENC_LINK_V6" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+
+Vless-Enc（直出 / IPv6）:
+  ${VLESS_ENC_LINK_V6}
+EOF
+)
+            fi
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    SUBS_TEXT+=$(cat <<EOF
+
+Vless-Enc（落地${idx}）:
+  ${MULTI_ROUTE_VLESS_LINKS[$((idx-1))]}
+EOF
+)
+                    if [[ ${#MULTI_ROUTE_VLESS_LINKS_V6[@]} -ge ${idx} ]]; then
+                        SUBS_TEXT+=$(cat <<EOF
+
+Vless-Enc（落地${idx} / IPv6）:
+  ${MULTI_ROUTE_VLESS_LINKS_V6[$((idx-1))]}
+EOF
+)
+                    fi
+                done
+            fi
+            SUBS_TEXT+=$(cat <<EOF
+
+说明:
+  - 直出入口：Vless-Enc 入站 -> freedom
+  - 每个落地入口：Vless-Enc 入站 -> 对应的 SS / VLESS / Reality 出站
+  - 直出和每个落地使用不同端口，避免无 TLS 模式下的入口混淆
+  - 客户端实验性 padding / delay: ${ENC_PADDING_PROFILE_DESC}
+EOF
+)
+            if [[ -n "$ENC_PADDING_CLIENT" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+  - 客户端实际规则: ${ENC_PADDING_CLIENT}
+  - 服务端实际规则: ${ENC_PADDING_SERVER}
+EOF
+)
+            fi
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    SUBS_TEXT+=$(cat <<EOF
+  - 落地${idx}出站：${LANDING_LABELS[$((idx-1))]}
+    原始链接：${LANDING_LINKS[$((idx-1))]}
+EOF
+)
+                done
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  Vless-Enc 直出: ${LOCAL_ENC_PORT}
+EOF
+)
+            if [[ "$MULTI_ROUTE_COUNT" -gt 0 ]]; then
+                for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                    PORTS_TEXT+=$(cat <<EOF
+  Vless-Enc 落地${idx}: ${MULTI_ROUTE_PORTS[$((idx-1))]}
+EOF
+)
+                done
+            fi
+            ;;
+        7)
+            local XHTTP_REALITY_CLIENTS_JSON=""
+            local XHTTP_REALITY_OUTBOUNDS_JSON=""
+            local XHTTP_REALITY_RULES_JSON=""
+            XHTTP_REALITY_CLIENTS_JSON=$(cat <<EOF
+          {
+            "id": "${REALITY_DIRECT_UUID}",
+            "email": "xhttp_reality_direct"
+          }
+EOF
+)
+            XHTTP_REALITY_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-xhttp-reality"],
+        "user": ["xhttp_reality_direct"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            XHTTP_ENTRY_LINKS+=("$(build_xhttp_reality_full_link "${REALITY_DIRECT_UUID}" "${XHTTP_UP_IP_URI}" "${PORT}" "${XHTTP_DOWN_IP_RAW}" "${PORT}" "${DEST}" "firefox" "${PUBLIC_KEY}" "${SHORT_ID}" "${XHTTP_PATH}" "XHTTP-Reality-$(get_xhttp_split_direction_share_name "$XHTTP_SPLIT_DIRECTION")-直出-zxray")")
+            XHTTP_PATCH_LABELS+=("XHTTP + Reality 直出入口")
+            XHTTP_PATCH_FILES+=("${XHTTP_PATCH_DIR}/xhttp_reality_direct_patch.json")
+            write_xhttp_client_patch_file "${XHTTP_PATCH_DIR}/xhttp_reality_direct_patch.json" "$XHTTP_DOWN_IP_RAW" "$PORT" "reality" "${DEST}" "firefox" "$PUBLIC_KEY" "$SHORT_ID" "$XHTTP_PATH" || return 1
+            if [[ "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+                local idx
+                for idx in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    XHTTP_REALITY_CLIENTS_JSON+=$(cat <<EOF
+,
+          {
+            "id": "${REALITY_LANDING_UUIDS[$((idx-1))]}",
+            "email": "xhttp_reality_landing_${idx}"
+          }
+EOF
+)
+                    XHTTP_REALITY_OUTBOUNDS_JSON+=$(printf '%s,\n' "${LANDING_JSONS[$((idx-1))]}")
+                    XHTTP_REALITY_RULES_JSON+=$(cat <<EOF
+      {
+        "type": "field",
+        "inboundTag": ["in-xhttp-reality"],
+        "user": ["xhttp_reality_landing_${idx}"],
+        "network": "tcp,udp",
+        "outboundTag": "landing${idx}"
+      },
+EOF
+)
+                    XHTTP_ENTRY_LINKS+=("$(build_xhttp_reality_full_link "${REALITY_LANDING_UUIDS[$((idx-1))]}" "${XHTTP_UP_IP_URI}" "${PORT}" "${XHTTP_DOWN_IP_RAW}" "${PORT}" "${DEST}" "firefox" "${PUBLIC_KEY}" "${SHORT_ID}" "${XHTTP_PATH}" "XHTTP-Reality-$(get_xhttp_split_direction_share_name "$XHTTP_SPLIT_DIRECTION")-落地${idx}-zxray")")
+                    XHTTP_PATCH_LABELS+=("XHTTP + Reality 落地入口 ${idx}")
+                    XHTTP_PATCH_FILES+=("${XHTTP_PATCH_DIR}/xhttp_reality_landing${idx}_patch.json")
+                    write_xhttp_client_patch_file "${XHTTP_PATCH_DIR}/xhttp_reality_landing${idx}_patch.json" "$XHTTP_DOWN_IP_RAW" "$PORT" "reality" "${DEST}" "firefox" "$PUBLIC_KEY" "$SHORT_ID" "$XHTTP_PATH" || return 1
+                done
+            fi
+            REALITY_GATE_RULES_JSON=$(build_reality_gate_rules_json "$DEST")
+            INBOUNDS_JSON=$(cat <<EOF
+$(build_reality_gate_inbound_json "$DEST")    {
+      "tag": "in-xhttp-reality",
+      "listen": "::",
+      "port": ${PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+${XHTTP_REALITY_CLIENTS_JSON}
+        ],
+        "decryption": "none"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "security": "reality",
+        "realitySettings": {
+          "show": false,
+          "dest": "127.0.0.1:${REALITY_GATE_PORT}",
+          "serverNames": ["${DEST}"],
+          "privateKey": "${PRIVATE_KEY}",
+          "shortIds": ["${SHORT_ID}"],
+          "limitFallbackUpload": {
+            "afterBytes": 8192,
+            "bytesPerSec": 1024,
+            "burstBytesPerSec": 0
+          },
+          "limitFallbackDownload": {
+            "afterBytes": 32768,
+            "bytesPerSec": 2048,
+            "burstBytesPerSec": 0
+          }
+        },
+        "xhttpSettings": {
+          "host": "",
+          "path": "${XHTTP_PATH}",
+          "mode": "auto"
+        }
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+${XHTTP_REALITY_OUTBOUNDS_JSON}    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON="${REALITY_GATE_RULES_JSON}${XHTTP_REALITY_RULES_JSON}"
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: XHTTP + Reality
+  - 分离方向: ${XHTTP_SPLIT_DESC}
+  - 直出: freedom / ${FREEDOM_DESC}
+  - 落地数量: ${REALITY_LANDING_COUNT}
+
+订阅:
+EOF
+)
+            local idx2
+            for idx2 in "${!XHTTP_ENTRY_LINKS[@]}"; do
+                SUBS_TEXT+=$(cat <<EOF
+${XHTTP_PATCH_LABELS[$idx2]}:
+${XHTTP_ENTRY_LINKS[$idx2]}
+EOF
+)
+                if [[ $idx2 -lt $((${#XHTTP_ENTRY_LINKS[@]}-1)) ]]; then
+                    SUBS_TEXT+="
+
+"
+                fi
+            done
+            SUBS_TEXT+=$'\n\n客户端补丁文件:'
+            for idx2 in "${!XHTTP_PATCH_FILES[@]}"; do
+                SUBS_TEXT+=$'\n'
+                SUBS_TEXT+="  - ${XHTTP_PATCH_FILES[$idx2]}"
+            done
+            SUBS_TEXT+=$(cat <<EOF
+
+说明:
+  - 现已直接生成可导入的完整链接；extra= 参数内已内嵌 XHTTP downloadSettings。
+  - 推荐客户端: v2rayN + Xray 内核。其他客户端本脚本不支持自动适配。
+  - 当前 XHTTP path: ${XHTTP_PATH}
+EOF
+)
+            if [[ "$REALITY_LANDING_COUNT" -gt 0 ]]; then
+                for idx2 in $(seq 1 "$REALITY_LANDING_COUNT"); do
+                    SUBS_TEXT+=$'\n'
+                    SUBS_TEXT+="  - 落地入口 ${idx2}: ${LANDING_LABELS[$((idx2-1))]}"
+                    SUBS_TEXT+=$'\n'
+                    SUBS_TEXT+="    落地原始链接 ${idx2}: ${LANDING_LINKS[$((idx2-1))]}"
+                done
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  XHTTP + Reality: ${PORT}
+
+出站说明:
+  分离方向:    ${XHTTP_SPLIT_DESC}
+  直出出口:    freedom / ${FREEDOM_DESC}
+  客户端链接:  已内嵌 extra 参数
+EOF
+)
+            ;;
+        8)
+            VLESS_ENC_ENCRYPTION_URI=$(url_encode "$VLESS_ENC_ENCRYPTION")
+            XHTTP_ENTRY_LINKS+=("$(build_xhttp_vlessenc_full_link "${UUID}" "${XHTTP_UP_IP_URI}" "${LOCAL_ENC_PORT}" "${XHTTP_DOWN_IP_RAW}" "${LOCAL_ENC_PORT}" "${VLESS_ENC_ENCRYPTION}" "${XHTTP_PATH}" "XHTTP-Vless-Enc-$(get_xhttp_split_direction_share_name "$XHTTP_SPLIT_DIRECTION")-实验-zxray")")
+            XHTTP_PATCH_LABELS+=("XHTTP + Vless-Enc 实验入口")
+            XHTTP_PATCH_FILES+=("${XHTTP_PATCH_DIR}/xhttp_vlessenc_patch.json")
+            write_xhttp_client_patch_file "${XHTTP_PATCH_DIR}/xhttp_vlessenc_patch.json" "$XHTTP_DOWN_IP_RAW" "$LOCAL_ENC_PORT" "none" "" "" "" "" "$XHTTP_PATH" || return 1
+            INBOUNDS_JSON=$(cat <<EOF
+    {
+      "tag": "in-xhttp-enc",
+      "listen": "::",
+      "port": ${LOCAL_ENC_PORT},
+      "protocol": "vless",
+      "settings": {
+        "clients": [
+          {
+            "id": "${UUID}",
+            "flow": "xtls-rprx-vision",
+            "email": "xhttp_enc_user"
+          }
+        ],
+        "decryption": "${VLESS_ENC_DECRYPTION}"
+      },
+      "streamSettings": {
+        "network": "xhttp",
+        "xhttpSettings": {
+          "host": "",
+          "path": "${XHTTP_PATH}",
+          "mode": "auto"
+        }
+      }
+    }
+EOF
+)
+            OUTBOUNDS_JSON=$(cat <<EOF
+    ${OUTBOUND_JSON},
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
+    }
+EOF
+)
+            ALLOW_RULES_JSON=$(cat <<'EOF'
+      {
+        "type": "field",
+        "inboundTag": ["in-xhttp-enc"],
+        "network": "tcp,udp",
+        "outboundTag": "direct"
+      },
+EOF
+)
+            SUBS_TEXT=$(cat <<EOF
+当前架构:
+  - 入口: XHTTP + Vless-Enc（实验性）
+  - 分离方向: ${XHTTP_SPLIT_DESC}
+  - 出口: freedom / ${FREEDOM_DESC}
+
+订阅:
+XHTTP + Vless-Enc（实验入口）:
+${XHTTP_ENTRY_LINKS[0]}
+
+说明:
+  - 警告：该模板无 TLS / 无 Reality，仅适合实验研究，不建议在高风险公网环境使用。
+  - 现已直接生成可导入的完整链接；extra= 参数内已内嵌 XHTTP downloadSettings。
+  - 客户端补丁文件: ${XHTTP_PATCH_FILES[0]}
+  - 推荐客户端: v2rayN + Xray 内核。其他客户端本脚本不支持自动适配。
+  - 当前 XHTTP path: ${XHTTP_PATH}
+  - 客户端实验性 padding / delay: ${ENC_PADDING_PROFILE_DESC}
+EOF
+)
+            if [[ -n "$ENC_PADDING_CLIENT" ]]; then
+                SUBS_TEXT+=$(cat <<EOF
+  - 客户端实际规则: ${ENC_PADDING_CLIENT}
+  - 服务端实际规则: ${ENC_PADDING_SERVER}
+EOF
+)
+            fi
+            PORTS_TEXT=$(cat <<EOF
+端口:
+  XHTTP + Vless-Enc: ${LOCAL_ENC_PORT}
+
+出站说明:
+  分离方向:    ${XHTTP_SPLIT_DESC}
+  直出出口:    freedom / ${FREEDOM_DESC}
+  客户端链接:  已内嵌 extra 参数
+EOF
+)
+            ;;
+    esac
+
+    local TEMP_CONFIG
+    TEMP_CONFIG=$(mktemp /tmp/xray_config.XXXXXX.json) || {
+        echo -e "${RED}  ✗ 无法创建临时配置文件。${NC}"
+        return 1
+    }
+    add_tmp_file "$TEMP_CONFIG"
+
+    cat > "$TEMP_CONFIG" <<JSONEOF
+{
+  "log": {
+    "loglevel": "warning",
+    "access": "none"
+  },
+  "inbounds": [
+${INBOUNDS_JSON}
+  ],
+  "outbounds": [
+${OUTBOUNDS_JSON}
+  ],
+  "routing": {
+    "domainStrategy": "AsIs",
+    "rules": [
+${COMMON_RULES_JSON}
+${ALLOW_RULES_JSON}
+      {
+        "type": "field",
+        "network": "tcp,udp",
+        "outboundTag": "blocked"
+      }
+    ]
+  }
 }
+JSONEOF
 
-prepare_deployment() {
-  load_settings
-  install_singbox_if_needed
-  install_cloudflared_if_needed
-  ensure_service_account
+    echo -e "${YELLOW}  验证配置文件...${NC}"
+    if ! jq empty "$TEMP_CONFIG" >/dev/null 2>&1; then
+        cp -f -- "$TEMP_CONFIG" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ 生成结果不是合法 JSON，已拒绝覆盖当前配置。${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        return 1
+    fi
+    if ! /usr/local/bin/xray run -test -config "$TEMP_CONFIG"; then
+        cp -f -- "$TEMP_CONFIG" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ 配置文件验证失败！${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        echo -e "${YELLOW}  当前运行中的旧配置未被覆盖。${NC}"
+        return 1
+    fi
+    echo -e "${GREEN}  ✓ 配置文件语法验证通过${NC}"
 
-  mkdir -p "$DATA_DIR"
-  chown root:"$SERVICE_GROUP" "$DATA_DIR"
-  chmod 750 "$DATA_DIR"
+    cp -f -- "$TEMP_CONFIG" "$CONFIG_FILE" || return 1
+    fix_xray_config_permissions || return 1
 
-  if [[ $SETTINGS_CONFIGURED -ne 1 ]]; then
-    PREFERRED_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
-    XRAY_PREFERRED_ENDPOINT="$DEFAULT_XRAY_PREFERRED_ENDPOINT"
-    LOCAL_PORT="$DEFAULT_LOCAL_PORT"
-    NODE_NAME="$DEFAULT_NODE_NAME"
-    DOH_ENABLED="$DEFAULT_DOH_ENABLED"
-    WARP_ENABLED="$DEFAULT_WARP_ENABLED"
-    OUTBOUND_IP_MODE="$DEFAULT_OUTBOUND_IP_MODE"
-    save_settings
-  fi
-
-  load_state
-}
-
-rebuild_deployment_after_stop() {
-  generate_identity
-
-  service_stop || true
-  service_reset_failed
-
-  write_singbox_config
-  write_singbox_service
-  write_cloudflared_runner
-  write_logrotate_config
-
-  ensure_singbox_running
-  verify_warp_runtime
-  start_tunnel
-}
-
-command_generate_noninteractive() {
-  deployment_transaction_begin
-  prepare_deployment
-
-  stop_tunnel || die "无法安全停止现有临时隧道。"
-
-  DOH_ENABLED="0"
-  WARP_ENABLED="0"
-  save_settings
-
-  rebuild_deployment_after_stop
-
-  deployment_transaction_commit
-  ok "临时 Argo 已完成全新生成，当前使用直接出站；现在可以直接断开 SSH。"
-  show_subscription
-}
-
-command_generate_noninteractive_doh_warp() {
-  deployment_transaction_begin
-  prepare_deployment
-
-  stop_tunnel || die "无法安全停止现有临时隧道。"
-
-  DOH_ENABLED="1"
-  WARP_ENABLED="1"
-  save_settings
-  warn "本次无交互部署将启用 Cloudflare DoH（1.1.1.1）和 WARP；首次注册会调用第三方 wgcf 并使用 --accept-tos。"
-
-  rebuild_deployment_after_stop
-
-  deployment_transaction_commit
-  ok "临时 Argo 已完成全新生成，并已启用 DoH 与 WARP 出站；现在可以直接断开 SSH。"
-  show_subscription
-}
-
-command_generate_custom() {
-  deployment_transaction_begin
-  prepare_deployment
-
-  stop_tunnel || die "无法安全停止现有临时隧道。"
-  configure_custom_settings
-  rebuild_deployment_after_stop
-
-  deployment_transaction_commit
-  ok "自定义临时 Argo 已完成全新生成；现在可以直接断开 SSH。"
-  show_subscription
-}
-
-show_subscription() {
-  load_settings
-  load_state
-
-  local running="否"
-  local parsed_host=""
-
-  if singbox_runtime_is_running; then
-    running="是"
-    parsed_host="$(extract_argo_host || true)"
-
-    if [[ -n "$parsed_host" ]] && valid_argo_host "$parsed_host"; then
-      if [[ "$ARGO_HOST" != "$parsed_host" ]]; then
-        ARGO_HOST="$parsed_host"
-        save_state
-      fi
+    systemctl enable xray >/dev/null 2>&1 || true
+    if ! systemctl restart xray; then
+        echo -e "${RED}  ✗ Xray 服务重启命令失败。${NC}"
+        systemctl status xray --no-pager -l 2>/dev/null | sed -n '1,25p' || true
+        echo -e "${YELLOW}  请继续查看完整日志：journalctl -u xray -n 50 --no-pager${NC}"
+        return 1
     fi
 
-    if [[ -n "$ARGO_HOST" ]] && valid_argo_host "$ARGO_HOST"; then
-      generate_vmess_link
-    fi
-  fi
-
-  print_section_header "zdd-argo sing-box VMess/WS" "$C_GREEN" 78
-  print_kv "节点名称：" "$NODE_NAME" 20
-  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 20
-  print_kv "临时 Argo 域名：" "${ARGO_HOST:-尚未生成}" 20
-  print_kv "UUID：" "${UUID:-尚未生成}" 20
-  print_kv "WS 路径：" "${WSPATH:-尚未生成}" 20
-  print_kv "本地监听：" "127.0.0.1:${LOCAL_PORT}" 20
-  print_kv "出站策略：" "$(outbound_ip_mode_label)" 20
-  if [[ "$DOH_ENABLED" == "1" ]]; then
-    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 20
-  else
-    print_kv "Cloudflare DoH：" "未启用" 20
-  fi
-  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 20
-  print_kv "后台隧道运行：" "$running" 20
-  print_kv "ECHConfigList：" "$ECH_CONFIG" 20
-  print_section_footer "$C_GREEN" 78
-  printf '\n'
-
-  if [[ -f "$VMESS_LINK_FILE" ]]; then
-    if ! singbox_runtime_is_running; then
-      warn "sing-box 或其临时 Argo 隧道当前未完整运行；下面是保存的旧链接，目前不可用。"
-    fi
-
-    printf '%ssing-box 分享链接：%s\n' "$C_CYAN" "$C_RESET"
-    cat "$VMESS_LINK_FILE"
-    printf '\n保存位置： %s\n' "$VMESS_LINK_FILE"
-    printf '\n%sECH 兼容提示：%s\n' "$C_YELLOW" "$C_RESET"
-    printf '%s\n' "脚本已同时写入 JSON 字段 ech 与 echConfigList。"
-    printf '%s导入 Xray 客户端后，请检查 EchConfigList 是否为：%s\n' "$C_YELLOW" "$C_RESET"
-    printf '%s%s%s\n' "$C_YELLOW" "$ECH_CONFIG" "$C_RESET"
-    printf '%s\n' "若客户端忽略旧式 VMess JSON 的扩展字段，请手动粘贴这一行。"
-  else
-    warn "尚未生成临时 argo 隧道"
-  fi
-}
-
-show_status() {
-  load_settings
-
-  if command -v jq >/dev/null 2>&1; then
-    load_state
-    load_xray_state
-  else
-    UUID=""
-    WSPATH=""
-    ARGO_HOST=""
-    CREATED_AT=""
-    XRAY_UUID=""
-    XRAY_WS_PATH=""
-    XRAY_ARGO_HOST=""
-  fi
-
-  resolve_singbox_bin
-  resolve_xray_bin
-  resolve_cloudflared_bin
-  resolve_wgcf_bin
-
-  print_section_header "zdd-argo 运行状态" "$C_CYAN" 78
-
-  print_kv "脚本版本：" "v ${SCRIPT_VERSION}" 22
-  print_kv "运行平台：" "$(runtime_label)" 22
-  print_kv "优选域名/IP：" "${PREFERRED_ENDPOINT:-未设置}" 22
-  print_kv "节点名称：" "$NODE_NAME" 22
-  print_kv "出站策略：" "$(outbound_ip_mode_label)" 22
-  if [[ "$DOH_ENABLED" == "1" ]]; then
-    print_kv "Cloudflare DoH：" "已启用（1.1.1.1）" 22
-  else
-    print_kv "Cloudflare DoH：" "未启用" 22
-  fi
-  print_kv "Cloudflare WARP：" "$(feature_label "$WARP_ENABLED")" 22
-
-  if [[ "$WARP_ENABLED" == "1" && -f "$WARP_CHECK_FILE" ]]; then
-    local warp_checked=""
-    local warp_exit_ip=""
-    local warp_colo=""
-    local warp_state=""
-
-    warp_checked="$(jq -r '.checked_at // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
-    warp_exit_ip="$(jq -r '.exit_ip // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
-    warp_colo="$(jq -r '.colo // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
-    warp_state="$(jq -r '.warp // "未知"' "$WARP_CHECK_FILE" 2>/dev/null || printf '%s' "未知")"
-
-    print_kv "WARP 自检：" "${warp_state} / ${warp_exit_ip} / ${warp_colo}" 22
-    print_kv "WARP 自检时间：" "$warp_checked" 22
-  fi
-
-  print_aligned_label "sing-box：" 22
-  if [[ -n "$SINGBOX_BIN" ]]; then
-    "$SINGBOX_BIN" version \
-      2>/dev/null \
-      | head -n 1 \
-      || printf '%s\n' "已安装"
-
-    print_aligned_label "sing-box 路径：" 22
-    printf '%s' "$SINGBOX_BIN"
-
-    if [[ "$SINGBOX_BIN" == "$MANAGED_SINGBOX_BIN" ]]; then
-      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
-    else
-      printf ' %s\n' "（外部安装）"
-    fi
-  else
-    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
-  fi
-
-  print_aligned_label "Xray：" 22
-  if [[ -n "$XRAY_BIN" ]]; then
-    "$XRAY_BIN" version \
-      2>/dev/null \
-      | head -n 1 \
-      || printf '%s\n' "已安装"
-
-    print_aligned_label "Xray 路径：" 22
-    printf '%s' "$XRAY_BIN"
-
-    if [[ "$XRAY_BIN" == "$MANAGED_XRAY_BIN" ]]; then
-      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
-    else
-      printf ' %s\n' "（外部安装）"
-    fi
-  else
-    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
-  fi
-
-  print_aligned_label "cloudflared：" 22
-  if [[ -n "$CLOUDFLARED_BIN" ]]; then
-    "$CLOUDFLARED_BIN" --version \
-      2>/dev/null \
-      || printf '%s\n' "已安装"
-
-    print_aligned_label "cloudflared 路径：" 22
-    printf '%s' "$CLOUDFLARED_BIN"
-
-    if [[ "$CLOUDFLARED_BIN" == "$MANAGED_CLOUDFLARED_BIN" ]]; then
-      printf ' %s\n' "（脚本专用，SHA-256 已校验）"
-    else
-      printf ' %s\n' "（外部安装）"
-    fi
-  else
-    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
-  fi
-
-  print_aligned_label "wgcf：" 22
-  if [[ -n "$WGCF_BIN" ]]; then
-    if [[ -f "$WGCF_RELEASE_META" ]]; then
-      printf '%s\n' "$(jq -r '.tag // \"已安装\"' "$WGCF_RELEASE_META" 2>/dev/null || printf '%s' "已安装")"
-    else
-      printf '%s\n' "已安装（外部版本）"
-    fi
-
-    print_kv "WARP 配置：" "$([[ -f "$WARP_PROFILE_FILE" ]] && printf '%s' "已生成" || printf '%s' "未生成")" 22
-  else
-    printf '%s%s%s\n' "$C_RED" "未安装" "$C_RESET"
-  fi
-
-  print_aligned_label "sing-box 服务：" 22
-  if service_is_active; then
-    printf '%s%s%s\n' "$C_GREEN" "运行中" "$C_RESET"
-  else
-    printf '%s%s%s\n' "$C_RED" "未运行" "$C_RESET"
-  fi
-
-  print_aligned_label "本地端口：" 22
-  if listener_exact_loopback; then
-    printf '%s127.0.0.1:%s 正常%s\n' "$C_GREEN" "$LOCAL_PORT" "$C_RESET"
-  else
-    printf '%s%s%s\n' "$C_RED" "未检测到正确监听" "$C_RESET"
-  fi
-
-  print_aligned_label "Argo / tmux：" 22
-  if singbox_runtime_is_running; then
-    printf '%s运行中%s（会话：%s）\n' "$C_GREEN" "$C_RESET" "$(active_tunnel_session 2>/dev/null || printf '%s' "$TMUX_SESSION")"
-  else
-    printf '%s未运行%s\n' "$C_RED" "$C_RESET"
-  fi
-
-  print_kv "临时域名：" "${ARGO_HOST:-尚未生成}" 22
-
-  if [[ -f "$XRAY_STATE_JSON" ]]; then
-    printf '
-'
-    print_kv "Xray 节点名称：" "${XRAY_NODE_NAME:-未设置}" 22
-    print_kv "Xray 本地监听：" "127.0.0.1:${XRAY_LOCAL_PORT:-$DEFAULT_XRAY_LOCAL_PORT}" 22
-    if xray_service_is_active; then
-      print_kv "Xray 服务：" "运行中" 22
-    else
-      print_kv "Xray 服务：" "未运行" 22
-    fi
-    if xray_runtime_is_running; then
-      print_kv "Xray Argo：" "运行中" 22
-    else
-      print_kv "Xray Argo：" "未运行" 22
-    fi
-    print_kv "Xray 当前域名：" "${XRAY_ARGO_HOST:-—}" 22
-  fi
-
-  local resolved_zargo=""
-  resolved_zargo="$(type -P zargo 2>/dev/null || true)"
-
-  print_aligned_label "管理命令：" 22
-  if resolved_zdd_is_ours "$resolved_zargo"; then
-    printf '%szargo%s（%s）\n' "$C_GREEN" "$C_RESET" "$resolved_zargo"
-  elif [[ -n "$resolved_zargo" ]]; then
-    printf '%s被其他程序占用%s（%s）\n' "$C_RED" "$C_RESET" "$resolved_zargo"
-  else
-    printf '%s未找到%s\n' "$C_RED" "$C_RESET"
-  fi
-
-  print_section_footer "$C_CYAN" 78
-
-  printf '\n%s\n' "最近 30 行 sing-box 日志："
-  service_print_logs 30
-
-  if [[ -f "$LOG_FILE" ]]; then
-    printf '\n%s\n' "最近 20 行 cloudflared 日志："
-    tail -n 20 "$LOG_FILE" || true
-  fi
-}
-
-command_update_singbox() {
-  local had_deployment=0
-  local config_refresh=0
-
-  load_settings
-
-  if [[ -f "$SINGBOX_CONFIG" \
-      || -f "$SINGBOX_UNIT" ]]; then
-    had_deployment=1
-    if singbox_config_needs_refresh; then
-      config_refresh=1
-    fi
-  fi
-
-  install_or_update_singbox
-  resolve_singbox_bin
-
-  if [[ $had_deployment -eq 1 \
-      && -f "$SINGBOX_CONFIG" ]]; then
-    load_state
-
-    if [[ $config_refresh -eq 1 ]]; then
-      ensure_service_account
-      write_singbox_config
-    else
-      "$SINGBOX_BIN" check \
-        -c "$SINGBOX_CONFIG" \
-        || die "$(printf '%s' "更新后的 sing-box 无法通过现有 zdd-argo 配置校验。")"
-    fi
-
-    write_singbox_service
-
-    service_restart \
-      || die "$(printf '%s' "sing-box 已更新，但服务重启失败；拒绝继续使用旧进程。")"
-
-    if ! wait_for_singbox_ready; then
-      ensure_singbox_running
-    fi
-
-    ok "$(printf '%s' "脚本专用 sing-box 已更新，zdd-argo 服务运行正常。")"
-  else
-    ok "$(printf '%s' "脚本专用 sing-box 已安装或更新；当前未发现 zdd-argo 部署。")"
-  fi
-}
-
-
-command_update_xray() {
-  local had_deployment=0
-
-  load_settings
-
-  if [[ -f "$XRAY_CONFIG" || -f "$XRAY_UNIT" ]]; then
-    had_deployment=1
-  fi
-
-  install_or_update_xray
-  resolve_xray_bin
-
-  if [[ $had_deployment -eq 1 && -f "$XRAY_CONFIG" ]]; then
-    load_xray_state
-    write_xray_config
-    "$XRAY_BIN" run -test -config "$XRAY_CONFIG" \
-      || die "更新后的 Xray 无法通过现有 VLESS-ENC + WS 配置校验。"
-
-    write_xray_service
-
-    xray_service_restart \
-      || die "Xray 已更新，但服务重启失败；拒绝继续使用旧进程。"
-
-    if ! wait_for_xray_ready; then
-      ensure_xray_running
-    fi
-
-    ok "脚本专用 Xray 已更新，Xray VLESS-ENC + WS 服务运行正常。"
-  else
-    ok "脚本专用 Xray 已安装或更新；当前未发现 Xray 部署。"
-  fi
-}
-
-command_update_cloudflared() {
-  local had_deployment=0
-
-  load_settings
-
-  if [[ -f "$CLOUDFLARED_RUNNER" \
-      || -f "$STATE_JSON" ]]; then
-    had_deployment=1
-  fi
-
-  install_or_update_cloudflared
-  resolve_cloudflared_bin
-
-  if [[ $had_deployment -eq 1 ]]; then
-    if [[ -f "$STATE_JSON" || -f "$CLOUDFLARED_RUNNER" ]]; then
-      write_cloudflared_runner
-    fi
-    if [[ -f "$XRAY_STATE_JSON" || -f "$XRAY_CLOUDFLARED_RUNNER" ]]; then
-      load_xray_state
-      write_xray_cloudflared_runner
-    fi
-
-    ok "$(printf '%s' "脚本专用 cloudflared 已更新；当前正在运行的隧道不会中断，下次重建时使用新版本。")"
-  else
-    ok "$(printf '%s' "脚本专用 cloudflared 已安装或更新；当前未发现 zdd-argo 部署。")"
-  fi
-}
-
-command_update_wgcf() {
-  load_settings
-
-  if [[ "$WARP_ENABLED" != "1" \
-      && ! -x "$MANAGED_WGCF_BIN" ]]; then
-    info "WARP 未启用且脚本专用 wgcf 未安装，跳过 wgcf 更新。"
-    return 0
-  fi
-
-  install_or_update_wgcf
-  resolve_wgcf_bin
-  ok "脚本专用 wgcf 已安装或更新；下次启用 WARP 时会直接刷新并覆盖 WireGuard profile。"
-}
-
-command_update_components() {
-  info "开始更新 sing-box、Xray、cloudflared 和已启用的 WARP 工具……"
-  deployment_transaction_begin
-
-  command_update_singbox
-  command_update_xray
-  command_update_cloudflared
-  command_update_wgcf
-
-  if singbox_runtime_is_running; then
-    load_state
-    generate_vmess_link
-  fi
-  if xray_runtime_is_running; then
-    load_xray_state
-    generate_xray_vless_link
-  fi
-
-  deployment_transaction_commit
-  ok "sing-box、Xray、cloudflared 与 WARP 工具已完成更新检查。"
-}
-
-remove_zdd_components() {
-  assert_safe_managed_paths
-  load_settings
-  resolve_singbox_bin
-  resolve_xray_bin
-  resolve_cloudflared_bin
-  stop_tunnel || true
-  stop_xray_tunnel || true
-
-  if [[ -e "$SINGBOX_UNIT" || -L "$SINGBOX_UNIT" ]]; then
-    if singbox_unit_is_ours || singbox_unit_is_legacy_ours; then
-      service_disable_now || true
-      rm -f "$SINGBOX_UNIT"
-    else
-      die "服务文件不是本项目创建的，拒绝继续卸载：${SINGBOX_UNIT}"
-    fi
-  fi
-
-  if [[ -e "$XRAY_UNIT" || -L "$XRAY_UNIT" ]]; then
-    if xray_unit_is_ours || xray_unit_is_legacy_ours; then
-      xray_service_disable_now || true
-      rm -f "$XRAY_UNIT"
-    else
-      die "Xray 服务文件不是本项目创建的，拒绝继续卸载：${XRAY_UNIT}"
-    fi
-  fi
-
-  if [[ -e "$LOGROTATE_CONFIG" || -L "$LOGROTATE_CONFIG" ]]; then
-    if logrotate_config_is_ours || logrotate_config_is_legacy_ours; then
-      rm -f "$LOGROTATE_CONFIG"
-    else
-      warn "日志轮转配置不是本项目创建的，未删除：${LOGROTATE_CONFIG}"
-    fi
-  fi
-
-  service_daemon_reload
-  service_reset_failed
-  xray_service_reset_failed
-
-  rm -rf -- "$DATA_DIR"
-  rm -f -- \
-    "$LOG_FILE" \
-    "$LOG_FILE".* \
-    "$XRAY_LOG_FILE" \
-    "$XRAY_LOG_FILE".* \
-    "$SINGBOX_LOG_FILE" \
-    "$SINGBOX_LOG_FILE".* \
-    "$XRAY_CORE_LOG_FILE" \
-    "$XRAY_CORE_LOG_FILE".*
-}
-
-confirm_yes() {
-  local prompt="$1"
-  local answer=""
-
-  read_interactive answer "$prompt" "" \
-    || die "$(printf '%s' "此操作必须在交互式终端中执行。")"
-
-  answer="${answer#"${answer%%[![:space:]]*}"}"
-  answer="${answer%"${answer##*[![:space:]]}"}"
-
-  [[ "${answer,,}" == "yes" ]]
-}
-
-resolve_recorded_source() {
-  local -a lines=()
-
-  secure_root_file "$SOURCE_RECORD_FILE" || return 1
-  mapfile -t lines < "$SOURCE_RECORD_FILE"
-
-  [[ ${#lines[@]} -eq 2 ]] || return 1
-  [[ "${lines[0]}" == /* \
-    && "${lines[0]}" != "$MANAGED_SCRIPT_PATH" \
-    && "${lines[0]}" != *$'\n'* \
-    && "${lines[0]}" != *$'\r'* ]] \
-    || return 1
-  [[ "${lines[1]}" =~ ^[0-9a-fA-F]{64}$ ]] || return 1
-
-  printf '%s\n%s\n' "${lines[0]}" "${lines[1],,}"
-}
-
-remove_downloaded_source_if_confirmed() {
-  local record=""
-  local -a lines=()
-  local source=""
-  local expected_sha=""
-  local actual_sha=""
-  local owner_uid=""
-
-  if ! record="$(resolve_recorded_source 2>/dev/null)"; then
-    info "未找到可信且完整的安装源记录，不自动定位或删除 root 目录中的其他脚本。"
-    return 0
-  fi
-
-  mapfile -t lines <<< "$record"
-  [[ ${#lines[@]} -eq 2 ]] || return 0
-  source="${lines[0]}"
-  expected_sha="${lines[1]}"
-
-  if [[ ! -e "$source" && ! -L "$source" ]]; then
-    info "已记录的安装源文件不存在：${source}"
-    return 0
-  fi
-
-  if [[ ! -f "$source" || -L "$source" ]]; then
-    warn "安装源路径不是普通文件或属于符号链接，未删除：${source}"
-    return 0
-  fi
-
-  owner_uid="$(stat -Lc '%u' "$source" 2>/dev/null || true)"
-  if [[ "$owner_uid" != "0" ]]; then
-    warn "安装源文件不属于 root，未删除：${source}"
-    return 0
-  fi
-
-  if ! script_file_is_ours "$source"; then
-    warn "安装源文件未通过项目标识校验，未删除：${source}"
-    return 0
-  fi
-
-  actual_sha="$(sha256sum "$source" | awk '{print $1}')"
-  if [[ ! "$actual_sha" =~ ^[0-9a-fA-F]{64}$ \
-      || "${actual_sha,,}" != "$expected_sha" ]]; then
-    warn "安装源文件内容与安装时记录不一致，未删除：${source}"
-    return 0
-  fi
-
-  rm -f -- "$source" \
-    || die "无法删除安装源文件：${source}"
-
-  ok "安装源文件已删除：${source}"
-}
-
-remove_shortcuts() {
-  local path=""
-
-  for path in \
-    "$SHORTCUT_FALLBACK_PATH" \
-    "$SHORTCUT_COMPAT_PATH" \
-    "$SHORTCUT_PATH" \
-    "${LEGACY_ZDD_PATHS[@]}" \
-    "$LEGACY_SHORTCUT_PATH" \
-    "$LEGACY_SHORTCUT_BIN"
-  do
-    [[ -e "$path" || -L "$path" ]] || continue
-
-    if [[ \
-      ( "$path" == "$SHORTCUT_COMPAT_PATH" \
-        || "$path" == "$SHORTCUT_FALLBACK_PATH" ) \
-      && -L "$path" \
-    ]] && [[ \
-      "$(readlink "$path" 2>/dev/null || true)" \
-        == "$SHORTCUT_PATH" \
-    ]]; then
-      rm -f "$path"
-    elif path_is_replaceable_zdd_launcher "$path"; then
-      rm -f "$path"
-    else
-      info "检测到非本项目创建的快捷命令，出于安全已保留：${path}"
-    fi
-  done
-}
-
-remove_managed_script() {
-  if [[ -e "$MANAGED_SCRIPT_PATH" ]]; then
-    if script_file_is_ours "$MANAGED_SCRIPT_PATH"; then
-      rm -f \
-        "$MANAGED_SCRIPT_PATH" \
-        "${MANAGED_SCRIPT_PATH}.new."*
-    else
-      warn "$(printf '%s' "已安装脚本副本未通过项目标识校验，未删除：${MANAGED_SCRIPT_PATH}")"
-    fi
-  fi
-}
-
-snapshot_service_account_processes() {
-  local service_uid="$1"
-  local status=""
-  local pid=""
-  local uid=""
-  local start=""
-
-  for status in /proc/[0-9]*/status; do
-    [[ -r "$status" ]] || continue
-    pid="${status#/proc/}"
-    pid="${pid%/status}"
-    [[ "$pid" =~ ^[0-9]+$ ]] || continue
-
-    uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
-    [[ "$uid" == "$service_uid" ]] || continue
-
-    start="$(process_start_time "$pid" 2>/dev/null || true)"
-    [[ "$start" =~ ^[0-9]+$ ]] || continue
-    printf '%s %s\n' "$pid" "$start"
-  done
-}
-
-service_process_identity_matches() {
-  local pid="$1"
-  local recorded_start="$2"
-  local expected_uid="$3"
-  local actual_start=""
-  local actual_uid=""
-  local state=""
-
-  actual_start="$(process_start_time "$pid" 2>/dev/null || true)"
-  actual_uid="$(process_effective_uid "$pid" 2>/dev/null || true)"
-  state="$(process_state "$pid" 2>/dev/null || true)"
-
-  [[ "$actual_start" == "$recorded_start" \
-    && "$actual_uid" == "$expected_uid" \
-    && "$state" != "Z" \
-    && "$state" != "X" ]]
-}
-
-signal_service_process_snapshot() {
-  local signal_name="$1"
-  local snapshot_file="$2"
-  local expected_uid="$3"
-  local pid=""
-  local recorded_start=""
-
-  while IFS=' ' read -r pid recorded_start; do
-    [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ ]] || continue
-    service_process_identity_matches "$pid" "$recorded_start" "$expected_uid" || continue
-    kill "-${signal_name}" "$pid" 2>/dev/null || true
-  done < "$snapshot_file"
-}
-
-service_process_snapshot_has_live_processes() {
-  local snapshot_file="$1"
-  local expected_uid="$2"
-  local pid=""
-  local recorded_start=""
-
-  while IFS=' ' read -r pid recorded_start; do
-    [[ "$pid" =~ ^[0-9]+$ && "$recorded_start" =~ ^[0-9]+$ ]] || continue
-    if service_process_identity_matches "$pid" "$recorded_start" "$expected_uid"; then
-      return 0
-    fi
-  done < "$snapshot_file"
-
-  return 1
-}
-
-stop_service_account_processes() {
-  local service_uid="$1"
-  local snapshot_file=""
-  local i=0
-
-  snapshot_file="$(mktemp)"
-  snapshot_service_account_processes "$service_uid" > "$snapshot_file"
-
-  if [[ ! -s "$snapshot_file" ]]; then
-    rm -f "$snapshot_file"
-    return 0
-  fi
-
-  warn "检测到低权限服务账户仍有残留进程，正在安全终止。"
-  signal_service_process_snapshot TERM "$snapshot_file" "$service_uid"
-
-  for ((i = 0; i < 8; i++)); do
-    service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid" || break
-    sleep 1
-  done
-
-  if service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid"; then
-    signal_service_process_snapshot KILL "$snapshot_file" "$service_uid"
-
-    for ((i = 0; i < 3; i++)); do
-      service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid" || break
-      sleep 1
+    local check_attempt=0
+    while [[ $check_attempt -lt 5 ]]; do
+        sleep 2
+        if systemctl is-active --quiet xray; then
+            break
+        fi
+        check_attempt=$((check_attempt + 1))
+        echo -e "${YELLOW}  等待服务启动... (${check_attempt}/5)${NC}"
     done
-  fi
 
-  if service_process_snapshot_has_live_processes "$snapshot_file" "$service_uid"; then
-    warn "以下残留进程在复核 PID、启动时间和 UID 后仍未退出："
-    cat "$snapshot_file" >&2
-    rm -f "$snapshot_file"
-    return 1
-  fi
-
-  rm -f "$snapshot_file"
-  return 0
-}
-
-validate_service_account_removal() {
-  local passwd_line=""
-  local existing_home=""
-  local existing_gid=""
-  local expected_gid=""
-
-  if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    service_marker_is_recognized \
-      || die "低权限服务账户无法通过完整归属校验，卸载尚未修改系统：${SERVICE_USER}"
-
-    passwd_line="$(getent passwd "$SERVICE_USER")"
-    IFS=':' read -r _ _ _ existing_gid _ existing_home _ <<< "$passwd_line"
-    expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
-
-    [[ "$existing_home" == "$SERVICE_HOME" ]] \
-      || die "低权限服务账户主目录不匹配，卸载尚未修改系统：${SERVICE_USER}"
-    [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
-      || die "低权限服务账户主组不匹配，卸载尚未修改系统：${SERVICE_USER}"
-  elif [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]]; then
-    service_marker_is_recognized \
-      || die "服务账户标记无法通过完整归属校验，卸载尚未修改系统：${SERVICE_MARKER}"
-    [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
-      || die "低权限服务主目录不是普通目录，卸载尚未修改系统：${SERVICE_HOME}"
-  fi
-}
-
-remove_service_account() {
-  local passwd_line=""
-  local existing_home=""
-  local existing_gid=""
-  local expected_gid=""
-  local service_uid=""
-  local userdel_error=""
-
-  [[ "$SERVICE_HOME" == "/var/lib/zdd-argo" ]] \
-    || die "低权限服务账户主目录常量异常，拒绝卸载账户。"
-
-  if ! getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
-    if [[ -e "$SERVICE_MARKER" || -L "$SERVICE_MARKER" ]]; then
-      service_marker_is_recognized \
-        || die "检测到无法确认归属的服务账户标记，已保留服务组和主目录：${SERVICE_MARKER}"
-
-      if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-        groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
-          || die "无法删除低权限服务组 ${SERVICE_GROUP}。"
-      fi
-
-      [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
-        || die "低权限服务主目录不是普通目录，拒绝删除：${SERVICE_HOME}"
-      rm -rf -- "$SERVICE_HOME"
+    if ! systemctl is-active --quiet xray; then
+        echo -e "${RED}  Xray 服务启动失败！${NC}"
+        echo -e "${YELLOW}  说明：这里不是连续重启 5 次，而是单次 restart 后连续 5 次检查仍未进入 active。${NC}"
+        systemctl status xray --no-pager -l 2>/dev/null | sed -n '1,25p' || true
+        echo -e "${YELLOW}  请继续查看完整日志：journalctl -u xray -n 50 --no-pager${NC}"
+        return 1
     fi
-    return 0
-  fi
+    echo -e "${GREEN}  ✓ Xray 服务已启动${NC}"
 
-  service_marker_is_recognized \
-    || die "低权限服务账户无法通过完整归属校验，已停止卸载：${SERVICE_USER}"
+    case "$SCENARIO" in
+        1|4) detect_xray_bind_warnings "$PORT" "$LOCAL_SS_PORT"; [[ -n "$LOCAL_ENC_PORT" ]] && { ss -ltnup | grep -q ":${LOCAL_ENC_PORT}" && echo -e "${GREEN}  ✓ 已检测到 ${LOCAL_ENC_PORT} 端口监听${NC}" || echo -e "${YELLOW}  ⚠ 请手动检查：ss -ltnup | grep :${LOCAL_ENC_PORT}${NC}"; } ;;
+        2) detect_xray_bind_warnings "$LOCAL_SS_PORT" "$LOCAL_SS_PORT" ;;
+        3|8) detect_port_bind_warning "Vless-Enc" "$LOCAL_ENC_PORT" ;;
+        5)
+            detect_port_bind_warning "SS2022 直出" "$LOCAL_SS_PORT"
+            for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                detect_port_bind_warning "SS2022 落地${idx}" "${MULTI_ROUTE_PORTS[$((idx-1))]}"
+            done
+            ;;
+        6)
+            detect_port_bind_warning "Vless-Enc 直出" "$LOCAL_ENC_PORT"
+            for idx in $(seq 1 "$MULTI_ROUTE_COUNT"); do
+                detect_port_bind_warning "Vless-Enc 落地${idx}" "${MULTI_ROUTE_PORTS[$((idx-1))]}"
+            done
+            ;;
+        7) detect_port_bind_warning "XHTTP + Reality" "$PORT" ;;
+    esac
 
-  passwd_line="$(getent passwd "$SERVICE_USER")"
-  IFS=':' read -r _ _ service_uid existing_gid _ existing_home _ <<< "$passwd_line"
-  expected_gid="$(getent group "$SERVICE_GROUP" | awk -F: '{print $3}')"
+    write_dynamic_result_files "$SUBS_TEXT" "$PORTS_TEXT"
+    write_install_runtime_kind "xray"
+    render_saved_node_info "配置完成" || { echo -e "${RED}  节点信息写入失败，请检查 ${INFO_FILE}${NC}"; return 1; }
+}
 
-  [[ "$existing_home" == "$SERVICE_HOME" ]] \
-    || die "低权限服务账户主目录不匹配，已停止卸载：${SERVICE_USER}"
-  [[ -n "$expected_gid" && "$existing_gid" == "$expected_gid" ]] \
-    || die "低权限服务账户主组不匹配，已停止卸载：${SERVICE_USER}"
-  [[ "$service_uid" =~ ^[0-9]+$ ]] \
-    || die "无法读取低权限服务账户 ${SERVICE_USER} 的 UID。"
 
-  service_stop || true
-  xray_service_stop || true
-  if [[ "$INIT_SYSTEM" == "systemd" ]]; then
-    systemctl kill --kill-who=all --signal=TERM "$SERVICE_NAME" >/dev/null 2>&1 || true
-    systemctl kill --kill-who=all --signal=TERM "$XRAY_SERVICE_NAME" >/dev/null 2>&1 || true
-  fi
-  stop_service_account_processes "$service_uid" \
-    || die "无法安全终止低权限服务账户 ${SERVICE_USER} 的残留进程。"
-
-  userdel_error="$(mktemp)"
-  if ! userdel "$SERVICE_USER" 2> "$userdel_error"; then
-    stop_service_account_processes "$service_uid" || true
-
-    if ! userdel "$SERVICE_USER" 2>> "$userdel_error"; then
-      cat "$userdel_error" >&2 || true
-      rm -f "$userdel_error"
-      die "无法删除低权限服务账户 ${SERVICE_USER}。"
+function install_default_flow() {
+    if is_alpine_system; then
+        echo -e "${YELLOW}  检测到当前为 Alpine / OpenRC，进入 Alpine 安装方案。${NC}"
+        install_alpine_service_entry
+        return $?
     fi
-  fi
-  rm -f "$userdel_error"
-
-  if getent group "$SERVICE_GROUP" >/dev/null 2>&1; then
-    groupdel "$SERVICE_GROUP" >/dev/null 2>&1 \
-      || die "无法删除低权限服务组 ${SERVICE_GROUP}。"
-  fi
-
-  [[ -d "$SERVICE_HOME" && ! -L "$SERVICE_HOME" ]] \
-    || die "低权限服务主目录不是普通目录，拒绝删除：${SERVICE_HOME}"
-  rm -rf -- "$SERVICE_HOME"
+    install_xray
 }
 
-command_uninstall_all() {
-  warn "此操作会停止临时 Argo，并删除 zdd-argo 配置、日志、订阅、WARP 账户、快捷命令、低权限账户及脚本专用 sing-box/Xray/cloudflared/wgcf。"
-  warn "不会删除 apt、apk 或其他脚本安装的共享程序和系统依赖。"
-
-  if ! confirm_yes "确认完整卸载请输入 yes："; then
-    info "已取消。"
-    return 0
-  fi
-
-  validate_service_account_removal
-  remove_zdd_components
-  remove_service_account
-  remove_singbox_program
-  remove_xray_program
-  remove_cloudflared_program
-  remove_wgcf_program
-  remove_shortcuts
-  remove_managed_script
-  service_daemon_reload
-  remove_downloaded_source_if_confirmed
-  cleanup_bin_dir
-
-  ok "zdd-argo 及脚本专用 sing-box、Xray、cloudflared、wgcf 已完整卸载。"
-
-  if [[ $MENU_MODE -eq 1 ]]; then
-    return 10
-  fi
+function run_quick_install_entry() {
+    if is_alpine_system; then
+        install_alpine_service_entry
+        return $?
+    fi
+    install_xray
 }
 
-remove_singbox_program() {
-  rm -f \
-    "$MANAGED_SINGBOX_BIN" \
-    "$SINGBOX_RELEASE_META" \
-    "${MANAGED_SINGBOX_BIN}.new."* \
-    "${MANAGED_SINGBOX_BIN}.backup."* \
-    "${SINGBOX_RELEASE_META}.backup."*
-
-  hash -r
+function update_restart_menu() {
+    while true; do
+        line
+        center_echo "更新 / 重启当前服务" "${CYAN}${BOLD}"
+        line
+        echo -e "  ${CYAN}1.${NC} 更新核心 / 组件（必要时重启服务）"
+        echo -e "  ${CYAN}2.${NC} 仅重启当前服务"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " UPDATE_RESTART_CHOICE
+        case "$UPDATE_RESTART_CHOICE" in
+            1|01) update_current_service; return $? ;;
+            2|02) restart_current_service; return $? ;;
+            0|00) return 0 ;;
+            *) echo -e "${RED}无效输入，请重新选择。${NC}"; sleep 1 ;;
+        esac
+    done
 }
 
-remove_xray_program() {
-  rm -f \
-    "$MANAGED_XRAY_BIN" \
-    "$XRAY_RELEASE_META" \
-    "${MANAGED_XRAY_BIN}.new."* \
-    "${MANAGED_XRAY_BIN}.backup."* \
-    "${XRAY_RELEASE_META}.backup."*
-
-  hash -r
+function update_current_service() {
+    local runtime_kind=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    case "$runtime_kind" in
+        alpine-ss2022)
+            update_alpine_ssservice
+            ;;
+        alpine-xray-vlessenc)
+            update_alpine_xray_service
+            ;;
+        xray|"")
+            if is_alpine_system; then
+                echo -e "${YELLOW}当前为 Alpine / OpenRC，请先执行覆盖安装选择 Alpine 方案。${NC}"
+                return 1
+            fi
+            update_xray
+            ;;
+    esac
 }
 
-remove_cloudflared_program() {
-  rm -f \
-    "$MANAGED_CLOUDFLARED_BIN" \
-    "$CLOUDFLARED_RELEASE_META" \
-    "${MANAGED_CLOUDFLARED_BIN}.new."* \
-    "${MANAGED_CLOUDFLARED_BIN}.backup."* \
-    "${CLOUDFLARED_RELEASE_META}.backup."*
-
-  hash -r
+function restart_current_service() {
+    local runtime_kind=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    case "$runtime_kind" in
+        alpine-ss2022)
+            restart_alpine_ssservice
+            ;;
+        alpine-xray-vlessenc)
+            restart_alpine_xray_service
+            ;;
+        xray|"")
+            if is_alpine_system; then
+                echo -e "${YELLOW}当前为 Alpine / OpenRC，请先执行覆盖安装选择 Alpine 方案。${NC}"
+                return 1
+            fi
+            restart_xray
+            ;;
+    esac
 }
 
-remove_wgcf_program() {
-  rm -f \
-    "$MANAGED_WGCF_BIN" \
-    "$WGCF_RELEASE_META" \
-    "${MANAGED_WGCF_BIN}.new."* \
-    "${MANAGED_WGCF_BIN}.backup."* \
-    "${WGCF_RELEASE_META}.backup."*
-
-  hash -r
+function show_runtime_status() {
+    local runtime_kind=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    case "$runtime_kind" in
+        alpine-ss2022)
+            show_alpine_ss_status
+            ;;
+        alpine-xray-vlessenc)
+            show_alpine_xray_status
+            ;;
+        xray|"")
+            if is_alpine_system; then
+                echo -e "${YELLOW}当前为 Alpine / OpenRC，请先执行覆盖安装选择 Alpine 方案。${NC}"
+                return 1
+            fi
+            show_status
+            ;;
+    esac
 }
 
-cleanup_bin_dir() {
-  rm -f -- "$SOURCE_RECORD_FILE" "${SOURCE_RECORD_FILE}.new."*
-  rmdir "$BIN_DIR" \
-    2>/dev/null \
-    || true
+function edit_runtime_config() {
+    local runtime_kind=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    case "$runtime_kind" in
+        alpine-ss2022)
+            edit_alpine_ss_config
+            ;;
+        alpine-xray-vlessenc)
+            edit_alpine_xray_config
+            ;;
+        xray|"")
+            if is_alpine_system; then
+                echo -e "${YELLOW}当前为 Alpine / OpenRC，请先执行覆盖安装选择 Alpine 方案。${NC}"
+                return 1
+            fi
+            edit_config
+            ;;
+    esac
 }
 
-status_running_color() {
-  local value="$1"
+function uninstall_alpine_all_and_delete_self() {
+    line
+    center_echo "完整卸载 Alpine Xray / SS2022" "${RED}${BOLD}"
+    line
+    echo -e "${RED}  - 卸载 Alpine Xray 与 shadowsocks-rust${NC}"
+    echo -e "${RED}  - 删除配置、服务文件、脚本源文件与生成目录${NC}"
+    echo -e "${RED}  - 删除 zxray 启动命令${NC}"
+    echo -e "${RED}  - 删除临时文件、日志与生成的 txt 文件${NC}"
+    line
+    if ! ask_yes_no "  确认完整卸载"; then
+        echo -e "${YELLOW}已取消。${NC}"
+        return 0
+    fi
 
-  if [[ "$value" == "运行中" ]]; then
-    printf '%s' "$C_YELLOW"
-  fi
-}
+    cleanup_xray_artifacts_alpine
+    cleanup_alpine_ss_artifacts
+    cleanup_alpine_service_backups
+    cleanup_doudou_runtime
 
-status_print_value() {
-  local value="$1"
-  local color=""
-
-  color="$(status_running_color "$value")"
-  printf '%s%s%s' "$color" "$value" "$C_RESET"
-}
-
-status_core_line() {
-  local label="$1"
-  local version="$2"
-  local state="$3"
-  local label_width="12"
-  local version_width="32"
-
-  print_aligned_label "$label" "$label_width"
-  print_aligned_label "$version" "$version_width"
-  status_print_value "$state"
-  printf '\n'
-}
-
-print_menu_row() {
-  local index="$1"
-  local title="$2"
-  local desc="$3"
-  local desc_column=44
-  local prefix="${index}. "
-  local prefix_width=""
-  local title_width=""
-
-  prefix_width="$(text_display_width "$prefix")"
-  [[ "$prefix_width" =~ ^[0-9]+$ ]] || prefix_width="${#prefix}"
-  title_width=$((desc_column - prefix_width))
-  ((title_width >= 1)) || title_width=1
-
-  printf '%s' "$prefix"
-  print_aligned_label "$title" "$title_width"
-  printf '%s\n' "$desc"
-}
-
-menu_header_status() {
-  local sb_version="未安装"
-  local xr_version="未安装"
-  local sb_state="未运行"
-  local xr_state="未运行"
-
-  resolve_singbox_bin
-  resolve_xray_bin
-
-  if [[ -n "$SINGBOX_BIN" ]]; then
-    sb_version="$(
-      "$SINGBOX_BIN" version 2>/dev/null \
-        | awk 'NR == 1 {
-            if ($1 == "sing-box" && $2 == "version" && $3 != "") {
-              print "v" $3
-            } else {
-              print "已安装"
-            }
-          }' \
-        || true
-    )"
-    [[ -n "$sb_version" ]] || sb_version="已安装"
-  fi
-
-  if [[ -n "$XRAY_BIN" ]]; then
-    xr_version="$(
-      "$XRAY_BIN" version 2>/dev/null \
-        | awk 'NR == 1 {
-            if ($1 == "Xray" && $2 != "") {
-              print "v" $2
-            } else {
-              print "已安装"
-            }
-          }' \
-        || true
-    )"
-    [[ -n "$xr_version" ]] || xr_version="已安装"
-  fi
-
-  if singbox_runtime_is_running; then
-    sb_state="运行中"
-  fi
-  if xray_runtime_is_running; then
-    xr_state="运行中"
-  fi
-
-  print_section_header "zargo 临时隧道" "$C_YELLOW" 78
-  status_core_line "sing-box：" "$sb_version" "$sb_state"
-  status_core_line "Xray：" "$xr_version" "$xr_state"
-  print_section_footer "$C_CYAN" 78
-}
-
-run_menu_action() {
-  local fn="$1"
-  local rc=0
-
-  shift
-  set +e
-
-  (
-    set -Eeuo pipefail
-    "$fn" "$@"
-  )
-
-  rc=$?
-  set -e
-
-  if [[ $rc -eq 10 ]]; then
-    printf '\n%s' "卸载流程已经完成。按 Enter 后退出并清空屏幕……"
-    local ignored=""
-    read_interactive ignored "" "" || true
-    clear_screen
+    echo -e "${GREEN}  ✓ 卸载与清理已完成。${NC}"
+    line
     exit 0
-  elif [[ $rc -ne 0 ]]; then
-    error "操作失败，退出码：${rc}"
-  fi
-
-  pause_screen
 }
 
-select_runtime_auto() {
-  local choice=""
-
-  while true; do
-    clear_screen
-    print_section_header "自动生成" "$C_YELLOW" 78
-    print_menu_row "1" "sing-box · VMess/WS" "直出"
-    print_menu_row "2" "Xray · VLESS-ENC/WS" "直出"
-    print_menu_row "0" "返回" "主菜单"
-    print_section_footer "$C_CYAN" 78
-
-    read_interactive choice "选择内核 [0-2]：" "0" || choice="0"
-    clear_screen
-
-    case "$choice" in
-      1)
-        run_menu_action run_with_lock command_generate_noninteractive
-        return 0
-        ;;
-      2)
-        run_menu_action run_with_lock command_generate_xray_vlessenc_ws
-        return 0
-        ;;
-      0)
-        return 0
-        ;;
-      *)
-        warn "无效选择：${choice}"
-        pause_screen
-        ;;
+function uninstall_current_service_and_delete_self() {
+    local runtime_kind=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    case "$runtime_kind" in
+        alpine-ss2022|alpine-xray-vlessenc)
+            uninstall_alpine_all_and_delete_self
+            ;;
+        xray|"")
+            if is_alpine_system; then
+                uninstall_alpine_all_and_delete_self
+            fi
+            uninstall_xray_and_delete_self
+            ;;
     esac
-  done
 }
 
-select_runtime_custom() {
-  local choice=""
+function _update_xray_impl() {
+    ensure_systemd_supported || return 1
+    line
+    echo -e "${YELLOW}  更新 Xray 核心程序...${NC}"
 
-  while true; do
-    clear_screen
-    print_section_header "自定义生成" "$C_YELLOW" 78
-    print_menu_row "1" "sing-box · VMess/WS" "端口 / 名称 / DoH / WARP"
-    print_menu_row "2" "Xray · VLESS-ENC/WS" "端口 / 名称 / 优选"
-    print_menu_row "0" "返回" "主菜单"
-    print_section_footer "$C_CYAN" 78
+    local update_log
+    local update_ret
+    update_log=$(mktemp /tmp/xray-update.XXXXXX.log) || {
+        echo -e "${RED}  ✗ 无法创建 Xray 更新日志临时文件。${NC}"
+        line
+        return 1
+    }
+    add_tmp_file "$update_log"
 
-    read_interactive choice "选择内核 [0-2]：" "0" || choice="0"
-    clear_screen
+    set +o pipefail
+    download_and_run_xray_installer install 2>&1 | tee "$update_log"
+    update_ret=${PIPESTATUS[0]}
+    set -o pipefail
 
-    case "$choice" in
-      1)
-        run_menu_action run_with_lock command_generate_custom
+    if [[ $update_ret -ne 0 ]]; then
+        echo -e "${RED}更新失败！请检查网络后重试。${NC}"
+        line
+        return 1
+    fi
+
+    if [[ ! -x /usr/local/bin/xray ]]; then
+        echo -e "${RED}更新失败：未找到 /usr/local/bin/xray${NC}"
+        line
+        return 1
+    fi
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${YELLOW}  未找到配置文件，跳过服务重启。${NC}"
+        echo -e "${GREEN}  ✓ 核心已更新。当前版本: $(/usr/local/bin/xray version | head -1)${NC}"
+        line
         return 0
-        ;;
-      2)
-        run_menu_action run_with_lock command_generate_xray_custom
+    fi
+
+    fix_xray_config_permissions || {
+        echo -e "${RED}更新失败：无法修复 Xray 配置读取权限。${NC}"
+        line
+        return 1
+    }
+
+    if grep -Fqi "No new version" "$update_log"; then
+        echo -e "${GREEN}  ✓ 当前已是最新版本：$(/usr/local/bin/xray version | head -1)${NC}"
+        echo -e "${YELLOW}  未检测到新版本，本次不执行重启。${NC}"
+        line
         return 0
-        ;;
-      0)
+    fi
+
+    echo -e "${YELLOW}  先验证当前配置文件...${NC}"
+    if ! /usr/local/bin/xray run -test -config "$CONFIG_FILE"; then
+        cp -f -- "$CONFIG_FILE" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${YELLOW}  ⚠ 核心已更新，但当前配置文件验证失败，未执行重启。${NC}"
+        echo -e "${YELLOW}  请先检查配置：${CONFIG_FILE}${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        echo -e "${YELLOW}  当前运行中的旧服务未被重启。${NC}"
+        line
+        return 1
+    fi
+
+    if ! systemctl restart xray; then
+        echo -e "${RED}  ✗ 更新后重启 Xray 失败，请查看: journalctl -u xray -n 30 --no-pager${NC}"
+        line
+        return 1
+    fi
+    sleep 1
+    if systemctl is-active --quiet xray; then
+        echo -e "${GREEN}  ✓ 更新成功并已重启！当前版本: $(/usr/local/bin/xray version | head -1)${NC}"
+    else
+        echo -e "${RED}  ✗ 核心已更新，但服务启动失败，请查看: journalctl -u xray -n 30 --no-pager${NC}"
+        line
+        return 1
+    fi
+    line
+}
+
+function restart_xray() {
+    ensure_systemd_supported || return 1
+    line
+    echo -e "${YELLOW}  重启 Xray 服务...${NC}"
+
+    if [[ ! -f "$CONFIG_FILE" ]]; then
+        echo -e "${RED}  ✗ 未找到配置文件：${CONFIG_FILE}${NC}"
+        line
+        return 1
+    fi
+
+    fix_xray_config_permissions || {
+        echo -e "${RED}  ✗ 无法修复 Xray 配置读取权限，已取消重启。${NC}"
+        line
+        return 1
+    }
+
+    echo -e "${YELLOW}  先验证当前配置文件...${NC}"
+    if ! /usr/local/bin/xray run -test -config "$CONFIG_FILE"; then
+        cp -f -- "$CONFIG_FILE" "${DATA_DIR}/last_failed_config.json" 2>/dev/null || true
+        echo -e "${RED}  ✗ 当前配置文件验证失败，已取消重启。${NC}"
+        echo -e "${YELLOW}  请先检查配置：${CONFIG_FILE}${NC}"
+        echo -e "${YELLOW}  已保留失败配置: ${DATA_DIR}/last_failed_config.json${NC}"
+        echo -e "${YELLOW}  当前运行中的旧服务未被改动。${NC}"
+        line
+        return 1
+    fi
+
+    if ! systemctl restart xray; then
+        echo -e "${RED}  ✗ 重启 Xray 失败，请查看: journalctl -u xray -n 30 --no-pager${NC}"
+        line
+        return 1
+    fi
+    sleep 2
+    if systemctl is-active --quiet xray; then
+        echo -e "${GREEN}  ✓ Xray 服务已重启，运行正常。${NC}"
+    else
+        echo -e "${RED}  ✗ 重启失败，请查看: journalctl -u xray -n 30 --no-pager${NC}"
+        line
+        return 1
+    fi
+    line
+}
+
+
+function show_info() {
+    if render_saved_node_info "节点信息"; then
         return 0
-        ;;
-      *)
-        warn "无效选择：${choice}"
-        pause_screen
-        ;;
+    fi
+
+    if [[ -f "$SUB_FILE" ]]; then
+        line
+        center_echo "节点信息" "${GREEN}${BOLD}"
+        line
+        echo -e "${YELLOW}  未找到 ${INFO_FILE}${NC}"
+        print_quick_command
+        print_saved_txt_files
+        line
+        return 0
+    fi
+
+    echo -e "${RED}未找到节点信息文件，请先执行安装。${NC}"
+    return 1
+}
+
+
+function show_status() {
+    ensure_systemd_supported || return 1
+    line
+    center_echo "Xray 服务状态" "${CYAN}${BOLD}"
+    line
+    systemctl status xray --no-pager -l || true
+    echo ""
+    center_echo "最新日志（最近 30 行）" "${CYAN}${BOLD}"
+    journalctl -u xray -n 30 --no-pager || true
+    line
+}
+
+function edit_config() {
+    while true; do
+        line
+        center_echo "修改配置文件" "${CYAN}${BOLD}"
+        line
+        echo -e "${CYAN}  路径: ${CONFIG_FILE}${NC}"
+        echo -e "${YELLOW}  仅建议熟悉 Xray 配置者使用。${NC}"
+        echo ""
+        echo -e "  ${CYAN}1.${NC} 编辑当前配置"
+        echo -e "  ${CYAN}2.${NC} 清空配置（高风险）"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " EDIT_CHOICE
+
+        if [[ ! -f "$CONFIG_FILE" ]]; then
+            echo -e "${RED}  未找到配置文件，请先执行安装。${NC}"
+            line
+            return 1
+        fi
+
+        case "$EDIT_CHOICE" in
+            1|01)
+                echo ""
+                if [[ -n "${EDITOR:-}" ]] && command -v "${EDITOR}" >/dev/null 2>&1; then
+                    "${EDITOR}" "$CONFIG_FILE"
+                elif command -v nano >/dev/null 2>&1; then
+                    nano "$CONFIG_FILE"
+                elif command -v vim >/dev/null 2>&1; then
+                    vim "$CONFIG_FILE"
+                elif command -v vi >/dev/null 2>&1; then
+                    vi "$CONFIG_FILE"
+                else
+                    echo -e "${RED}  未找到可用编辑器（nano/vim/vi）。${NC}"
+                    line
+                    return 1
+                fi
+
+                echo ""
+                echo -e "${YELLOW}  已退出编辑器。请回主菜单执行「重启 Xray 服务」。${NC}"
+                line
+                return 0
+                ;;
+            2|02)
+                echo ""
+                echo -e "${RED}${BOLD}  此操作会将当前配置清空为 0 字节。${NC}"
+                echo -e "${YELLOW}  清空前会自动备份。${NC}"
+                echo -e "${YELLOW}  未重新写入合法 JSON 前，Xray 无法重启。${NC}"
+                if ! ask_yes_no "  确认清空 ${CONFIG_FILE}"; then
+                    echo -e "${YELLOW}  已取消。${NC}"
+                    sleep 1
+                    continue
+                fi
+
+                local manual_backup
+                manual_backup="${CONFIG_FILE}.bak.manual-clear.$(date +%Y%m%d-%H%M%S)"
+                cp -a -- "$CONFIG_FILE" "$manual_backup" || {
+                    echo -e "${RED}  备份失败，已取消清空。${NC}"
+                    line
+                    return 1
+                }
+
+                truncate -s 0 "$CONFIG_FILE" || {
+                    echo -e "${RED}  清空失败，请手动检查权限或磁盘状态。${NC}"
+                    line
+                    return 1
+                }
+
+                echo -e "${GREEN}  ✓ 配置文件已清空。${NC}"
+                echo -e "${CYAN}  备份文件: ${manual_backup}${NC}"
+                echo -e "${YELLOW}  请先写入合法配置，再执行「重启 Xray 服务」。${NC}"
+                line
+                return 0
+                ;;
+            "")
+                continue
+                ;;
+            0|00)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  无效输入，请输入 0、1 或 2。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+function remove_path_quiet() {
+    local path="$1"
+    local label="$2"
+
+    if [[ -e "$path" || -L "$path" ]]; then
+        if rm -rf -- "$path"; then
+            echo -e "${GREEN}  ✓ 已删除: ${label}${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ 删除失败: ${label}${NC}"
+        fi
+    fi
+}
+
+function cleanup_xray_artifacts() {
+    echo -e "${YELLOW}  清理 Xray 残留...${NC}"
+
+    remove_path_quiet "/usr/local/bin/xray" "/usr/local/bin/xray"
+    remove_path_quiet "/usr/local/share/xray" "/usr/local/share/xray"
+    remove_path_quiet "/usr/local/etc/xray" "/usr/local/etc/xray"
+    remove_path_quiet "/var/log/xray" "/var/log/xray"
+    remove_path_quiet "/var/lib/xray" "/var/lib/xray"
+    remove_path_quiet "/run/xray" "/run/xray"
+    remove_path_quiet "/etc/systemd/system/xray.service" "/etc/systemd/system/xray.service"
+    remove_path_quiet "/etc/systemd/system/xray@.service" "/etc/systemd/system/xray@.service"
+    remove_path_quiet "/etc/systemd/system/xray.service.d" "/etc/systemd/system/xray.service.d"
+    remove_path_quiet "/etc/systemd/system/xray@.service.d" "/etc/systemd/system/xray@.service.d"
+    remove_path_quiet "/etc/systemd/system/multi-user.target.wants/xray.service" "/etc/systemd/system/multi-user.target.wants/xray.service"
+    remove_path_quiet "/etc/systemd/system/multi-user.target.wants/xray@.service" "/etc/systemd/system/multi-user.target.wants/xray@.service"
+
+    systemctl daemon-reload >/dev/null 2>&1 || true
+    systemctl reset-failed >/dev/null 2>&1 || true
+}
+
+function cleanup_legacy_quick_paths() {
+    local legacy_path
+    local -a legacy_paths=(
+        "/usr/local/bin/zxray"
+        "/usr/local/bin/zdd"
+        "/usr/local/bin/doudou"
+        "/usr/local/bin/xray-manager"
+        "/usr/bin/zxray"
+        "/usr/bin/zdd"
+        "/usr/bin/doudou"
+        "/usr/bin/xray-manager"
+        "/usr/sbin/zxray"
+        "/usr/sbin/zdd"
+        "/usr/sbin/doudou"
+        "/usr/sbin/xray-manager"
+        "/root/bin/zxray"
+        "/root/bin/zdd"
+        "/root/bin/doudou"
+        "/root/bin/xray-manager"
+        "/root/.local/bin/zxray"
+        "/root/.local/bin/zdd"
+        "/root/.local/bin/doudou"
+        "/root/.local/bin/xray-manager"
+    )
+
+    for legacy_path in "${legacy_paths[@]}"; do
+        remove_path_quiet "$legacy_path" "$legacy_path"
+    done
+}
+
+function canonicalize_path() {
+    local path="$1"
+    local dir=""
+    local base=""
+
+    if command -v readlink >/dev/null 2>&1; then
+        readlink -f -- "$path" 2>/dev/null && return 0
+    fi
+
+    dir=$(dirname -- "$path" 2>/dev/null || true)
+    base=$(basename -- "$path" 2>/dev/null || true)
+    [[ -n "$dir" && -n "$base" ]] || return 1
+    (
+        cd -- "$dir" 2>/dev/null && printf '%s/%s\n' "$(pwd -P)" "$base"
+    ) && return 0
+    return 1
+}
+
+function remove_current_script_source_if_safe() {
+    local source_path=""
+    local real_path=""
+
+    source_path=$(resolve_self_source_path 2>/dev/null || true)
+    [[ -n "$source_path" ]] || return 0
+
+    case "$source_path" in
+        /proc/*|/dev/*)
+            return 0
+            ;;
     esac
-  done
-}
 
-select_stop_scope() {
-  local choice=""
+    real_path=$(canonicalize_path "$source_path" 2>/dev/null || true)
+    [[ -n "$real_path" ]] || real_path="$source_path"
 
-  while true; do
-    clear_screen
-    print_section_header "停止隧道" "$C_YELLOW" 78
-    print_menu_row "1" "sing-box" "仅断开 sing-box 临时 Argo"
-    print_menu_row "2" "Xray" "仅断开 Xray 临时 Argo"
-    print_menu_row "3" "全部" "断开 sing-box / Xray"
-    print_menu_row "0" "返回" "主菜单"
-    print_section_footer "$C_CYAN" 78
-
-    read_interactive choice "选择范围 [0-3]：" "0" || choice="0"
-    clear_screen
-
-    case "$choice" in
-      1)
-        run_menu_action run_with_lock command_stop_singbox_tunnel
-        return 0
-        ;;
-      2)
-        run_menu_action run_with_lock command_stop_xray_tunnel
-        return 0
-        ;;
-      3)
-        run_menu_action run_with_lock command_stop_clear_cache
-        return 0
-        ;;
-      0)
-        return 0
-        ;;
-      *)
-        warn "无效选择：${choice}"
-        pause_screen
-        ;;
+    case "$real_path" in
+        "$SELF_SCRIPT_PATH"|/usr/local/lib/doudou/*|/usr/local/lib/zxray/*|/tmp/doudou-entry.*.sh|/root/xray-manager*.sh|/root/zxray*.sh|/root/zdd-xray*.sh|/root/doudou-xray*.sh)
+            remove_path_quiet "$real_path" "$real_path"
+            ;;
     esac
-  done
 }
 
-interactive_menu() {
-  MENU_MODE=1
-  trap 'clear_screen; exit 130' INT TERM
+function remove_recorded_source_if_safe() {
+    local source_path=""
+    local expected_sha=""
+    local actual_sha=""
+    local owner_uid=""
+    local -a record_lines=()
 
-  while true; do
-    clear_screen
-    menu_header_status
+    [[ -f "$SOURCE_RECORD_FILE" ]] || return 0
+    mapfile -t record_lines < "$SOURCE_RECORD_FILE" 2>/dev/null || return 0
+    [[ ${#record_lines[@]} -eq 2 ]] || return 0
 
-    print_menu_row "1" "自动生成" "选择 sing-box / Xray"
-    print_menu_row "2" "自定义生成" "分别配置 sing-box / Xray"
-    print_menu_row "3" "查看订阅" "sing-box / Xray"
-    print_menu_row "4" "状态日志" "服务 / 端口 / 隧道"
-    print_menu_row "5" "停止隧道" "sing-box / Xray"
-    print_menu_row "6" "更新组件" "sing-box / Xray / cloudflared"
-    print_menu_row "7" "完整卸载" "含 sing-box / Xray"
-    print_menu_row "0" "退出" ""
+    source_path="${record_lines[0]}"
+    expected_sha="${record_lines[1],,}"
+    [[ -n "$source_path" && "$source_path" != *$'\n'* && "$source_path" != *$'\r'* ]] || return 0
+    [[ "$expected_sha" =~ ^[0-9a-f]{64}$ ]] || return 0
 
-    printf '%s%s%s\n' "$C_CYAN" \
-      '==============================================================================' \
-      "$C_RESET"
-    printf '%s%s%s\n' "$C_YELLOW" "提示：退出后输入 zargo 可重新打开菜单。" "$C_RESET"
-
-    local choice=""
-    read_interactive choice "选择操作 [0-7]：" "0" || choice="0"
-    clear_screen
-
-    case "$choice" in
-      1)
-        select_runtime_auto
-        ;;
-      2)
-        select_runtime_custom
-        ;;
-      3)
-        run_menu_action run_with_lock show_all_subscriptions
-        ;;
-      4)
-        run_menu_action show_status
-        ;;
-      5)
-        select_stop_scope
-        ;;
-      6)
-        run_menu_action run_with_lock command_update_components
-        ;;
-      7)
-        run_menu_action run_with_lock command_uninstall_all
-        ;;
-      0)
-        clear_screen
-        exit 0
-        ;;
-      *)
-        warn "无效选择：${choice}"
-        pause_screen
-        ;;
+    case "$source_path" in
+        /proc/*|/dev/*|"$SELF_SCRIPT_PATH"|/usr/local/lib/doudou/*|/usr/local/lib/zxray/*)
+            return 0
+            ;;
     esac
-  done
-}
-managed_paths_are_safe() {
-  [[ "$DATA_DIR" == "/etc/zdd-argo" \
-    && "$BIN_DIR" == "/usr/local/lib/zdd-argo" \
-    && "$SERVICE_HOME" == "/var/lib/zdd-argo" \
-    && "$LOCK_DIR" == "/run/lock/zdd-argo.lock.d" \
-    && "$SINGBOX_SYSTEMD_UNIT" == "/etc/systemd/system/zdd-argo-singbox.service" \
-    && "$SINGBOX_OPENRC_SERVICE" == "/etc/init.d/zdd-argo-singbox" \
-    && "$XRAY_SYSTEMD_UNIT" == "/etc/systemd/system/zdd-argo-xray.service" \
-    && "$XRAY_OPENRC_SERVICE" == "/etc/init.d/zdd-argo-xray" \
-    && "$LOGROTATE_CONFIG" == "/etc/logrotate.d/zdd-argo-cloudflared" ]] \
-    || return 1
+    [[ -f "$source_path" && ! -L "$source_path" ]] || return 0
 
-  local path=""
-  for path in "$DATA_DIR" "$BIN_DIR" "$SERVICE_HOME"; do
-    [[ ! -L "$path" ]] || return 1
-  done
+    owner_uid=$(stat -Lc '%u' -- "$source_path" 2>/dev/null || true)
+    [[ "$owner_uid" == "0" ]] || return 0
+    command -v sha256sum >/dev/null 2>&1 || return 0
+    actual_sha=$(sha256sum -- "$source_path" 2>/dev/null | awk 'NR==1 {print tolower($1)}')
+    [[ "$actual_sha" == "$expected_sha" ]] || {
+        echo -e "${YELLOW}  ⚠ 原始脚本内容已变化，为避免误删，保留：${source_path}${NC}"
+        return 0
+    }
+
+    if rm -f -- "$source_path"; then
+        echo -e "${GREEN}  ✓ 已删除原始安装脚本：${source_path}${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ 原始安装脚本删除失败：${source_path}${NC}"
+    fi
 }
 
-assert_safe_managed_paths() {
-  managed_paths_are_safe \
-    || die "受管路径常量异常或路径属于符号链接，拒绝继续。"
+function source_file_is_xray_manager() {
+    local source_path="$1"
+    [[ -f "$source_path" && ! -L "$source_path" ]] || return 1
+    grep -Fq 'DATA_DIR="/usr/local/share/doudou-xray"' "$source_path" 2>/dev/null \
+        && grep -Fq 'QUICK_BIN="/usr/local/bin/zxray"' "$source_path" 2>/dev/null \
+        && grep -Fq 'function cleanup_doudou_runtime' "$source_path" 2>/dev/null
 }
 
-bootstrap() {
-  require_root
-  check_os
-  assert_safe_managed_paths
-  install_dependencies
-  install_shortcut
+function remove_legacy_root_script_sources() {
+    local source_path
+    local owner_uid=""
+    local recorded_source=""
+
+    if [[ -f "$SOURCE_RECORD_FILE" ]]; then
+        recorded_source=$(head -n 1 "$SOURCE_RECORD_FILE" 2>/dev/null || true)
+    fi
+
+    for source_path in /root/*.sh; do
+        [[ -e "$source_path" || -L "$source_path" ]] || continue
+        [[ "$source_path" != "$SELF_SCRIPT_PATH" ]] || continue
+        [[ -z "$recorded_source" || "$source_path" != "$recorded_source" ]] || continue
+        source_file_is_xray_manager "$source_path" || continue
+        owner_uid=$(stat -c '%u' -- "$source_path" 2>/dev/null || true)
+        [[ "$owner_uid" == "0" ]] || continue
+        if rm -f -- "$source_path"; then
+            echo -e "${GREEN}  ✓ 已删除旧的 root 脚本源文件：${source_path}${NC}"
+        fi
+    done
 }
 
-main() {
-  ensure_utf8_locale
-  resolve_script_path
+function cleanup_script_temp_artifacts() {
+    local temp_path
+    local -a temp_paths=(
+        /tmp/doudou-entry.*.sh
+        /tmp/doudou-self-update.*.sh
+        /tmp/xray-install.*.sh
+        /tmp/xray-install-curl.*.log
+        /tmp/xray-update.*.log
+        /tmp/xray_config.*.json
+        /tmp/xray-alpine-config.*.json
+        /tmp/ssserver-foreground.*.log
+        /tmp/alpine-manual-time.*.log
+    )
 
-  if [[ "$#" -ne 0 ]]; then
-    die "本项目安装后只提供一个无参数管理命令：zargo"
-  fi
-
-  bootstrap
-  interactive_menu
+    for temp_path in "${temp_paths[@]}"; do
+        [[ -e "$temp_path" || -L "$temp_path" ]] || continue
+        remove_path_quiet "$temp_path" "$temp_path"
+    done
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
-  main "$@"
+function cleanup_bbr_config() {
+    if [[ -f "$SYSCTL_BBR_BACKUP_FILE" ]]; then
+        if mv -f -- "$SYSCTL_BBR_BACKUP_FILE" "$SYSCTL_BBR_FILE"; then
+            echo -e "${GREEN}  ✓ 已恢复原有 BBR 配置: ${SYSCTL_BBR_FILE}${NC}"
+        else
+            echo -e "${YELLOW}  ⚠ 原有 BBR 配置恢复失败，已保留备份: ${SYSCTL_BBR_BACKUP_FILE}${NC}"
+        fi
+        return 0
+    fi
+
+    if [[ -f "$SYSCTL_BBR_FILE" ]] && grep -q '^# BBR + FQ' "$SYSCTL_BBR_FILE"; then
+        remove_path_quiet "$SYSCTL_BBR_FILE" "$SYSCTL_BBR_FILE"
+    fi
+}
+
+function cleanup_doudou_runtime() {
+    echo -e "${YELLOW}  清理脚本、原始源文件与临时残留...${NC}"
+
+    remove_path_quiet "$INFO_FILE" "$INFO_FILE"
+    remove_path_quiet "$SUB_FILE" "$SUB_FILE"
+    remove_path_quiet "$SERVICE_KIND_FILE" "$SERVICE_KIND_FILE"
+    remove_path_quiet "$ALPINE_RESOLV_BACKUP" "$ALPINE_RESOLV_BACKUP"
+    remove_path_quiet "$SNI_POOL_FILE" "$SNI_POOL_FILE"
+    cleanup_bbr_config
+    cleanup_legacy_quick_paths
+    remove_recorded_source_if_safe
+    remove_current_script_source_if_safe
+    remove_legacy_root_script_sources
+    cleanup_script_temp_artifacts
+    remove_path_quiet "$SELF_DIR" "$SELF_DIR"
+    remove_path_quiet "$DATA_DIR" "$DATA_DIR"
+}
+
+function cleanup_script_only_runtime() {
+    echo -e "${YELLOW}  清理脚本、原始源文件与临时残留...${NC}"
+
+    remove_path_quiet "$INFO_FILE" "$INFO_FILE"
+    remove_path_quiet "$SUB_FILE" "$SUB_FILE"
+    remove_path_quiet "$SERVICE_KIND_FILE" "$SERVICE_KIND_FILE"
+    remove_path_quiet "$ALPINE_RESOLV_BACKUP" "$ALPINE_RESOLV_BACKUP"
+    remove_path_quiet "$SNI_POOL_FILE" "$SNI_POOL_FILE"
+    cleanup_bbr_config
+    cleanup_legacy_quick_paths
+    remove_recorded_source_if_safe
+    remove_current_script_source_if_safe
+    remove_legacy_root_script_sources
+    cleanup_script_temp_artifacts
+    remove_path_quiet "$SELF_DIR" "$SELF_DIR"
+    remove_path_quiet "$DATA_DIR" "$DATA_DIR"
+}
+
+function uninstall_script_only() {
+    line
+    center_echo "仅卸载脚本文件" "${RED}${BOLD}"
+    line
+    echo -e "${RED}  - 删除 zxray 启动命令${NC}"
+    echo -e "${RED}  - 删除脚本源文件、存储目录与临时残留${NC}"
+    echo -e "${RED}  - 保留当前服务、配置与 Xray / SS-Rust 运行文件${NC}"
+    line
+    if ! ask_yes_no "是否仅卸载脚本并保留当前服务与配置"; then
+        echo -e "${YELLOW}已取消。${NC}"
+        return 0
+    fi
+
+    cleanup_script_only_runtime
+
+    echo -e "${GREEN}  ✓ 脚本已卸载，当前服务已保留。${NC}"
+    line
+    exit 0
+}
+
+function uninstall_xray_and_delete_self() {
+    line
+    center_echo "完整卸载 Xray" "${RED}${BOLD}"
+    line
+    echo -e "${RED}  - 卸载 Xray${NC}"
+    echo -e "${RED}  - 删除配置、服务文件、脚本源文件与生成目录${NC}"
+    echo -e "${RED}  - 删除 zxray 启动命令${NC}"
+    echo -e "${RED}  - 删除临时文件、日志与生成的 txt 文件${NC}"
+    line
+    if ! ask_yes_no "  确认完整卸载"; then
+        echo -e "${YELLOW}已取消。${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}  停止并禁用 Xray 服务...${NC}"
+    systemctl stop xray >/dev/null 2>&1 || true
+    systemctl disable xray >/dev/null 2>&1 || true
+
+    echo -e "${YELLOW}  调用官方卸载脚本...${NC}"
+    if ! download_and_run_xray_installer remove; then
+        echo -e "${YELLOW}  ⚠ 官方卸载未完成，继续执行本地兜底清理。${NC}"
+    fi
+
+    cleanup_xray_artifacts
+    cleanup_doudou_runtime
+
+    echo -e "${GREEN}  ✓ 卸载与清理已完成。${NC}"
+    line
+    exit 0
+}
+
+function uninstall_menu() {
+    while true; do
+        line
+        center_echo "卸载脚本、Xray、SS-Rust" "${RED}${BOLD}"
+        line
+        echo -e "  ${CYAN}1.${NC} 仅卸载脚本文件"
+        echo -e "  ${CYAN}2.${NC} 完整卸载脚本、Xray、SS-Rust"
+        echo -e "  ${CYAN}0.${NC} 返回主菜单"
+        line
+        read_input -r -p "选择 [0/1/2]: " UNINSTALL_CHOICE
+
+        case "$UNINSTALL_CHOICE" in
+            "")
+                continue
+                ;;
+            1|01)
+                uninstall_script_only
+                ;;
+            2|02)
+                uninstall_current_service_and_delete_self
+                ;;
+            0|00)
+                return 0
+                ;;
+            *)
+                echo -e "${RED}  无效输入，请输入 0、1 或 2。${NC}"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
+function get_xray_binary_path() {
+    if [[ -x /usr/local/bin/xray ]]; then
+        printf '%s\n' '/usr/local/bin/xray'
+        return 0
+    fi
+
+    if command -v xray >/dev/null 2>&1; then
+        command -v xray
+        return 0
+    fi
+
+    return 1
+}
+
+function is_xray_running_now() {
+    if command -v rc-service >/dev/null 2>&1; then
+        rc-service xray status >/dev/null 2>&1 && return 0
+    fi
+    if command -v systemctl >/dev/null 2>&1; then
+        systemctl is-active --quiet xray 2>/dev/null && return 0
+    fi
+
+    command -v pgrep >/dev/null 2>&1 && pgrep -x xray >/dev/null 2>&1
+}
+
+function get_xray_running_badge() {
+    if is_xray_running_now; then
+        printf '%b运行中%b' "$GREEN" "$NC"
+    else
+        printf '%b未运行%b' "$RED" "$NC"
+    fi
+}
+
+function get_xray_version_badge() {
+    local xray_bin=""
+    local version_line=""
+
+    xray_bin=$(get_xray_binary_path 2>/dev/null || true)
+    if [[ -z "$xray_bin" ]]; then
+        printf '%bN/A%b' "$YELLOW" "$NC"
+        return 0
+    fi
+
+    version_line=$("$xray_bin" version 2>/dev/null | awk 'NR==1 {print $1, $2; exit}')
+    if [[ -z "$version_line" ]]; then
+        printf '%bN/A%b' "$YELLOW" "$NC"
+        return 0
+    fi
+
+    printf '%b%s%b' "$CYAN" "$version_line" "$NC"
+}
+
+function get_runtime_display_name() {
+    case "$1" in
+        alpine-ss2022) printf '%s' 'Alpine SS2022' ;;
+        alpine-xray-vlessenc) printf '%s' 'Alpine Xray' ;;
+        xray) printf '%s' 'Xray / systemd' ;;
+        *) printf '%s' '未安装' ;;
+    esac
+}
+
+function get_runtime_running_badge() {
+    local runtime_kind="$1"
+    case "$runtime_kind" in
+        alpine-ss2022)
+            if { command -v rc-service >/dev/null 2>&1 && rc-service ssserver status >/dev/null 2>&1; } \
+                || { command -v pgrep >/dev/null 2>&1 && pgrep -x ssserver >/dev/null 2>&1; }; then
+                printf '%b运行中%b' "$GREEN" "$NC"
+            else
+                printf '%b未运行%b' "$RED" "$NC"
+            fi
+            ;;
+        alpine-xray-vlessenc|xray)
+            get_xray_running_badge
+            ;;
+        *)
+            printf '%b未安装%b' "$YELLOW" "$NC"
+            ;;
+    esac
+}
+
+function get_runtime_version_badge() {
+    local runtime_kind="$1"
+    local version_line=""
+    case "$runtime_kind" in
+        alpine-ss2022)
+            if command -v ssserver >/dev/null 2>&1; then
+                version_line=$(ssserver --version 2>/dev/null | awk 'NR==1 {print; exit}')
+            fi
+            [[ -n "$version_line" ]] || version_line="N/A"
+            printf '%b%s%b' "$CYAN" "$version_line" "$NC"
+            ;;
+        alpine-xray-vlessenc|xray)
+            get_xray_version_badge
+            ;;
+        *)
+            printf '%bN/A%b' "$YELLOW" "$NC"
+            ;;
+    esac
+}
+
+function show_main_header() {
+    local runtime_kind=""
+    local runtime_name=""
+    runtime_kind=$(get_install_runtime_kind 2>/dev/null || true)
+    runtime_name=$(get_runtime_display_name "$runtime_kind")
+
+    line
+    center_echo "X R A Y  M A N A G E R" "${BRIGHT_YELLOW}${BOLD}"
+    printf '  管理器 : %b%s%b\n' "$GREEN" "$SCRIPT_VERSION" "$NC"
+    printf '  服务   : %b%s%b\n' "$CYAN" "$runtime_name" "$NC"
+    printf '  状态   : %s\n' "$(get_runtime_running_badge "$runtime_kind")"
+    printf '  版本   : %s\n' "$(get_runtime_version_badge "$runtime_kind")"
+    printf '  快捷键 : %bzxray%b（重新打开本菜单）\n' "$CYAN" "$NC"
+    line
+}
+
+function install_alpine_ss2022() {
+    run_transactional "alpine" "Alpine SS2022 安装" _install_alpine_ss2022_impl
+}
+
+function install_alpine_xray_vlessenc() {
+    run_transactional "alpine" "Alpine Xray 覆盖安装" _install_alpine_xray_vlessenc_impl
+}
+
+function update_alpine_xray_service() {
+    run_transactional "alpine" "Alpine Xray 核心更新" _update_alpine_xray_service_impl
+}
+
+function install_xray() {
+    run_transactional "systemd" "Xray 覆盖安装" _install_xray_impl
+}
+
+function update_xray() {
+    run_transactional "systemd" "Xray 核心更新" _update_xray_impl
+}
+
+if [[ "$QUICK_INSTALL" == "1" ]]; then
+    run_quick_install_entry
+    exit $?
 fi
+
+if [[ "$QUICK_UNINSTALL" == "1" ]]; then
+    uninstall_current_service_and_delete_self
+    exit $?
+fi
+
+if [[ "$QUICK_UPDATE" == "1" ]]; then
+    if [[ "${DOUDOU_SELF_UPDATED:-0}" == "1" ]]; then
+        update_current_service
+    else
+        self_update_and_update_xray
+    fi
+    exit $?
+fi
+
+CHOICE=""
+while true; do
+    clear_screen
+    show_main_header
+    echo -e "  ${CYAN}1.${NC} 覆盖安装"
+    echo -e "  ${CYAN}2.${NC} 更新/重启当前服务"
+    echo -e "  ${CYAN}3.${NC} 查看订阅链接"
+    echo -e "  ${CYAN}4.${NC} 完整卸载（y/n 确认）"
+    echo -e "  ${CYAN}5.${NC} 退出脚本"
+    line
+    read_input -r -p "请选择 [1-5]: " CHOICE
+
+    case "$CHOICE" in
+        "")
+            continue
+            ;;
+        1|01) install_default_flow    ;;
+        2|02) update_restart_menu     ;;
+        3|03) show_info               ;;
+        4|04) uninstall_current_service_and_delete_self ;;
+        5|05)
+            echo -e "${GREEN}已退出。${NC}"
+            sleep 0.3
+            clear_screen
+            exit 0
+            ;;
+        *) echo -e "${RED}无效输入，请重新选择。${NC}"; sleep 1; continue ;;
+    esac
+
+    echo ""
+    read_input -r -p "按 Enter 返回主菜单..." _
+done
