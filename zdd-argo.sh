@@ -1598,34 +1598,123 @@ warp_profile_valid() {
     && grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$WARP_PROFILE_FILE"
 }
 
-warp_register_account() {
-  local attempt=0 delay=30 output=""
+WARP_API_HOST="api.cloudflareclient.com"
+WARP_API_VERSION="v0a2158"
+WARP_API_CLIENT="a-6.10-2158"
+WARP_LAST_ERROR=""
 
-  for attempt in 1 2 3; do
-    if output="$("$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" register --accept-tos 2>&1)"; then
-      [[ -s "$WARP_ACCOUNT_FILE" ]] && return 0
-    fi
-    rm -f "$WARP_ACCOUNT_FILE"
-    if [[ "$output" == *"Too Many Requests"* || "$output" == *" 429 "* ]]; then
-      if ((attempt < 3)); then
-        warn "Cloudflare 暂时限制了本机的 WARP 注册频率（429），${delay} 秒后重试（第 ${attempt}/3 次）……"
-        sleep "$delay"
-        delay=$((delay * 2))
-        continue
-      fi
-      error "Cloudflare 对 WARP 设备注册有频率限制，本机近期注册次数过多。"
-      hint "请等待十分钟以上再试；注册成功后账户保存在 ${WARP_ACCOUNT_FILE}，重装时可选择保留复用。"
-      return 1
-    fi
-    printf '%s\n' "$output" | grep -vE '^[[:space:]]*(\||--|github\.com|runtime|main\.|Wraps|Error types)' | tail -n 4 >&2
+warp_error_is_ratelimit() {
+  [[ "$1" == *"Too Many Requests"* || "$1" == *" 429"* ]]
+}
+
+warp_generate_profile_from_account() {
+  local binary="$1" profile_tmp=""
+
+  profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
+  if ! "$binary" --config "$WARP_ACCOUNT_FILE" generate --profile "$profile_tmp" >/dev/null 2>&1; then
+    rm -f "$profile_tmp"
     return 1
+  fi
+  chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
+  mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
+  warp_profile_valid
+}
+
+warp_register_wgcf() {
+  local binary="$1" output=""
+
+  rm -f "$WARP_ACCOUNT_FILE"
+  if output="$("$binary" --config "$WARP_ACCOUNT_FILE" register --accept-tos 2>&1)" && [[ -s "$WARP_ACCOUNT_FILE" ]]; then
+    WARP_LAST_ERROR=""
+    warp_generate_profile_from_account "$binary" && return 0
+    WARP_LAST_ERROR="wgcf generate failed"
+    return 1
+  fi
+  rm -f "$WARP_ACCOUNT_FILE"
+  WARP_LAST_ERROR="$output"
+  return 1
+}
+
+warp_register_api() {
+  local ip_version="$1" key_pem="" private_key="" public_key="" response="" http_code="" peer_key="" endpoint="" v4="" v6=""
+
+  command -v curl >/dev/null 2>&1 || { WARP_LAST_ERROR="curl missing"; return 1; }
+  key_pem="$(openssl genpkey -algorithm X25519 2>/dev/null)" || { WARP_LAST_ERROR="openssl X25519 unsupported"; return 1; }
+  private_key="$(printf '%s\n' "$key_pem" | openssl pkey -outform DER 2>/dev/null | tail -c 32 | base64 | tr -d '\n')"
+  public_key="$(printf '%s\n' "$key_pem" | openssl pkey -pubout -outform DER 2>/dev/null | tail -c 32 | base64 | tr -d '\n')"
+  [[ "$private_key" =~ ^[A-Za-z0-9+/]{43}=$ && "$public_key" =~ ^[A-Za-z0-9+/]{43}=$ ]] || { WARP_LAST_ERROR="key generation failed"; return 1; }
+
+  response="$(curl "-${ip_version}" -sS --max-time 30 --connect-timeout 10 -X POST \
+    "https://${WARP_API_HOST}/${WARP_API_VERSION}/reg" \
+    -H 'User-Agent: okhttp/3.12.1' -H "CF-Client-Version: ${WARP_API_CLIENT}" -H 'Content-Type: application/json' \
+    --data "{\"key\":\"${public_key}\",\"install_id\":\"\",\"fcm_token\":\"\",\"tos\":\"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)\",\"model\":\"PC\",\"serial_number\":\"\",\"locale\":\"zh_CN\"}" \
+    -w '\n%{http_code}' 2>&1)" || { WARP_LAST_ERROR="$response"; return 1; }
+
+  http_code="${response##*$'\n'}"
+  response="${response%$'\n'*}"
+  if [[ "$http_code" != "200" ]]; then
+    WARP_LAST_ERROR="HTTP ${http_code} $(printf '%s' "$response" | head -c 200)"
+    [[ "$http_code" == "429" ]] && WARP_LAST_ERROR="429 Too Many Requests"
+    return 1
+  fi
+
+  peer_key="$(printf '%s' "$response" | jq -r '.config.peers[0].public_key // empty' 2>/dev/null)"
+  endpoint="$(printf '%s' "$response" | jq -r '.config.peers[0].endpoint.host // empty' 2>/dev/null)"
+  v4="$(printf '%s' "$response" | jq -r '.config.interface.addresses.v4 // empty' 2>/dev/null)"
+  v6="$(printf '%s' "$response" | jq -r '.config.interface.addresses.v6 // empty' 2>/dev/null)"
+  [[ "$peer_key" =~ ^[A-Za-z0-9+/]{43}=$ ]] && valid_ipv4 "$v4" && valid_ipv6 "$v6" \
+    || { WARP_LAST_ERROR="unexpected API response"; return 1; }
+  [[ -n "$endpoint" ]] || endpoint="engage.cloudflareclient.com:2408"
+
+  rm -f "$WARP_ACCOUNT_FILE"
+  printf '[Interface]\nPrivateKey = %s\nAddress = %s/32, %s/128\nDNS = 1.1.1.1\nMTU = 1280\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = %s\n' \
+    "$private_key" "$v4" "$v6" "$peer_key" "$endpoint" | write_file_atomic "$WARP_PROFILE_FILE" 600
+  WARP_LAST_ERROR=""
+  warp_profile_valid
+}
+
+host_has_ipv6() {
+  ip -6 route show default 2>/dev/null | grep -q . || ip -6 route get 2606:4700::1111 >/dev/null 2>&1
+}
+
+warp_register_account() {
+  local external="" delay=0
+
+  rm -f "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
+  warp_register_wgcf "$MANAGED_WGCF_BIN" && return 0
+  if ! warp_error_is_ratelimit "$WARP_LAST_ERROR"; then
+    printf '%s\n' "$WARP_LAST_ERROR" | grep -vE '^[[:space:]]*(\||--|github\.com|runtime|main\.|Wraps|Error types)' | tail -n 4 >&2
+    return 1
+  fi
+  warn "Cloudflare 限制了本机通过 wgcf 注册的频率（429），改用备用方式注册……"
+
+  external="$(command -v wgcf 2>/dev/null || true)"
+  if [[ -n "$external" && "$external" != "$MANAGED_WGCF_BIN" ]] && wgcf_version_ok "$external"; then
+    info "尝试系统已安装的 wgcf：${external}"
+    warp_register_wgcf "$external" && return 0
+  fi
+
+  info "尝试通过 Cloudflare API 直接注册（IPv4）……"
+  warp_register_api 4 && return 0
+  if host_has_ipv6; then
+    info "尝试通过 Cloudflare API 直接注册（IPv6）……"
+    warp_register_api 6 && return 0
+  fi
+
+  for delay in 30 60; do
+    warn "仍被限流，${delay} 秒后再试……"
+    sleep "$delay"
+    warp_register_wgcf "$MANAGED_WGCF_BIN" && return 0
+    warp_error_is_ratelimit "$WARP_LAST_ERROR" || break
+    warp_register_api 4 && return 0
   done
+
+  error "Cloudflare 对本机 IP 的 WARP 设备注册限流，所有注册方式均未通过。"
+  hint "请等待一段时间再试，或更换网络出口后再试；注册成功后账户会保存在 ${WARP_DIR}，重装时可选择保留复用。"
   return 1
 }
 
 ensure_warp_profile() {
-  local profile_tmp=""
-
   mkdir -p "$WARP_DIR"
   chown root:root "$WARP_DIR"
   chmod 700 "$WARP_DIR"
@@ -1633,20 +1722,17 @@ ensure_warp_profile() {
   ensure_component wgcf
   [[ -x "$MANAGED_WGCF_BIN" ]] || die "未找到 wgcf。"
 
-  if [[ ! -s "$WARP_ACCOUNT_FILE" || -L "$WARP_ACCOUNT_FILE" ]]; then
-    rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
-    info "正在注册 Cloudflare WARP 设备（通过第三方工具 wgcf）……"
-    warp_register_account || die "Cloudflare WARP 设备注册失败，现有部署未被改动。"
-    ok "Cloudflare WARP 设备注册成功。"
+  if [[ -s "$WARP_ACCOUNT_FILE" && ! -L "$WARP_ACCOUNT_FILE" ]]; then
+    if warp_generate_profile_from_account "$MANAGED_WGCF_BIN"; then
+      ok "已用现有 WARP 账户生成 WireGuard 配置。"
+      return 0
+    fi
+    warn "现有 WARP 账户已失效，将重新注册。"
   fi
 
-  profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
-  "$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" generate --profile "$profile_tmp" >/dev/null 2>&1 \
-    || { rm -f "$profile_tmp"; die "Cloudflare WARP WireGuard 配置生成失败。"; }
-  chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
-  mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
-  warp_profile_valid || die "wgcf 未生成有效的 WireGuard 配置。"
-  ok "Cloudflare WARP WireGuard 配置已生成。"
+  info "正在注册 Cloudflare WARP 设备……"
+  warp_register_account || die "Cloudflare WARP 设备注册失败，现有部署未被改动。"
+  ok "Cloudflare WARP 设备注册成功，WireGuard 配置已生成。"
 }
 
 warp_profile_value() {
