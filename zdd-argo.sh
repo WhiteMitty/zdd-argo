@@ -20,6 +20,7 @@ DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
 DEFAULT_SB_PORT="10000"
 DEFAULT_XR_PORT="10001"
 DEFAULT_IP_MODE="prefer_ipv4"
+DEFAULT_ECH_CONFIG="cloudflare-ech.com+https://doh.pub/dns-query"
 WS_EARLY_DATA="2048"
 
 # ---------------------------------------------------------------------------
@@ -115,6 +116,7 @@ SB_WARP="0"
 XR_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
 XR_PORT="$DEFAULT_XR_PORT"
 XR_NODE="$DEFAULT_NODE_NAME"
+XR_ECH="$DEFAULT_ECH_CONFIG"
 
 # 状态（state.json / xray-state.json），通过 cget / cset 间接读写。
 # shellcheck disable=SC2034
@@ -167,9 +169,10 @@ if [[ -t 1 ]]; then
   C_CYAN=$'\033[36m'
   C_DIM=$'\033[2m'
   C_BOLD=$'\033[1m'
+  C_HL=$'\033[1;93m'
   C_RESET=$'\033[0m'
 else
-  C_GREEN="" C_YELLOW="" C_RED="" C_CYAN="" C_DIM="" C_BOLD="" C_RESET=""
+  C_GREEN="" C_YELLOW="" C_RED="" C_CYAN="" C_DIM="" C_BOLD="" C_HL="" C_RESET=""
 fi
 
 info()  { printf '%s[信息]%s %s\n' "$C_CYAN" "$C_RESET" "$*"; }
@@ -269,12 +272,12 @@ ui_text() {
   printf '%s%s\n' "$UI_INDENT" "$*"
 }
 
-# 开启/关闭状态文字：开启时高亮。
+# 开启/关闭状态文字：开启时亮黄高亮。
 state_text() {
   if [[ "${1:-0}" == "1" ]]; then
-    printf '%s开启%s' "$C_GREEN" "$C_RESET"
+    printf '%s开启%s' "$C_HL" "$C_RESET"
   else
-    printf '关闭'
+    printf '%s关闭%s' "$C_DIM" "$C_RESET"
   fi
 }
 
@@ -1377,6 +1380,21 @@ reset_settings_defaults() {
   SB_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"; SB_PORT="$DEFAULT_SB_PORT"; SB_NODE="$DEFAULT_NODE_NAME"
   SB_DOH="0"; SB_WARP="0"
   XR_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"; XR_PORT="$DEFAULT_XR_PORT"; XR_NODE="$DEFAULT_NODE_NAME"
+  XR_ECH="$DEFAULT_ECH_CONFIG"
+}
+
+valid_ech_config() {
+  local value="$1"
+  local pattern='^[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$'
+  [[ -z "$value" ]] && return 0
+  [[ ${#value} -le 200 && "$value" =~ $pattern ]]
+}
+
+normalize_ech_config() {
+  case "${1,,}" in
+    none|off|no|关闭|不用) printf '' ;;
+    *) printf '%s' "$1" ;;
+  esac
 }
 
 settings_field() {
@@ -1411,6 +1429,9 @@ load_settings() {
     v="$(settings_field '.xray.preferred_endpoint')"; v="$(normalize_preferred_endpoint "$v")"; valid_preferred_endpoint "$v" && XR_ENDPOINT="$v"
     v="$(settings_field '.xray.local_port')";       valid_local_port "$v" && XR_PORT="$((10#$v))"
     v="$(settings_field '.xray.node_name')";        valid_node_name "$v" && XR_NODE="$v"
+    if jq -e '.xray | has("ech_config")' "$SETTINGS_JSON" >/dev/null 2>&1; then
+      v="$(settings_field '.xray.ech_config')";     valid_ech_config "$v" && XR_ECH="$v"
+    fi
     return 0
   fi
 
@@ -1426,7 +1447,7 @@ load_settings() {
     v="$(jq -r '.local_port // empty' "$XR_STATE" 2>/dev/null || true)"; valid_local_port "$v" && XR_PORT="$((10#$v))"
     v="$(jq -r '.node_name // empty' "$XR_STATE" 2>/dev/null || true)"; valid_node_name "$v" && XR_NODE="$v"
   fi
-  info "已读取旧版设置文件，保存时将升级为新格式。"
+  info "检测到旧版设置文件，已自动升级为新格式。"
   save_settings
 }
 
@@ -1439,6 +1460,7 @@ save_settings() {
   valid_node_name "$SB_NODE" || die "sing-box 节点名称无效。"
   valid_node_name "$XR_NODE" || die "Xray 节点名称无效。"
   valid_flag "$SB_DOH" && valid_flag "$SB_WARP" || die "DoH / WARP 开关无效。"
+  valid_ech_config "$XR_ECH" || die "Xray ECH 配置无效。"
 
   mkdir -p "$DATA_DIR"
   chown root:"$SERVICE_GROUP" "$DATA_DIR" 2>/dev/null || true
@@ -1447,13 +1469,13 @@ save_settings() {
   jq -n --argjson schema 6 --arg ip_mode "$IP_MODE" --arg updated_at "$(utc_now)" \
     --arg sb_endpoint "$SB_ENDPOINT" --argjson sb_port "$SB_PORT" --arg sb_node "$SB_NODE" \
     --argjson sb_doh "$SB_DOH" --argjson sb_warp "$SB_WARP" \
-    --arg xr_endpoint "$XR_ENDPOINT" --argjson xr_port "$XR_PORT" --arg xr_node "$XR_NODE" \
+    --arg xr_endpoint "$XR_ENDPOINT" --argjson xr_port "$XR_PORT" --arg xr_node "$XR_NODE" --arg xr_ech "$XR_ECH" \
     '{
       schema: $schema,
       outbound_ip_mode: $ip_mode,
       singbox: {preferred_endpoint: $sb_endpoint, local_port: $sb_port, node_name: $sb_node,
                 doh_enabled: $sb_doh, warp_enabled: $sb_warp},
-      xray:    {preferred_endpoint: $xr_endpoint, local_port: $xr_port, node_name: $xr_node},
+      xray:    {preferred_endpoint: $xr_endpoint, local_port: $xr_port, node_name: $xr_node, ech_config: $xr_ech},
       updated_at: $updated_at
     }' | write_file_atomic "$SETTINGS_JSON" 600
 }
@@ -1575,7 +1597,7 @@ prompt_ip_mode() {
 }
 
 configure_core_settings() {
-  local endpoint="" port="" node="" doh="" warp="" old_mode="$IP_MODE"
+  local endpoint="" port="" node="" doh="" warp="" ech="" old_mode="$IP_MODE"
 
   printf '\n'
   ui_text "${C_BOLD}${CORE_LABEL} · ${CORE_PROTO} 自定义部署${C_RESET}"
@@ -1603,10 +1625,17 @@ configure_core_settings() {
   if [[ "$CORE" == "singbox" ]]; then
     printf '\n'
     prompt_flag doh "开启 Cloudflare DoH（1.1.1.1）" "$SB_DOH"
-    prompt_flag warp "开启 Cloudflare WARP 出站" "$SB_WARP"
+    prompt_flag warp "开启 Cloudflare WARP 全局出站" "$SB_WARP"
     SB_DOH="$doh"
     SB_WARP="$warp"
-    [[ "$SB_WARP" == "1" ]] && warn "首次开启 WARP 时会调用第三方工具 wgcf，以 --accept-tos 注册 Cloudflare WARP 设备。"
+    [[ "$SB_WARP" == "1" ]] && warn "首次开启 WARP 会调用第三方工具 wgcf，以 --accept-tos 注册 Cloudflare WARP 设备。"
+  else
+    printf '\n'
+    hint "ECH 配置写入 Xray 分享链接（格式：域名+DoH 地址），输入 off 表示不写入。"
+    prompt_setting ech "ECH 配置" "${XR_ECH:-off}" valid_ech_config normalize_ech_config \
+      "ECH 配置不能包含空格或非法字符。"
+    [[ "$ech" == "off" ]] && ech=""
+    XR_ECH="$ech"
   fi
 
   prompt_ip_mode
@@ -1748,13 +1777,13 @@ singbox_render_config() {
       dns_final="cloudflare-doh"
       ;;
     0:1)
-      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh)"
+      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh direct)"
       dns_servers="[{\"type\":\"local\",\"tag\":\"local-dns\"},${doh_bootstrap}]"
       endpoints="[$(singbox_warp_endpoint)]"
       route_final="warp"
       ;;
     1:1)
-      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh)"
+      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh direct)"
       doh_via_warp="$(singbox_doh_server cloudflare-doh warp)"
       dns_servers="[${doh_bootstrap},${doh_via_warp}]"
       dns_final="cloudflare-doh"
@@ -2465,11 +2494,8 @@ stop_tunnel() {
     stopped=1
   done
 
-  if [[ $stopped -eq 1 ]]; then
-    ok "${CORE_LABEL} 临时隧道已停止，旧域名随之失效。"
-  else
-    info "没有正在运行的 ${CORE_LABEL} 临时隧道。"
-  fi
+  [[ $stopped -eq 1 ]] && ok "${CORE_LABEL} 临时隧道已停止，旧域名随之失效。"
+  return 0
 }
 
 prepare_tunnel_log() {
@@ -2562,13 +2588,18 @@ generate_link() {
       || die "生成的 VMess 链接自检失败。"
   else
     valid_vlessenc_value "$XR_ENC" || die "VLESS-ENC encryption 无效。"
-    jq -n --arg ps "$node" --arg add "$endpoint" --arg id "$uuid" --arg host "$host" --arg path "$path" --arg enc "$XR_ENC" '
+    valid_ech_config "$XR_ECH" || die "Xray ECH 配置无效。"
+    jq -n --arg ps "$node" --arg add "$endpoint" --arg id "$uuid" --arg host "$host" --arg path "$path" \
+      --arg enc "$XR_ENC" --arg ech "$XR_ECH" '
       {protocol: "vless", ps: $ps, add: $add, port: 443, id: $id, encryption: $enc, flow: "xtls-rprx-vision",
-       security: "tls", sni: $host, host: $host, path: $path, type: "ws", alpn: "http/1.1", fp: "firefox"}' \
+       security: "tls", sni: $host, vcn: $host, host: $host, path: $path, type: "ws", alpn: "http/1.1", fp: "firefox"}
+      + (if $ech != "" then {ech: $ech, echConfigList: $ech} else {} end)' \
       | write_file_atomic "$CORE_LINK_JSON" 600
     link="vless://${uuid}@$(uri_host "$endpoint"):443?encryption=$(url_encode "$XR_ENC")&flow=xtls-rprx-vision"
-    link+="&security=tls&sni=$(url_encode "$host")&fp=firefox&type=ws&host=$(url_encode "$host")"
-    link+="&path=$(url_encode "$path")&alpn=http%2F1.1#$(url_encode "$node")"
+    link+="&security=tls&sni=$(url_encode "$host")&vcn=$(url_encode "$host")&fp=firefox&type=ws&host=$(url_encode "$host")"
+    link+="&path=$(url_encode "$path")&alpn=http%2F1.1"
+    [[ -n "$XR_ECH" ]] && link+="&ech=$(url_encode "$XR_ECH")&echConfigList=$(url_encode "$XR_ECH")"
+    link+="#$(url_encode "$node")"
   fi
 
   printf '%s\n' "$link" | write_file_atomic "$CORE_LINK" 600
@@ -2638,7 +2669,7 @@ deploy_core() {
 
   rebuild_core
   apply_ip_mode_to_other_core
-  ok "${CORE_LABEL} · ${CORE_PROTO} 临时隧道已生成，现在可以断开 SSH。"
+  ok "${CORE_LABEL} · ${CORE_PROTO} 临时隧道已就绪，可以安全断开 SSH。"
   show_core_subscription
 }
 
@@ -2680,6 +2711,7 @@ show_core_subscription() {
   else
     ui_kv "出站策略" "$(ip_mode_label)"
     ui_kv "加密" "VLESS-ENC · xorpub · 0-RTT"
+    ui_kv "ECH" "${XR_ECH:-未写入}"
   fi
   ui_kv "隧道状态" "$(state_text "$running")"
   ui_line
@@ -2693,7 +2725,9 @@ show_core_subscription() {
     if [[ "$CORE" == "singbox" ]]; then
       hint "导入后应为 ws · tls · alpn http/1.1，SNI/Host 均为临时域名。"
     else
-      hint "导入后应为 ws · tls · alpn http/1.1，SNI/Host 均为临时域名；客户端需支持 VLESS Encryption。"
+      hint "导入后应为 ws · tls · alpn http/1.1，SNI / Host / 证书校验名均为临时域名。"
+      [[ -n "$XR_ECH" ]] && hint "EchConfigList 应为：${XR_ECH}"
+      hint "客户端需使用支持 VLESS Encryption 的 Xray 内核。"
     fi
   else
     warn "${CORE_LABEL} 尚未生成临时隧道。"
@@ -2715,7 +2749,7 @@ cmd_show_subscriptions() {
 # 状态
 # ---------------------------------------------------------------------------
 core_status_row() {
-  local version="" svc=0 tun=0 host="—" port=""
+  local version="" svc=0 tun=0 host="—" port="" color=""
 
   use_core "$1"
   version="$(component_installed_version "$CORE")"
@@ -2729,17 +2763,20 @@ core_status_row() {
     [[ -n "$host" ]] || host="—"
   fi
   [[ "$version" =~ ^[0-9] ]] && version="v${version}"
-  printf '%s' "$UI_INDENT"
+  # 运行中的内核整行亮黄，未运行的保持普通。
+  if [[ $svc -eq 1 || $tun -eq 1 ]]; then color="$C_HL"; fi
+  printf '%s%s' "$UI_INDENT" "$color"
   pad_text "$CORE_LABEL" 10
   pad_text "$version" 12
+  printf '%s' "$C_RESET"
   printf '%s' "$(state_text "$svc")"; pad_text "" 4
   printf '%s' "$(state_text "$tun")"; pad_text "" 4
-  printf '%s\n' "$host"
+  printf '%s%s%s\n' "$color" "$host" "$C_RESET"
 }
 
 status_table() {
-  printf '%s' "$UI_INDENT"
-  pad_text "内核" 10; pad_text "版本" 12; pad_text "服务" 8; pad_text "隧道" 8; printf '临时域名\n'
+  printf '%s%s' "$UI_INDENT" "$C_DIM"
+  pad_text "内核" 10; pad_text "版本" 12; pad_text "服务" 8; pad_text "隧道" 8; printf '临时域名%s\n' "$C_RESET"
   core_status_row singbox
   core_status_row xray
 }
@@ -2808,6 +2845,7 @@ show_log() {
 stop_core_tunnel() {
   use_core "$1"
   load_settings
+  tunnel_is_running || info "${CORE_LABEL} 当前没有运行中的临时隧道，仅清理残留文件。"
   stop_tunnel || die "无法安全停止 ${CORE_LABEL} 临时隧道。"
   clear_tunnel_artifacts
 }
@@ -3014,7 +3052,7 @@ run_menu_action() {
     clear_screen
     exit 0
   elif [[ $rc -ne 0 ]]; then
-    error "操作失败，退出码 ${rc}。"
+    error "操作未完成（退出码 ${rc}），请查看上方提示。"
   fi
   pause_screen
 }
@@ -3120,13 +3158,16 @@ interactive_menu() {
     printf '\n'
     menu_header
     ui_menu_row 1 "自动生成" "默认参数一键部署"
-    ui_menu_row 2 "自定义生成" "端口 · 名称 · 优选 · DoH · WARP"
-    ui_menu_row 3 "查看订阅"
-    ui_menu_row 4 "运行状态"
-    ui_menu_row 5 "查看日志"
-    ui_menu_row 6 "停止隧道"
+    ui_menu_row 2 "自定义生成" "端口 · 名称 · 优选 · DoH · WARP · ECH"
+    printf '\n'
+    ui_menu_row 3 "查看订阅" "分享链接与节点参数"
+    ui_menu_row 4 "运行状态" "内核 · 组件 · 路径"
+    ui_menu_row 5 "查看日志" "服务日志 · 隧道日志"
+    printf '\n'
+    ui_menu_row 6 "停止隧道" "断开临时隧道，保留配置"
     ui_menu_row 7 "更新组件" "sing-box · Xray · cloudflared · wgcf"
-    ui_menu_row 8 "完整卸载"
+    ui_menu_row 8 "完整卸载" "清除全部文件、账户与程序"
+    printf '\n'
     ui_menu_row 0 "退出"
     ui_line
     hint "退出后输入 zargo 可重新打开菜单。"
