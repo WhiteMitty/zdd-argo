@@ -224,7 +224,7 @@ ui_kv() {
   local value="$2"
   local color="${3:-}"
 
-  [[ -n "$value" ]] || value="—"
+  [[ -n "$value" ]] || value="-"
   printf '%s' "$UI_INDENT"
   pad_text "$label" "$UI_LABEL_WIDTH"
   printf '%s%s%s\n' "$color" "$value" "$C_RESET"
@@ -1599,7 +1599,7 @@ warp_profile_valid() {
 }
 
 warp_register_account() {
-  local attempt=0 delay=20 output=""
+  local attempt=0 delay=30 output=""
 
   for attempt in 1 2 3; do
     if output="$("$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" register --accept-tos 2>&1)"; then
@@ -1613,8 +1613,8 @@ warp_register_account() {
         delay=$((delay * 2))
         continue
       fi
-      error "Cloudflare 对 WARP 设备注册有频率限制，本机短时间内注册次数过多。"
-      hint "请等待几分钟后重新执行；注册成功后账户会保存在 ${WARP_ACCOUNT_FILE}，之后不再重复注册。"
+      error "Cloudflare 对 WARP 设备注册有频率限制，本机近期注册次数过多。"
+      hint "请等待十分钟以上再试；注册成功后账户保存在 ${WARP_ACCOUNT_FILE}，重装时可选择保留复用。"
       return 1
     fi
     printf '%s\n' "$output" | grep -vE '^[[:space:]]*(\||--|github\.com|runtime|main\.|Wraps|Error types)' | tail -n 4 >&2
@@ -1629,6 +1629,7 @@ ensure_warp_profile() {
   mkdir -p "$WARP_DIR"
   chown root:root "$WARP_DIR"
   chmod 700 "$WARP_DIR"
+  warp_profile_valid && return 0
   ensure_component wgcf
   [[ -x "$MANAGED_WGCF_BIN" ]] || die "未找到 wgcf。"
 
@@ -1639,7 +1640,6 @@ ensure_warp_profile() {
     ok "Cloudflare WARP 设备注册成功。"
   fi
 
-  warp_profile_valid && return 0
   profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
   "$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" generate --profile "$profile_tmp" >/dev/null 2>&1 \
     || { rm -f "$profile_tmp"; die "Cloudflare WARP WireGuard 配置生成失败。"; }
@@ -2675,7 +2675,7 @@ core_status_row() {
 
   use_core "$1"
   version="$(component_installed_version "$CORE")"
-  if [[ "$version" =~ ^[0-9] ]]; then version="v${version}"; else version="—"; fi
+  if [[ "$version" =~ ^[0-9] ]]; then version="v${version}"; else version="-"; fi
   if core_is_deployed; then
     load_state
     tunnel_is_running && tun=1
@@ -2849,7 +2849,7 @@ remove_shortcuts() {
 }
 
 cmd_uninstall_all() {
-  local core="" session=""
+  local core="" session="" keep_warp=0 warp_backup=""
 
   printf '\n'
   warn "完整卸载会删除：两个内核的服务与配置、临时隧道、订阅链接、日志、WARP 账户、"
@@ -2857,6 +2857,11 @@ cmd_uninstall_all() {
   hint "通过 apt / apk 安装的系统依赖不会被删除。"
   printf '\n'
   confirm_yes "确认完整卸载请输入 yes：" || { info "已取消。"; return 0; }
+  if [[ -s "$WARP_ACCOUNT_FILE" || -s "$WARP_PROFILE_FILE" ]]; then
+    printf '\n'
+    hint "Cloudflare 对 WARP 设备注册有频率限制，保留账户可让重装时直接复用、无需重新注册。"
+    if confirm_yn "保留 WARP 账户文件（${WARP_DIR}）"; then keep_warp=1; fi
+  fi
 
   load_settings
   for core in singbox xray; do
@@ -2881,7 +2886,18 @@ cmd_uninstall_all() {
   fi
 
   remove_service_account
+  if [[ $keep_warp -eq 1 ]]; then
+    warp_backup="$(mktemp -d)"
+    cp -a "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$warp_backup"/ 2>/dev/null || true
+  fi
   rm -rf -- "$DATA_DIR"
+  if [[ $keep_warp -eq 1 ]]; then
+    mkdir -p "$WARP_DIR"
+    chmod 700 "$DATA_DIR" "$WARP_DIR"
+    cp -a "$warp_backup"/. "$WARP_DIR"/ 2>/dev/null || true
+    chmod 600 "$WARP_DIR"/* 2>/dev/null || true
+    rm -rf -- "$warp_backup"
+  fi
   rm -f -- "$SB_TUNNEL_LOG" "$SB_TUNNEL_LOG".* "$XR_TUNNEL_LOG" "$XR_TUNNEL_LOG".* \
     "$SB_CORE_LOG" "$SB_CORE_LOG".* "$XR_CORE_LOG" "$XR_CORE_LOG".*
   remove_shortcuts
@@ -2891,7 +2907,11 @@ cmd_uninstall_all() {
   hash -r
   service_daemon_reload
 
-  ok "zdd-argo 已完整卸载。"
+  if [[ $keep_warp -eq 1 ]]; then
+    ok "zdd-argo 已完整卸载，仅保留 WARP 账户：${WARP_DIR}"
+  else
+    ok "zdd-argo 已完整卸载。"
+  fi
   [[ $MENU_MODE -eq 1 ]] && return 10
   return 0
 }
