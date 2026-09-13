@@ -2621,71 +2621,38 @@ cmd_show_subscriptions() {
 }
 
 core_status_row() {
-  local version="" svc=0 tun=0 host="—" port="" color=""
+  local version="" svc=0 tun=0 host="" port="" color="" desc=""
 
   use_core "$1"
   version="$(component_installed_version "$CORE")"
-  if core_is_deployed; then
+  [[ "$version" =~ ^[0-9] ]] && version="v${version}"
+  if [[ "$version" == "未安装" ]]; then
+    desc="${C_DIM}未安装${C_RESET}"
+  elif ! core_is_deployed; then
+    desc="${version} ${C_DIM}· 未部署${C_RESET}"
+  else
     load_state
     port="$(cget PORT)"
     service_is_active && listener_exact_loopback "$port" && svc=1
     tunnel_is_running && tun=1
-    host="$(cget ARGO_HOST)"
-    [[ $tun -eq 1 && -n "$(extract_argo_host || true)" ]] && host="$(extract_argo_host)"
-    [[ -n "$host" ]] || host="—"
+    [[ $tun -eq 1 ]] && host="$(extract_argo_host || true)"
+    [[ $svc -eq 1 || $tun -eq 1 ]] && color="$C_HL"
+    desc="${color}${version}${C_RESET} ${C_DIM}·${C_RESET} 服务$(state_text "$svc") ${C_DIM}·${C_RESET} 隧道$(state_text "$tun")"
   fi
-  [[ "$version" =~ ^[0-9] ]] && version="v${version}"
-  if [[ $svc -eq 1 || $tun -eq 1 ]]; then color="$C_HL"; fi
-  printf '%s%s' "$UI_INDENT" "$color"
-  pad_text "$CORE_LABEL" 10
-  pad_text "$version" 10
-  printf '%s' "$C_RESET"
-  printf '%s' "$(state_text "$svc")"; pad_text "" 4
-  printf '%s' "$(state_text "$tun")"; pad_text "" 4
-  printf '%s%s%s\n' "$color" "$host" "$C_RESET"
+
+  printf '%s   %s' "$UI_INDENT" "$color"
+  pad_text "$CORE_LABEL" "$UI_MENU_WIDTH"
+  printf '%s%s\n' "$C_RESET" "$desc"
+  if [[ -n "$host" ]]; then
+    printf '%s   ' "$UI_INDENT"
+    pad_text "" "$UI_MENU_WIDTH"
+    printf '%s%s%s\n' "$color" "$host" "$C_RESET"
+  fi
 }
 
 status_table() {
-  printf '%s%s' "$UI_INDENT" "$C_DIM"
-  pad_text "内核" 10; pad_text "版本" 10; pad_text "服务" 6; pad_text "隧道" 6; printf '临时域名%s\n' "$C_RESET"
   core_status_row singbox
   core_status_row xray
-}
-
-cmd_show_status() {
-  local core="" resolved=""
-
-  load_settings
-  printf '\n'
-  ui_title "运行状态"
-  status_table
-  ui_line
-  ui_kv "脚本版本" "v${SCRIPT_VERSION}"
-  ui_kv "运行平台" "$(runtime_label)"
-  ui_kv "出站策略" "$(ip_mode_label)"
-  ui_kv "DoH / WARP" "$(state_text "$SB_DOH") / $(state_text "$SB_WARP")"
-  [[ "$SB_WARP" == "1" && -n "$(warp_check_summary)" ]] && ui_kv "WARP 自检" "$(warp_check_summary)"
-  printf '\n'
-  for core in singbox xray; do
-    use_core "$core"
-    core_is_deployed || continue
-    load_state
-    ui_kv "${CORE_LABEL} 监听" "127.0.0.1:$(cget PORT)"
-    ui_kv "${CORE_LABEL} 优选" "$(cget ENDPOINT)"
-    ui_kv "${CORE_LABEL} 节点" "$(cget NODE)"
-  done
-  printf '\n'
-  ui_kv "cloudflared" "$(component_installed_version cloudflared)"
-  ui_kv "wgcf" "$(component_installed_version wgcf)"
-  ui_kv "程序目录" "$BIN_DIR"
-  ui_kv "数据目录" "$DATA_DIR"
-  resolved="$(type -P zargo 2>/dev/null || true)"
-  if [[ -n "$resolved" ]] && path_is_zdd_launcher "$resolved"; then
-    ui_kv "管理命令" "zargo  ${C_DIM}${resolved}${C_RESET}"
-  else
-    ui_kv "管理命令" "未找到 zargo" "$C_RED"
-  fi
-  ui_line
 }
 
 show_log() {
@@ -3016,29 +2983,27 @@ interactive_menu() {
     ui_menu_row 2 "自定义生成" "端口 · 名称 · 优选 · DoH · WARP · ECH"
     printf '\n'
     ui_menu_row 3 "查看订阅" "分享链接与节点参数"
-    ui_menu_row 4 "运行状态" "内核 · 组件 · 路径"
-    ui_menu_row 5 "查看日志" "服务日志 · 隧道日志"
+    ui_menu_row 4 "查看日志" "服务日志 · 隧道日志"
     printf '\n'
-    ui_menu_row 6 "停止隧道" "断开临时隧道，保留配置"
-    ui_menu_row 7 "更新组件" "sing-box · Xray · cloudflared · wgcf"
-    ui_menu_row 8 "完整卸载" "清除全部文件、账户与程序"
+    ui_menu_row 5 "停止隧道" "断开临时隧道，保留配置"
+    ui_menu_row 6 "更新组件" "sing-box · Xray · cloudflared · wgcf"
+    ui_menu_row 7 "完整卸载" "清除全部文件、账户与程序"
     printf '\n'
     ui_menu_row 0 "退出"
     ui_line
     hint "退出后输入 zargo 可重新打开菜单。"
     printf '\n'
 
-    read_interactive choice "请选择 [0-8]：" "0" || choice="0"
+    read_interactive choice "请选择 [0-7]：" "0" || choice="0"
     clear_screen
     case "$choice" in
       1) menu_deploy auto ;;
       2) menu_deploy custom ;;
       3) run_menu_action run_with_lock cmd_show_subscriptions ;;
-      4) run_menu_action run_with_lock cmd_show_status ;;
-      5) menu_logs ;;
-      6) menu_stop ;;
-      7) run_menu_action run_with_lock cmd_update_components ;;
-      8) run_menu_action run_with_lock cmd_uninstall_all ;;
+      4) menu_logs ;;
+      5) menu_stop ;;
+      6) run_menu_action run_with_lock cmd_update_components ;;
+      7) run_menu_action run_with_lock cmd_uninstall_all ;;
       0) clear_screen; exit 0 ;;
       *) warn "无效选择：${choice}"; pause_screen ;;
     esac
