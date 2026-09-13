@@ -783,12 +783,12 @@ safe_download() {
   local url="$1"
   local output="$2"
   local mode="${3:-file}"
-  local -a curl_extra=(--max-time 300)
-  local -a wget_extra=(--timeout=300)
+  local -a curl_extra=(--max-time 300 --progress-bar)
+  local -a wget_extra=(--timeout=300 -q --show-progress)
 
   if [[ "$mode" == "api" ]]; then
-    curl_extra=(--max-time 120 -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
-    wget_extra=(--timeout=120 --header='Accept: application/vnd.github+json' --header='X-GitHub-Api-Version: 2022-11-28')
+    curl_extra=(--max-time 120 -sS -H 'Accept: application/vnd.github+json' -H 'X-GitHub-Api-Version: 2022-11-28')
+    wget_extra=(--timeout=120 -q --header='Accept: application/vnd.github+json' --header='X-GitHub-Api-Version: 2022-11-28')
   fi
 
   if command -v curl >/dev/null 2>&1; then
@@ -1598,6 +1598,31 @@ warp_profile_valid() {
     && grep -Eq '^[[:space:]]*Endpoint[[:space:]]*=' "$WARP_PROFILE_FILE"
 }
 
+warp_register_account() {
+  local attempt=0 delay=20 output=""
+
+  for attempt in 1 2 3; do
+    if output="$("$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" register --accept-tos 2>&1)"; then
+      [[ -s "$WARP_ACCOUNT_FILE" ]] && return 0
+    fi
+    rm -f "$WARP_ACCOUNT_FILE"
+    if [[ "$output" == *"Too Many Requests"* || "$output" == *" 429 "* ]]; then
+      if ((attempt < 3)); then
+        warn "Cloudflare 暂时限制了本机的 WARP 注册频率（429），${delay} 秒后重试（第 ${attempt}/3 次）……"
+        sleep "$delay"
+        delay=$((delay * 2))
+        continue
+      fi
+      error "Cloudflare 对 WARP 设备注册有频率限制，本机短时间内注册次数过多。"
+      hint "请等待几分钟后重新执行；注册成功后账户会保存在 ${WARP_ACCOUNT_FILE}，之后不再重复注册。"
+      return 1
+    fi
+    printf '%s\n' "$output" | grep -vE '^[[:space:]]*(\||--|github\.com|runtime|main\.|Wraps|Error types)' | tail -n 4 >&2
+    return 1
+  done
+  return 1
+}
+
 ensure_warp_profile() {
   local profile_tmp=""
 
@@ -1609,13 +1634,14 @@ ensure_warp_profile() {
 
   if [[ ! -s "$WARP_ACCOUNT_FILE" || -L "$WARP_ACCOUNT_FILE" ]]; then
     rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE" "$WARP_CHECK_FILE"
-    warn "正在注册新的 Cloudflare WARP 设备（wgcf 为第三方非官方工具）。"
-    "$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" register --accept-tos \
-      || { rm -f "$WARP_ACCOUNT_FILE" "$WARP_PROFILE_FILE"; die "Cloudflare WARP 设备注册失败。"; }
+    info "正在注册 Cloudflare WARP 设备（通过第三方工具 wgcf）……"
+    warp_register_account || die "Cloudflare WARP 设备注册失败，现有部署未被改动。"
+    ok "Cloudflare WARP 设备注册成功。"
   fi
 
+  warp_profile_valid && return 0
   profile_tmp="$(mktemp "${WARP_DIR}/.wgcf-profile.conf.XXXXXX")"
-  "$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" generate --profile "$profile_tmp" \
+  "$MANAGED_WGCF_BIN" --config "$WARP_ACCOUNT_FILE" generate --profile "$profile_tmp" >/dev/null 2>&1 \
     || { rm -f "$profile_tmp"; die "Cloudflare WARP WireGuard 配置生成失败。"; }
   chmod 600 "$WARP_ACCOUNT_FILE" "$profile_tmp"
   mv -f "$profile_tmp" "$WARP_PROFILE_FILE"
@@ -2565,8 +2591,9 @@ deploy_core() {
       && die "本地端口 $(cget PORT) 已被 $(component_label "$(other_core)") 使用，请改用自定义生成更换端口。"
   fi
 
-  stop_tunnel || die "无法安全停止现有 ${CORE_LABEL} 临时隧道。"
   [[ "$mode" == "custom" ]] && configure_core_settings
+  [[ "$CORE" == "singbox" && "$SB_WARP" == "1" ]] && ensure_warp_profile
+  stop_tunnel || die "无法安全停止现有 ${CORE_LABEL} 临时隧道。"
 
   rebuild_core
   apply_ip_mode_to_other_core
@@ -2644,33 +2671,19 @@ cmd_show_subscriptions() {
 }
 
 core_status_row() {
-  local version="" svc=0 tun=0 host="" port="" color="" desc=""
+  local version="" tun=0
 
   use_core "$1"
   version="$(component_installed_version "$CORE")"
-  [[ "$version" =~ ^[0-9] ]] && version="v${version}"
-  if [[ "$version" == "未安装" ]]; then
-    desc="${C_DIM}未安装${C_RESET}"
-  elif ! core_is_deployed; then
-    desc="${version} ${C_DIM}· 未部署${C_RESET}"
-  else
+  if [[ "$version" =~ ^[0-9] ]]; then version="v${version}"; else version="—"; fi
+  if core_is_deployed; then
     load_state
-    port="$(cget PORT)"
-    service_is_active && listener_exact_loopback "$port" && svc=1
     tunnel_is_running && tun=1
-    [[ $tun -eq 1 ]] && host="$(extract_argo_host || true)"
-    [[ $svc -eq 1 || $tun -eq 1 ]] && color="$C_HL"
-    desc="${color}${version}${C_RESET} ${C_DIM}·${C_RESET} 服务$(state_text "$svc") ${C_DIM}·${C_RESET} 隧道$(state_text "$tun")"
   fi
-
-  printf '%s   %s' "$UI_INDENT" "$color"
+  printf '%s   ' "$UI_INDENT"
   pad_text "$CORE_LABEL" "$UI_MENU_WIDTH"
-  printf '%s%s\n' "$C_RESET" "$desc"
-  if [[ -n "$host" ]]; then
-    printf '%s   ' "$UI_INDENT"
-    pad_text "" "$UI_MENU_WIDTH"
-    printf '%s%s%s\n' "$color" "$host" "$C_RESET"
-  fi
+  pad_text "$version" 13
+  printf '隧道 %s\n' "$(state_text "$tun")"
 }
 
 status_table() {
