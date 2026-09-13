@@ -4,9 +4,9 @@
 
 ### 概览
 - 在 VPS 上生成 Cloudflare 临时 Argo 隧道
-- 支持 `VMess / WS / TLS` 与 `VLESS-ENC / WS / TLS`
-- 临时隧道由 `tmux` 保持，断开 SSH 后仍可运行
-- 默认优选域名：`saas.sin.fan`
+- 支持 VMess / WS / TLS 与 VLESS-ENC / WS / TLS
+- 临时隧道由 tmux 保持，断开 SSH 后仍可运行
+- 默认优选域名：saas.sin.fan
 
 ### 要求
 - root 权限
