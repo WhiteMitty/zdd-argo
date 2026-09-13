@@ -601,22 +601,45 @@ install_dependencies() {
   done
 }
 
+lock_owner_alive() {
+  local pid="$1"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  process_is_alive "$pid" || return 1
+  [[ "$(process_command_line "$pid" 2>/dev/null || true)" == *zdd-argo* ]]
+}
+
 acquire_lock() {
-  local owner=""
+  local owner="" attempt=0
 
   [[ -n "$LOCK_FD" ]] && return 0
   mkdir -p "$(dirname -- "$LOCK_FILE")"
-  exec {LOCK_FD}>>"$LOCK_FILE"
-  chmod 600 "$LOCK_FILE" 2>/dev/null || true
 
-  if ! flock -n "$LOCK_FD"; then
+  for attempt in 1 2; do
+    exec {LOCK_FD}>>"$LOCK_FILE"
+    chmod 600 "$LOCK_FILE" 2>/dev/null || true
+    if flock -n "$LOCK_FD"; then
+      : > "$LOCK_FILE"
+      printf '%s\n' "$BASHPID" > "$LOCK_FILE"
+      return 0
+    fi
     owner="$(head -n 1 "$LOCK_FILE" 2>/dev/null || true)"
+    exec {LOCK_FD}>&-
+    LOCK_FD=""
+    if [[ $attempt -eq 1 ]] && ! lock_owner_alive "$owner"; then
+      rm -f -- "$LOCK_FILE"
+      continue
+    fi
     warn "另一个 zargo 操作正在进行${owner:+（PID ${owner}）}，请等待它结束后再试。"
-    info "如确认该进程已不存在，可执行 rm -f ${LOCK_FILE} 后重试。"
     exit 1
+  done
+}
+
+spawn_detached() {
+  if [[ -n "$LOCK_FD" ]]; then
+    "$@" {LOCK_FD}>&-
+  else
+    "$@"
   fi
-  : > "$LOCK_FILE"
-  printf '%s\n' "$BASHPID" > "$LOCK_FILE"
 }
 
 run_with_lock() {
@@ -1831,7 +1854,7 @@ verify_warp_runtime() {
   chmod 600 "$test_config"
 
   "$MANAGED_SINGBOX_BIN" check -c "$test_config" || { rm -f "$test_config" "$test_log"; die "WARP 自检客户端配置未通过校验。"; }
-  "$MANAGED_SINGBOX_BIN" run -c "$test_config" > "$test_log" 2>&1 &
+  spawn_detached "$MANAGED_SINGBOX_BIN" run -c "$test_config" > "$test_log" 2>&1 &
   test_pid=$!
   test_start="$(process_start_time "$test_pid" 2>/dev/null || true)"
 
@@ -2419,7 +2442,7 @@ start_tunnel() {
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     prepare_tunnel_log
     info "正在创建临时隧道（第 ${attempt}/${max_attempts} 次）……"
-    if tmux new-session -d -s "$CORE_SESSION" "$CORE_RUNNER" && wait_for_argo_host; then
+    if spawn_detached tmux new-session -d -s "$CORE_SESSION" "$CORE_RUNNER" && wait_for_argo_host; then
       generate_link
       ok "临时隧道已建立：$(cget ARGO_HOST)"
       return 0
