@@ -634,11 +634,19 @@ acquire_lock() {
   done
 }
 
-spawn_detached() {
+run_without_lock_fd() {
   if [[ -n "$LOCK_FD" ]]; then
     "$@" {LOCK_FD}>&-
   else
     "$@"
+  fi
+}
+
+spawn_detached() {
+  if [[ -n "$LOCK_FD" ]]; then
+    exec "$@" {LOCK_FD}>&-
+  else
+    exec "$@"
   fi
 }
 
@@ -1827,13 +1835,13 @@ singbox_render_config() {
       dns_final="cloudflare-doh"
       ;;
     0:1)
-      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh direct)"
+      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh)"
       dns_servers="[{\"type\":\"local\",\"tag\":\"local-dns\"},${doh_bootstrap}]"
       endpoints="[$(singbox_warp_endpoint)]"
       route_final="warp"
       ;;
     1:1)
-      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh direct)"
+      doh_bootstrap="$(singbox_doh_server warp-bootstrap-doh)"
       doh_via_warp="$(singbox_doh_server cloudflare-doh warp)"
       dns_servers="[${doh_bootstrap},${doh_via_warp}]"
       dns_final="cloudflare-doh"
@@ -1902,7 +1910,31 @@ write_singbox_config() {
   chmod 640 "$tmp"
   chown root:"$SERVICE_GROUP" "$tmp"
   "$MANAGED_SINGBOX_BIN" check -c "$tmp" || { rm -f "$tmp"; die "sing-box 配置校验失败。"; }
+  singbox_probe_config "$tmp" || { rm -f "$tmp"; die "sing-box 配置启动自检失败。"; }
   mv -f "$tmp" "$SB_CONFIG"
+}
+
+singbox_probe_config() {
+  local config="$1" log="" pid="" i=0
+
+  listener_on_port "$SB_PORT" && return 0
+  log="$(mktemp)"
+  spawn_detached "$MANAGED_SINGBOX_BIN" run -c "$config" > "$log" 2>&1 &
+  pid=$!
+  for i in 1 2 3; do
+    sleep 1
+    process_is_alive "$pid" || break
+  done
+  if process_is_alive "$pid"; then
+    kill -TERM "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -f "$log"
+    return 0
+  fi
+  wait "$pid" 2>/dev/null || true
+  grep -E 'FATAL|ERROR|error' "$log" | tail -n 3 >&2
+  rm -f "$log"
+  return 1
 }
 
 find_free_loopback_port() {
@@ -2270,11 +2302,38 @@ wait_for_service_ready() {
   return 1
 }
 
+listener_pid_on_port() {
+  ss -ltnp 2>/dev/null | grep -E "(^|[[:space:]])[^[:space:]]*:${1}([[:space:]]|$)" | grep -Eo 'pid=[0-9]+' | head -n 1 | cut -d= -f2
+}
+
+pid_is_our_core() {
+  local cmdline=""
+  [[ "$1" =~ ^[0-9]+$ ]] || return 1
+  cmdline="$(process_command_line "$1" 2>/dev/null || true)"
+  [[ "$cmdline" == *"${CORE_BIN}"* || "$cmdline" == *"${CORE_CONFIG}"* ]]
+}
+
+clear_stale_core_process() {
+  local port="$1" pid="" start="" i=0
+
+  for ((i = 0; i < 3; i++)); do
+    listener_on_port "$port" || return 0
+    service_is_active && return 0
+    pid="$(listener_pid_on_port "$port" || true)"
+    pid_is_our_core "$pid" || return 1
+    warn "发现残留的 ${CORE_LABEL} 进程（PID ${pid}）占用端口 ${port}，正在清理……"
+    start="$(process_start_time "$pid" 2>/dev/null || true)"
+    stop_process_verified "$pid" "$start" 5 || true
+    sleep 1
+  done
+  ! listener_on_port "$port"
+}
+
 ensure_core_running() {
   local port=""
   port="$(cget PORT)"
 
-  if listener_on_port "$port" && ! service_is_active; then
+  if ! clear_stale_core_process "$port"; then
     warn "端口 ${port} 已被其他进程占用："
     ss -ltnp 2>/dev/null | grep -E "(^|:)${port}[[:space:]]" || true
     die "为避免覆盖其他服务，已停止 ${CORE_LABEL} 部署。"
@@ -2554,7 +2613,7 @@ start_tunnel() {
   for ((attempt = 1; attempt <= max_attempts; attempt++)); do
     prepare_tunnel_log
     info "正在创建临时隧道（第 ${attempt}/${max_attempts} 次）……"
-    if spawn_detached tmux new-session -d -s "$CORE_SESSION" "$CORE_RUNNER" && wait_for_argo_host; then
+    if run_without_lock_fd tmux new-session -d -s "$CORE_SESSION" "$CORE_RUNNER" && wait_for_argo_host; then
       generate_link
       ok "临时隧道已建立：$(cget ARGO_HOST)"
       return 0
