@@ -1,20 +1,13 @@
 #!/usr/bin/env bash
-# zdd-argo —— sing-box / Xray 双内核临时 Argo 隧道管理脚本
-# zdd-argo-script-marker
-# 安装后使用 zargo 命令打开菜单。
 set -Eeuo pipefail
 IFS=$'\n\t'
 umask 077
 
 SCRIPT_VERSION="0.2.0"
-# shellcheck disable=SC2034  # 安装副本识别与人工审计标识。
 BUILD_ID="DUAL-CORE-REFACTOR-20260913"
 MIN_SINGBOX_VERSION="1.12.0"
 MIN_XRAY_VERSION="25.10.0"
 
-# ---------------------------------------------------------------------------
-# 常量：默认值
-# ---------------------------------------------------------------------------
 DEFAULT_NODE_NAME="zdd-argo"
 DEFAULT_PREFERRED_ENDPOINT="saas.sin.fan"
 DEFAULT_SB_PORT="10000"
@@ -23,9 +16,6 @@ DEFAULT_IP_MODE="prefer_ipv4"
 DEFAULT_ECH_CONFIG="cloudflare-ech.com+https://doh.pub/dns-query"
 WS_EARLY_DATA="2048"
 
-# ---------------------------------------------------------------------------
-# 常量：路径
-# ---------------------------------------------------------------------------
 DATA_DIR="/etc/zdd-argo"
 BIN_DIR="/usr/local/lib/zdd-argo"
 SERVICE_HOME="/var/lib/zdd-argo"
@@ -64,7 +54,6 @@ CLOUDFLARED_RELEASE_META="${BIN_DIR}/cloudflared.release.json"
 WGCF_RELEASE_META="${BIN_DIR}/wgcf.release.json"
 GITHUB_API_BASE="https://api.github.com"
 
-# 内核相关路径（SB_ = sing-box，XR_ = Xray）。文件名与旧版保持一致，便于原地升级。
 SB_LABEL="sing-box"
 SB_PROTO="VMess-WS"
 SB_CONFIG="${DATA_DIR}/sing-box.json"
@@ -97,16 +86,12 @@ LEGACY_DATA_FILES=(
   "${DATA_DIR}/state.env.invalid" "${DATA_DIR}/cloudflared.pid" "${DATA_DIR}/cloudflared-xray.pid"
 )
 
-# ---------------------------------------------------------------------------
-# 运行时变量
-# ---------------------------------------------------------------------------
 INIT_SYSTEM=""
 SCRIPT_PATH=""
 MENU_MODE=0
 LOCK_FD=""
 IP_MODE_CHANGED=0
 
-# 设置（settings.json）
 IP_MODE="$DEFAULT_IP_MODE"
 SB_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"
 SB_PORT="$DEFAULT_SB_PORT"
@@ -118,15 +103,11 @@ XR_PORT="$DEFAULT_XR_PORT"
 XR_NODE="$DEFAULT_NODE_NAME"
 XR_ECH="$DEFAULT_ECH_CONFIG"
 
-# 状态（state.json / xray-state.json），通过 cget / cset 间接读写。
-# shellcheck disable=SC2034
 SB_UUID="" SB_WS_PATH="" SB_ARGO_HOST="" SB_CREATED_AT=""
-# shellcheck disable=SC2034
 XR_UUID="" XR_WS_PATH="" XR_ARGO_HOST="" XR_CREATED_AT=""
 XR_ENC=""
 XR_DEC=""
 
-# WARP 运行参数
 WARP_PRIVATE_KEY=""
 WARP_IPV4=""
 WARP_IPV6=""
@@ -136,7 +117,6 @@ WARP_ENDPOINT_PORT=""
 WARP_PROFILE_ENDPOINT_PORT=""
 WARP_MTU="1280"
 
-# 当前操作内核（由 use_core 设置）
 CORE=""
 P=""
 CORE_LABEL=""
@@ -154,9 +134,6 @@ CORE_LINK=""
 CORE_LINK_JSON=""
 CORE_BIN=""
 
-# ---------------------------------------------------------------------------
-# 终端输出
-# ---------------------------------------------------------------------------
 UI_WIDTH=78
 UI_INDENT="  "
 UI_LABEL_WIDTH=16
@@ -187,7 +164,6 @@ clear_screen() {
   return 0
 }
 
-# 显示宽度：ASCII 计 1，CJK 与全角标点计 2，无需外部命令。
 text_width() {
   local value="$1"
   local chars=${#value}
@@ -272,7 +248,6 @@ ui_text() {
   printf '%s%s\n' "$UI_INDENT" "$*"
 }
 
-# 开启/关闭状态文字：开启时亮黄高亮。
 state_text() {
   if [[ "${1:-0}" == "1" ]]; then
     printf '%s开启%s' "$C_HL" "$C_RESET"
@@ -281,9 +256,6 @@ state_text() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 交互输入
-# ---------------------------------------------------------------------------
 read_interactive() {
   local variable_name="$1"
   local prompt="${2:-}"
@@ -325,7 +297,6 @@ pause_screen() {
   done
 }
 
-# y/n 确认，不区分大小写；默认否。
 confirm_yn() {
   local prompt="$1"
   local answer=""
@@ -334,7 +305,6 @@ confirm_yn() {
   [[ "${answer,,}" == "y" || "${answer,,}" == "yes" ]]
 }
 
-# 高风险操作：必须完整输入 yes。
 confirm_yes() {
   local prompt="$1"
   local answer=""
@@ -343,9 +313,6 @@ confirm_yes() {
   [[ "${answer,,}" == "yes" ]]
 }
 
-# ---------------------------------------------------------------------------
-# 基础工具
-# ---------------------------------------------------------------------------
 ensure_utf8_locale() {
   local current=""
   local candidate=""
@@ -387,7 +354,6 @@ file_sha256() {
   sha256sum "$1" 2>/dev/null | awk '{print tolower($1)}'
 }
 
-# version_ge A B：A >= B（按 . 分段数值比较）
 version_ge() {
   local -a va=() vb=()
   local i=0 x=0 y=0
@@ -403,7 +369,6 @@ version_ge() {
   return 0
 }
 
-# 原子写入：write_file_atomic 目标 模式 所有者 < 内容
 write_file_atomic() {
   local target="$1"
   local mode="$2"
@@ -418,9 +383,6 @@ write_file_atomic() {
   mv -f "$tmp" "$target"
 }
 
-# ---------------------------------------------------------------------------
-# 进程工具
-# ---------------------------------------------------------------------------
 process_start_time() {
   local pid="$1"
   local stat_line=""
@@ -472,7 +434,6 @@ process_children() {
   return 0
 }
 
-# 先 TERM 再 KILL，只在 PID 与启动时间仍匹配时发信号。
 stop_process_verified() {
   local pid="$1"
   local recorded_start="$2"
@@ -502,12 +463,8 @@ secure_root_file() {
   [[ "$(stat -Lc '%u' "$path" 2>/dev/null)" == "0" && "$(stat -Lc '%a' "$path" 2>/dev/null)" == "600" ]]
 }
 
-# ---------------------------------------------------------------------------
-# 系统识别与依赖
-# ---------------------------------------------------------------------------
 check_os() {
   [[ -r /etc/os-release ]] || die "无法识别操作系统，仅支持 Debian / Ubuntu / Alpine。"
-  # shellcheck source=/dev/null
   source /etc/os-release
 
   case "${ID:-}" in
@@ -644,9 +601,6 @@ install_dependencies() {
   done
 }
 
-# ---------------------------------------------------------------------------
-# 操作锁（flock）
-# ---------------------------------------------------------------------------
 acquire_lock() {
   local owner=""
 
@@ -673,15 +627,12 @@ run_with_lock() {
   "$fn" "$@"
 }
 
-# ---------------------------------------------------------------------------
-# 快捷命令与脚本副本
-# ---------------------------------------------------------------------------
 script_file_is_ours() {
   local path="$1"
   [[ -f "$path" && ! -L "$path" ]] || return 1
   grep -Eq '^SCRIPT_VERSION="[0-9]+\.[0-9]+\.[0-9]+"$' "$path" 2>/dev/null || return 1
-  grep -Fq 'zdd-argo-script-marker' "$path" 2>/dev/null \
-    || grep -Fq 'SERVICE_MARKER_CONTENT="zdd-argo-service-account-v0.1.0"' "$path" 2>/dev/null
+  grep -Eq '^BUILD_ID="[A-Z0-9_.-]+"$' "$path" 2>/dev/null || return 1
+  grep -Fq 'MANAGED_SCRIPT_PATH="${BIN_DIR}/zdd-argo.sh"' "$path" 2>/dev/null
 }
 
 path_is_zdd_launcher() {
@@ -805,9 +756,6 @@ EOF
   done
 }
 
-# ---------------------------------------------------------------------------
-# 下载与 GitHub Release
-# ---------------------------------------------------------------------------
 safe_download() {
   local url="$1"
   local output="$2"
@@ -831,7 +779,6 @@ safe_download() {
   fi
 }
 
-# 输出：asset_name<TAB>url<TAB>digest<TAB>tag
 github_latest_asset_info() {
   local repo="$1"
   local asset_regex="$2"
@@ -881,9 +828,6 @@ archive_is_safe() {
   ! grep -Eq '(^/|(^|/)\.\.(/|$))' "$1"
 }
 
-# ---------------------------------------------------------------------------
-# 组件：版本识别
-# ---------------------------------------------------------------------------
 singbox_version_of() {
   local line=""
   line="$("$1" version 2>/dev/null | head -n 1 || true)"
@@ -911,7 +855,6 @@ wgcf_version_ok() {
   [[ "$help_text" == *"WireGuard Cloudflare Warp utility"* || "$help_text" == *"wgcf is a utility for Cloudflare Warp"* ]]
 }
 
-# component_version_ok 组件 二进制：版本存在且不低于门槛
 component_version_ok() {
   local component="$1"
   local binary="$2"
@@ -1010,7 +953,6 @@ component_installed_version() {
   esac
 }
 
-# 从下载包中提取可执行文件，输出其路径。
 extract_component_binary() {
   local component="$1"
   local archive="$2"
@@ -1043,7 +985,6 @@ extract_component_binary() {
   printf '%s\n' "${candidates[0]}"
 }
 
-# install_or_update_component 组件：下载最新稳定版、校验、原子替换；失败自动回滚二进制。
 install_or_update_component() {
   local component="$1"
   local label="" repo="" regex="" info_line="" asset_name="" asset_url="" digest="" tag=""
@@ -1115,7 +1056,6 @@ install_or_update_component() {
   fi
 }
 
-# 已安装且版本达标则跳过。
 ensure_component() {
   local component="$1"
   local target=""
@@ -1132,9 +1072,6 @@ ensure_component() {
   install_or_update_component "$component"
 }
 
-# ---------------------------------------------------------------------------
-# 校验函数
-# ---------------------------------------------------------------------------
 valid_uuid() {
   [[ "$1" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
 }
@@ -1335,9 +1272,6 @@ generate_uuid_v4() {
   printf '%s-%s-4%s-8%s-%s\n' "${hex:0:8}" "${hex:8:4}" "${hex:13:3}" "${hex:17:3}" "${hex:20:12}"
 }
 
-# ---------------------------------------------------------------------------
-# 内核选择：use_core singbox|xray
-# ---------------------------------------------------------------------------
 use_core() {
   case "$1" in
     singbox)
@@ -1362,7 +1296,6 @@ other_core() {
   if [[ "$CORE" == "singbox" ]]; then printf 'xray'; else printf 'singbox'; fi
 }
 
-# 读写当前内核的变量：cget NAME → ${P}_NAME
 cget() {
   local name="${P}_$1"
   printf '%s' "${!name}"
@@ -1372,9 +1305,6 @@ cset() {
   printf -v "${P}_$1" '%s' "$2"
 }
 
-# ---------------------------------------------------------------------------
-# 设置文件 settings.json（schema 6）
-# ---------------------------------------------------------------------------
 reset_settings_defaults() {
   IP_MODE="$DEFAULT_IP_MODE"
   SB_ENDPOINT="$DEFAULT_PREFERRED_ENDPOINT"; SB_PORT="$DEFAULT_SB_PORT"; SB_NODE="$DEFAULT_NODE_NAME"
@@ -1435,7 +1365,6 @@ load_settings() {
     return 0
   fi
 
-  # 旧版（schema ≤ 5）：sing-box 字段在顶层，Xray 端口/名称在 xray-state.json。
   v="$(settings_field '.outbound_ip_mode')";       v="$(normalize_ip_mode "$v" 2>/dev/null || true)"; [[ -n "$v" ]] && IP_MODE="$v"
   v="$(settings_field '.preferred_endpoint')";     v="$(normalize_preferred_endpoint "$v")"; valid_preferred_endpoint "$v" && SB_ENDPOINT="$v"
   v="$(settings_field '.local_port')";             valid_local_port "$v" && SB_PORT="$((10#$v))"
@@ -1480,9 +1409,6 @@ save_settings() {
     }' | write_file_atomic "$SETTINGS_JSON" 600
 }
 
-# ---------------------------------------------------------------------------
-# 状态文件（每内核一份）
-# ---------------------------------------------------------------------------
 load_state() {
   local v=""
 
@@ -1527,7 +1453,6 @@ core_is_deployed() {
   [[ -f "$CORE_CONFIG" || -f "$CORE_STATE" || -e "$CORE_UNIT" ]]
 }
 
-# 另一内核已部署且端口相同则冲突。
 port_conflicts_with_other_core() {
   local port="$1" other="" other_port=""
 
@@ -1542,9 +1467,6 @@ port_conflicts_with_other_core() {
   [[ "$((10#$port))" == "$((10#$other_port))" ]]
 }
 
-# ---------------------------------------------------------------------------
-# 交互式设置
-# ---------------------------------------------------------------------------
 prompt_setting() {
   local variable_name="$1" prompt="$2" current="$3" validator="$4" normalizer="${5:-}" hint_text="${6:-}"
   local input="" normalized=""
@@ -1645,9 +1567,6 @@ configure_core_settings() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# WARP（wgcf）
-# ---------------------------------------------------------------------------
 warp_profile_valid() {
   [[ -s "$WARP_PROFILE_FILE" && ! -L "$WARP_PROFILE_FILE" ]] || return 1
   grep -Eq '^[[:space:]]*PrivateKey[[:space:]]*=' "$WARP_PROFILE_FILE" \
@@ -1738,9 +1657,6 @@ load_warp_profile_parameters() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# sing-box 配置模板
-# ---------------------------------------------------------------------------
 singbox_doh_server() {
   local tag="$1" detour="${2:-}"
   jq -n --arg tag "$tag" --arg detour "$detour" '
@@ -1761,7 +1677,6 @@ singbox_warp_endpoint() {
      domain_resolver: {server: "warp-bootstrap-doh", strategy: $ip_strategy}}'
 }
 
-# 生成完整 sing-box 配置：入站固定，DNS / 出站按 DoH、WARP 开关组合。
 singbox_render_config() {
   local ip_strategy="" dns_servers="[]" dns_final="local-dns" endpoints="[]" route_final="direct"
   local doh_direct="" doh_bootstrap="" doh_via_warp=""
@@ -1855,9 +1770,6 @@ write_singbox_config() {
   mv -f "$tmp" "$SB_CONFIG"
 }
 
-# ---------------------------------------------------------------------------
-# WARP 链路自检：用临时 sing-box 客户端经本机 VMess 入站访问 Cloudflare trace
-# ---------------------------------------------------------------------------
 find_free_loopback_port() {
   local port=0
   for ((port = 18080; port <= 18179; port++)); do
@@ -1991,9 +1903,6 @@ warp_check_summary() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# Xray：VLESS-ENC 身份与配置
-# ---------------------------------------------------------------------------
 xray_vlessenc_pair() {
   local output="" dec="" enc=""
 
@@ -2061,9 +1970,6 @@ write_xray_config() {
   mv -f "$tmp" "$XR_CONFIG"
 }
 
-# ---------------------------------------------------------------------------
-# 按内核分发
-# ---------------------------------------------------------------------------
 generate_identity() {
   local uuid="" pair=""
 
@@ -2087,10 +1993,6 @@ write_core_config() {
   if [[ "$CORE" == "singbox" ]]; then write_singbox_config; else write_xray_config; fi
 }
 
-
-# ---------------------------------------------------------------------------
-# 低权限服务账户
-# ---------------------------------------------------------------------------
 service_marker_ok() {
   local content=""
   secure_root_file "$SERVICE_MARKER" || return 1
@@ -2143,9 +2045,6 @@ service_uid() {
   id -u "$SERVICE_USER" 2>/dev/null || true
 }
 
-# ---------------------------------------------------------------------------
-# 服务控制（对当前内核）
-# ---------------------------------------------------------------------------
 service_is_active() {
   case "$INIT_SYSTEM" in
     systemd) systemctl is-active --quiet "$CORE_SERVICE" 2>/dev/null ;;
@@ -2253,9 +2152,6 @@ ensure_core_running() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 服务单元
-# ---------------------------------------------------------------------------
 core_exec_args() {
   if [[ "$CORE" == "singbox" ]]; then printf 'run -c %s' "$CORE_CONFIG"; else printf 'run -config %s' "$CORE_CONFIG"; fi
 }
@@ -2344,9 +2240,6 @@ EOF
   service_daemon_reload
 }
 
-# ---------------------------------------------------------------------------
-# 日志轮转
-# ---------------------------------------------------------------------------
 render_logrotate_config() {
   cat <<EOF
 # zdd-argo managed
@@ -2375,9 +2268,6 @@ write_logrotate_config() {
   render_logrotate_config | write_file_atomic "$LOGROTATE_CONFIG" 644
 }
 
-# ---------------------------------------------------------------------------
-# cloudflared 启动器（exec 直接接管进程，日志由 cloudflared 自行写入）
-# ---------------------------------------------------------------------------
 write_cloudflared_runner() {
   local uid="" gid="" port="" launcher=""
 
@@ -2409,14 +2299,10 @@ EOF
   bash -n "$CORE_RUNNER" || die "生成的 cloudflared 启动器未通过语法检查。"
 }
 
-# ---------------------------------------------------------------------------
-# 临时隧道（tmux 会话 + cloudflared 进程）
-# ---------------------------------------------------------------------------
 tmux_session_exists() {
   tmux has-session -t "$1" 2>/dev/null
 }
 
-# 在 tmux pane 进程及其子进程中找到 cloudflared PID。
 tunnel_pid() {
   local session="${1:-$CORE_SESSION}" pane_pid="" pid="" child=""
 
@@ -2464,7 +2350,6 @@ wait_for_argo_host() {
       save_state
       return 0
     fi
-    # 启动器 exec 切换到服务账户需要一点时间，前几秒不判定进程身份。
     if ((i > 5)) && ! tunnel_is_running; then break; fi
     sleep 1
   done
@@ -2559,9 +2444,6 @@ clear_tunnel_artifacts() {
   rm -rf "$CORE_CF_HOME"
 }
 
-# ---------------------------------------------------------------------------
-# 分享链接
-# ---------------------------------------------------------------------------
 url_encode() {
   jq -rn --arg value "$1" '$value | @uri'
 }
@@ -2605,9 +2487,6 @@ generate_link() {
   printf '%s\n' "$link" | write_file_atomic "$CORE_LINK" 600
 }
 
-# ---------------------------------------------------------------------------
-# 部署
-# ---------------------------------------------------------------------------
 prepare_core_deployment() {
   load_settings
   ensure_component "$CORE"
@@ -2616,7 +2495,6 @@ prepare_core_deployment() {
   load_state
 }
 
-# 出站策略变化时，另一内核若已部署也重写配置并重启。
 apply_ip_mode_to_other_core() {
   local current="$CORE" other=""
 
@@ -2673,9 +2551,6 @@ deploy_core() {
   show_core_subscription
 }
 
-# ---------------------------------------------------------------------------
-# 订阅展示
-# ---------------------------------------------------------------------------
 refresh_core_link_if_running() {
   local host=""
   core_runtime_is_running || return 1
@@ -2745,9 +2620,6 @@ cmd_show_subscriptions() {
   [[ $shown -eq 1 ]] || warn "尚未部署任何内核，请先使用自动生成或自定义生成。"
 }
 
-# ---------------------------------------------------------------------------
-# 状态
-# ---------------------------------------------------------------------------
 core_status_row() {
   local version="" svc=0 tun=0 host="—" port="" color=""
 
@@ -2763,11 +2635,10 @@ core_status_row() {
     [[ -n "$host" ]] || host="—"
   fi
   [[ "$version" =~ ^[0-9] ]] && version="v${version}"
-  # 运行中的内核整行亮黄，未运行的保持普通。
   if [[ $svc -eq 1 || $tun -eq 1 ]]; then color="$C_HL"; fi
   printf '%s%s' "$UI_INDENT" "$color"
   pad_text "$CORE_LABEL" 10
-  pad_text "$version" 12
+  pad_text "$version" 10
   printf '%s' "$C_RESET"
   printf '%s' "$(state_text "$svc")"; pad_text "" 4
   printf '%s' "$(state_text "$tun")"; pad_text "" 4
@@ -2776,7 +2647,7 @@ core_status_row() {
 
 status_table() {
   printf '%s%s' "$UI_INDENT" "$C_DIM"
-  pad_text "内核" 10; pad_text "版本" 12; pad_text "服务" 8; pad_text "隧道" 8; printf '临时域名%s\n' "$C_RESET"
+  pad_text "内核" 10; pad_text "版本" 10; pad_text "服务" 6; pad_text "隧道" 6; printf '临时域名%s\n' "$C_RESET"
   core_status_row singbox
   core_status_row xray
 }
@@ -2817,9 +2688,6 @@ cmd_show_status() {
   ui_line
 }
 
-# ---------------------------------------------------------------------------
-# 日志
-# ---------------------------------------------------------------------------
 show_log() {
   local core="$1" kind="$2" lines=60
 
@@ -2839,9 +2707,6 @@ show_log() {
   fi
 }
 
-# ---------------------------------------------------------------------------
-# 停止隧道
-# ---------------------------------------------------------------------------
 stop_core_tunnel() {
   use_core "$1"
   load_settings
@@ -2867,9 +2732,6 @@ cmd_stop_tunnel() {
   ok "临时隧道已断开，之后可通过自动生成或自定义生成重新创建。"
 }
 
-# ---------------------------------------------------------------------------
-# 更新组件
-# ---------------------------------------------------------------------------
 update_core_component() {
   local core="$1" was_active=0
 
@@ -2921,9 +2783,6 @@ cmd_update_components() {
   ok "组件更新完成。"
 }
 
-# ---------------------------------------------------------------------------
-# 完整卸载
-# ---------------------------------------------------------------------------
 kill_service_account_processes() {
   local uid="$1" pid="" i=0
   local -a pids=()
@@ -3034,9 +2893,6 @@ cmd_uninstall_all() {
   return 0
 }
 
-# ---------------------------------------------------------------------------
-# 菜单
-# ---------------------------------------------------------------------------
 run_menu_action() {
   local rc=0
 
@@ -3057,7 +2913,6 @@ run_menu_action() {
   pause_screen
 }
 
-# 选内核：结果写入 SELECTED_CORE，取消返回 1。
 SELECTED_CORE=""
 select_core() {
   local title="$1" choice=""
@@ -3190,9 +3045,6 @@ interactive_menu() {
   done
 }
 
-# ---------------------------------------------------------------------------
-# 入口
-# ---------------------------------------------------------------------------
 assert_safe_managed_paths() {
   local path=""
   [[ "$DATA_DIR" == "/etc/zdd-argo" && "$BIN_DIR" == "/usr/local/lib/zdd-argo" \
