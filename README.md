@@ -24,7 +24,6 @@ wget -qO zdd-argo.sh https://raw.githubusercontent.com/WhiteMitty/zdd-argo/main/
 ```
 
 ### 卸载
-运行：
 ```bash
 zargo
 ```
