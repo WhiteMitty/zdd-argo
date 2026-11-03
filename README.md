@@ -3,7 +3,7 @@
 ### 2026-09-14
 ### 概览
 - 此为 Cloudflare 临时 Argo 
-- 默认优选域名：tango46.cf.090227.xyz
+- 默认优选域名：saas.sin.fan
 - 临时隧道由 tmux 保持，断开 SSH 后仍可运行
 - 若 VPS 重启或重装 Argo，原临时 Argo 会失效
 - 支持 VMess / WS / TLS 与 VLESS-ENC / WS / TLS
