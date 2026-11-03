@@ -7,6 +7,8 @@
 - 临时隧道由 tmux 保持，断开 SSH 后仍可运行
 - 若 VPS 重启或重装 Argo，原临时 Argo 会失效
 - 支持 VMess / WS / TLS 与 VLESS-ENC / WS / TLS
+- 使用 HTTP/1.1 和 WS 是为了临时 Argo 隧道的稳定
+- 仅 Xray 语法下订阅加入了 ECH，默认填写 cloudflare-ech.com+https://dns.alidns.com/dns-query
 ### 要求
 - root 权限
 - Debian / Ubuntu / Alpine
