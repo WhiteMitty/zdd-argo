@@ -2656,7 +2656,7 @@ generate_link() {
   if [[ "$CORE" == "singbox" ]]; then
     jq -c -n --arg ps "$node" --arg add "$endpoint" --arg id "$uuid" --arg host "$host" --arg path "$path" '
       {v: "2", ps: $ps, add: $add, port: "443", id: $id, aid: "0", scy: "auto", net: "ws", type: "none",
-       host: $host, path: $path, tls: "tls", sni: $host, alpn: "http/1.1", fp: "firefox"}' \
+       host: $host, path: $path, tls: "tls", sni: $host, alpn: "http/1.1", fp: "chrome"}' \
       | write_file_atomic "$CORE_LINK_JSON" 600
     encoded="$(tr -d '\n' < "$CORE_LINK_JSON" | base64 | tr -d '\r\n')"
     link="vmess://${encoded}"
@@ -2668,11 +2668,11 @@ generate_link() {
     jq -n --arg ps "$node" --arg add "$endpoint" --arg id "$uuid" --arg host "$host" --arg path "$path" \
       --arg enc "$XR_ENC" --arg ech "$XR_ECH" '
       {protocol: "vless", ps: $ps, add: $add, port: 443, id: $id, encryption: $enc, flow: "xtls-rprx-vision",
-       security: "tls", sni: $host, vcn: $host, host: $host, path: $path, type: "ws", alpn: "http/1.1", fp: "firefox"}
+       security: "tls", sni: $host, vcn: $host, host: $host, path: $path, type: "ws", alpn: "http/1.1", fp: "chrome"}
       + (if $ech != "" then {ech: $ech, echConfigList: $ech} else {} end)' \
       | write_file_atomic "$CORE_LINK_JSON" 600
     link="vless://${uuid}@$(uri_host "$endpoint"):443?encryption=$(url_encode "$XR_ENC")&flow=xtls-rprx-vision"
-    link+="&security=tls&sni=$(url_encode "$host")&vcn=$(url_encode "$host")&fp=firefox&type=ws&host=$(url_encode "$host")"
+    link+="&security=tls&sni=$(url_encode "$host")&vcn=$(url_encode "$host")&fp=chrome&type=ws&host=$(url_encode "$host")"
     link+="&path=$(url_encode "$path")&alpn=http%2F1.1"
     [[ -n "$XR_ECH" ]] && link+="&ech=$(url_encode "$XR_ECH")&echConfigList=$(url_encode "$XR_ECH")"
     link+="#$(url_encode "$node")"
